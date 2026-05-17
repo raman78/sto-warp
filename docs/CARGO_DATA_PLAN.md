@@ -2,7 +2,53 @@
 
 **Status:** plan only (not implemented yet).
 **Strategy chosen:** (iii) fetch from `STOCD/SETS-Data` GitHub raw URLs at
-first run, cache locally.
+first run, cache locally — confirmed 2026-05-18 after considering the
+alternative of resurrecting `warp/data/item_db.json` via `warp/tools/
+scraper.py`.
+
+## Why not the existing `item_db.json` scraper
+
+`warp/tools/scraper.py` builds a single consolidated `item_db.json` from
+SETS cargo + vger.stobuilds.com + optional GitHub mirror. It works and
+the file is already on disk in sets-warp — but recognition has never
+read it (audit 2026-05-17: zero callers in `warp/recognition/`,
+`warp/warp_importer.py`, `warp/warp_dialog.py`, `warp/trainer/`).
+
+Rejected because:
+
+- **Two sources of truth.** The scraper produces a derivative schema we
+  must maintain forever as STOCD/SETS-Data evolves. With B we read
+  upstream files as-is and move with the community.
+- **Coarse refresh.** `item_db.json` is monolithic — refresh = rebuild
+  everything via scraper run. B does per-file ETag refresh in the
+  background, transparent to the user.
+- **Unused enrichment.** Scraper's value-add (icon_url, wiki_url, vger
+  metadata) is not consumed by recognition. Maintenance cost for data
+  nobody reads.
+
+The scraper stays in `warp/tools/` as a power-user tool for offline
+enriched DB builds — secondary path, not the default.
+
+## What we get from cargo vs HF
+
+HF (`sets-sto/sto-icon-dataset`, `sets-sto/warp-knowledge`) is the
+**perception layer**: trained model + label_map + pHash overrides.
+Answers "what item is this crop?" → returns a name string.
+
+Cargo is the **semantics layer**: metadata keyed by item name.
+Recognition / importer needs four files for this:
+
+| File | What recognition uses |
+|---|---|
+| `equipment.json` | `type` field → `SLOT_VALID_TYPES` constraint checking |
+| `ship_list.json` | per-ship slot profile (BOFF seating, console counts) |
+| `boff_abilities.json` | rank Roman numerals + profession mapping |
+| `traits.json` | `environment` (space/ground) + `type` (personal/rep/…) |
+
+Without cargo, recognition is semantically blind — it knows the name
+but not what slot the item belongs to, what rank a BOFF ability is, or
+whether a trait is space or ground. So HF and cargo are complementary,
+not interchangeable.
 
 ## Motivation
 
@@ -93,11 +139,21 @@ The previous SETS-coupled call sites that pulled from
 loader output to the sto-warp `load(name)` shape — so sto-warp itself
 never reaches into SETS' cache dir.
 
+## Offline fallback (decided 2026-05-18)
+
+Ship a small frozen snapshot of the four required files inside the
+wheel under `warp/data/baseline/`. Loader precedence:
+
+1. `~/.config/warp/cache/<file>.json` if present.
+2. Else: fetch from STOCD/SETS-Data raw, write to cache, use.
+3. Else (no network on first run): copy `warp/data/baseline/<file>.json`
+   to cache, log a warning that data is stale.
+
+Snapshot is updated by maintainer via a make-snapshot script that
+pulls current STOCD/SETS-Data and copies the four files into the
+package source. Refresh cadence: per minor release.
+
 ## Open questions
 
-- Do we also mirror the upstream files on the sets-sto Hugging Face org
-  so the loader can fall back when GitHub raw is rate-limited? (Decide
-  before 1.0.)
-- Do we ship a frozen snapshot inside the wheel as a last-resort
-  offline fallback? (Cost: ~3 MB of JSON, but enables `pipx run` use
-  with no network.)
+- Mirror upstream files on the sets-sto HF org as a secondary endpoint
+  when GitHub raw is rate-limited? (Defer until we see real 429s.)

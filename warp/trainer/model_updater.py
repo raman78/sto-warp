@@ -1,0 +1,442 @@
+# warp/trainer/model_updater.py
+#
+# Background model updater — checks the WARP backend for a newer centrally-trained
+# EfficientNet model and downloads it from HF when available.
+#
+# Flow:
+#   1. Read local warp/models/model_version.json (if it exists)
+#   2. Call backend GET /model/version  (rate-limited: at most once per 24 h)
+#   3. Compare 'trained_at' timestamps — remote wins only if strictly newer
+#   4. Download icon_classifier.pt + label_map.json + icon_classifier_meta.json
+#      directly from HF (sets-sto/warp-knowledge, public read)
+#   5. Write model_version.json to record the installed version
+#   6. Call SETSIconMatcher.reset_ml_session() so the new model is loaded on
+#      the next match request
+#
+# Local model always takes priority:
+#   - If local model was trained more recently (WARP CORE → Train Model),
+#     its trained_at will be newer than the remote version → no update.
+#   - The remote update ONLY installs when the remote is strictly newer.
+#
+# All network calls are non-blocking (background thread).
+# Failures are silently logged — the update is skipped, never crashes the app.
+
+from __future__ import annotations
+
+import json
+import logging
+import threading
+import time
+from pathlib import Path
+from typing import Callable
+
+try:
+    from warp.debug import log
+except Exception:
+    log = logging.getLogger(__name__)
+
+_BACKEND_URL          = 'https://sets-warp-backend.onrender.com'
+_CHECK_INTERVAL_HOURS = 0.25        # minimum hours between remote checks (15 min)
+_VERSION_CACHE_FILE   = 'warp/models/model_version_remote_cache.json'
+_CONNECT_TIMEOUT      = 5           # seconds
+# Render free tier cold-starts in ~50 s. 60 s read-timeout covers the wake-up;
+# anything shorter guarantees the very first call after idle will fail.
+# Matches CONTRIBUTE_TIMEOUT in sync_client.py for the same reason.
+_READ_TIMEOUT         = 60          # seconds
+# First retry shortened from 5 → 1 min so we re-hit the backend while it is
+# still warm from our previous attempt (Render sleeps after 15 min idle, but
+# stays warm for several minutes after any request).
+_RETRY_DELAYS_MIN     = (1, 5, 15, 60)    # backoff schedule on network failure
+_MODEL_FILES          = [           # files to download from HF knowledge repo
+    ('models/icon_classifier.pt',            'icon_classifier.pt'),
+    ('models/label_map.json',               'label_map.json'),
+    ('models/icon_classifier_meta.json',    'icon_classifier_meta.json'),
+    ('models/model_version.json',           'model_version.json'),
+    ('models/screen_classifier.pt',          'screen_classifier.pt'),
+    ('models/screen_classifier_labels.json', 'screen_classifier_labels.json'),
+    ('models/community_anchors.json',           'community_anchors.json'),        # P11 — optional
+    ('models/ship_type_corrections.json',       'ship_type_corrections.json'),    # OCR correction map — optional
+    # ArcFace metric-learning embedder — optional, takes priority over softmax
+    # in icon_matcher when present. Uploaded by admin_train_metric.py.
+    ('models/icon_embedder.pt',                 'icon_embedder.pt'),
+    ('models/embedder_label_map.json',          'embedder_label_map.json'),
+    ('models/icon_embedder_meta.json',          'icon_embedder_meta.json'),
+    ('models/embedding_index.npz',              'embedding_index.npz'),
+]
+# Used only for the one-time "download if missing" fallback
+_SCREEN_CLASSIFIER_FILES = [
+    ('models/screen_classifier.pt',          'screen_classifier.pt'),
+    ('models/screen_classifier_labels.json', 'screen_classifier_labels.json'),
+]
+
+
+class ModelUpdater:
+    """
+    Non-blocking remote model update checker.
+
+    Usage:
+        ModelUpdater().check_and_update(sets_root, on_updated=lambda: log.info('reloaded'))
+    """
+
+    def check_and_update(
+        self,
+        sets_root: Path,
+        on_updated: Callable[[], None] | None = None,
+        on_progress: Callable[[str, int, int], None] | None = None,
+    ) -> None:
+        """
+        Check for a newer centrally-trained model and download it if available.
+        Non-blocking — returns immediately; the check runs in a daemon thread.
+
+        on_progress(text, current, total) — optional splash/progress callback.
+        """
+        threading.Thread(
+            target=self._bg_check,
+            args=(Path(sets_root), on_updated, on_progress, 0),
+            daemon=True,
+            name='warp-model-update',
+        ).start()
+
+    # ── background worker ─────────────────────────────────────────────────────
+
+    def _bg_check(
+        self,
+        sets_root: Path,
+        on_updated: Callable | None,
+        on_progress: Callable[[str, int, int], None] | None = None,
+        retry_idx: int = 0,
+    ) -> None:
+        _t0 = time.time()
+        try:
+            models_dir = sets_root / 'warp' / 'models'
+
+            # Always ensure screen_classifier is present (static, not version-managed)
+            self._ensure_screen_classifier(models_dir)
+
+            # If model_version.json is absent the model was never downloaded — force a
+            # check regardless of the rate-limit cache (the cache may exist from a prior
+            # attempt that returned "no model published yet").
+            model_missing = not (models_dir / 'model_version.json').exists()
+            embedder_stale = self._embedder_needs_refresh(models_dir)
+            if not model_missing and not embedder_stale and not self._due_for_check(sets_root):
+                return
+
+            log.info('ModelUpdater: checking for remote model update...')
+            remote = self._fetch_remote_version()
+            if remote is None:
+                # Network failure — schedule a follow-up attempt without saving
+                # the rate-limit timestamp (so a fresh app start still retries).
+                if retry_idx < len(_RETRY_DELAYS_MIN):
+                    delay_min = _RETRY_DELAYS_MIN[retry_idx]
+                    log.warning(
+                        f'ModelUpdater: remote version check failed (network) — '
+                        f'retrying in {delay_min} min '
+                        f'(attempt {retry_idx + 2}/{len(_RETRY_DELAYS_MIN) + 1})'
+                    )
+                    t = threading.Timer(
+                        delay_min * 60,
+                        self._bg_check,
+                        args=(sets_root, on_updated, None, retry_idx + 1),
+                    )
+                    t.daemon = True
+                    t.name = f'warp-model-update-retry-{retry_idx + 1}'
+                    t.start()
+                else:
+                    log.warning(
+                        'ModelUpdater: remote version check failed (network) — '
+                        'giving up until next startup'
+                    )
+                return
+            if not remote.get('available'):
+                log.debug('ModelUpdater: no model published on remote yet')
+                self._save_check_timestamp(sets_root)
+                return
+
+            local_ts  = self._read_local_trained_at(models_dir)
+            remote_ts = remote.get('trained_at', '')
+
+            if local_ts and remote_ts <= local_ts:
+                # One-time self-heal: older client versions did not download the
+                # ArcFace embedder files. If the local embedder_label_map.json
+                # still contains snake_case labels (= pre-cleanup), or the
+                # embedder files are missing, force a redownload anyway.
+                if self._embedder_needs_refresh(models_dir):
+                    log.info(
+                        'ModelUpdater: softmax model is current but embedder '
+                        'files are stale/missing — forcing redownload'
+                    )
+                else:
+                    log.info(
+                        f'ModelUpdater: local model is current '
+                        f'(local={local_ts[:10]}, remote={remote_ts[:10]})'
+                    )
+                    self._save_check_timestamp(sets_root)
+                    return
+
+            log.info(
+                f'ModelUpdater: remote model is newer '
+                f'(remote={remote_ts[:10]}, local={local_ts[:10] if local_ts else "none"}) '
+                f'— downloading...'
+            )
+
+            if self._download_model(models_dir, remote, on_progress=on_progress):
+                # Write/update model_version.json with download timestamp.
+                ver_path = models_dir / 'model_version.json'
+                try:
+                    import datetime as _dt
+                    ver = {}
+                    if ver_path.exists():
+                        ver = json.loads(ver_path.read_text(encoding='utf-8'))
+                    ver.setdefault('trained_at', remote.get('trained_at', ''))
+                    ver.setdefault('n_classes',  remote.get('n_classes', 0))
+                    ver.setdefault('val_acc',     remote.get('val_acc', 0))
+                    ver.setdefault('source',      remote.get('source', 'community'))
+                    ver['downloaded_at'] = _dt.datetime.now(_dt.timezone.utc).strftime('%Y-%m-%dT%H:%M:%SZ')
+                    ver_path.write_text(json.dumps(ver, indent=2), encoding='utf-8')
+                except Exception as e:
+                    log.warning(f'ModelUpdater: could not update model_version.json: {e}')
+
+                _now = _dt.datetime.now(_dt.timezone.utc).strftime('%H:%M')
+                log.info(
+                    f'ModelUpdater: model downloaded at {_now} UTC — '
+                    f'{remote.get("n_classes")} classes, '
+                    f'val_acc={remote.get("val_acc", 0):.1%}'
+                )
+                # Reload icon matcher ML session
+                try:
+                    from warp.recognition.icon_matcher import SETSIconMatcher
+                    SETSIconMatcher.reset_ml_session()
+                    log.info('ModelUpdater: icon matcher reloaded with new model')
+                except Exception as e:
+                    log.warning(f'ModelUpdater: matcher reload failed: {e}')
+                # Reset layout detector community anchors cache (P11)
+                try:
+                    from warp.recognition.layout_detector import LayoutDetector
+                    LayoutDetector.reset_community_anchors_cache()
+                    log.debug('ModelUpdater: community anchors cache cleared')
+                except Exception:
+                    pass
+                # Reload ship type OCR corrections if downloaded
+                try:
+                    corrections_path = models_dir / 'ship_type_corrections.json'
+                    if corrections_path.exists():
+                        from warp.recognition.text_extractor import TextExtractor
+                        TextExtractor.load_corrections(corrections_path)
+                        log.debug('ModelUpdater: ship_type_corrections reloaded')
+                except Exception:
+                    pass
+
+                if on_updated:
+                    try:
+                        on_updated()
+                    except Exception:
+                        pass
+
+            self._save_check_timestamp(sets_root)
+
+        except Exception as e:
+            log.warning(f'ModelUpdater: update check failed: {e}')
+        finally:
+            _elapsed = time.time() - _t0
+            if _elapsed > 60:
+                log.warning(
+                    f'ModelUpdater: check took {_elapsed:.0f}s '
+                    f'(expected <30s — investigate network path)'
+                )
+
+    # ── network ───────────────────────────────────────────────────────────────
+
+    def _fetch_remote_version(self) -> dict | None:
+        """
+        GET /model/version from backend. Returns dict on success, None on network
+        failure.
+
+        Uses `requests` with separate (connect, read) timeouts — more robust than
+        urllib's single timeout, which does not reliably cover DNS / TLS handshake
+        and can hang indefinitely (observed with IPv6-first resolvers).
+        """
+        try:
+            import requests
+            resp = requests.get(
+                f'{_BACKEND_URL}/model/version',
+                headers={'User-Agent': 'WARP/0.4.0'},
+                timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
+            )
+            resp.raise_for_status()
+            return resp.json()
+        except Exception as e:
+            log.warning(f'ModelUpdater: /model/version fetch failed: {e}')
+            return None
+
+    def _download_model(
+        self,
+        models_dir: Path,
+        remote_meta: dict,
+        on_progress: Callable[[str, int, int], None] | None = None,
+    ) -> bool:
+        """
+        Download model files from HF knowledge repo directly.
+        Uses hf_hub_download — no token needed for public repo.
+        on_progress(text, current, total) is called for each file.
+        """
+        import os, shutil
+        # Suppress the Windows symlinks warning — we don't need symlinks.
+        os.environ.setdefault('HF_HUB_DISABLE_SYMLINKS_WARNING', '1')
+
+        try:
+            from huggingface_hub import hf_hub_download
+        except ImportError:
+            log.warning('ModelUpdater: huggingface_hub not installed — cannot download model')
+            return False
+
+        hf_repo = 'sets-sto/warp-knowledge'
+        models_dir.mkdir(parents=True, exist_ok=True)
+        tmp_files: list[tuple[Path, Path]] = []  # (tmp_path, final_path)
+
+        # Use upload token if available — suppresses HF unauthenticated warning
+        # and gets higher rate limits. Falls back to anonymous (public repo).
+        token = self._read_hub_token(models_dir.parent)
+
+        total = len(_MODEL_FILES)
+        n_classes = remote_meta.get('n_classes', '?')
+        for idx, (hf_path, local_name) in enumerate(_MODEL_FILES):
+            if on_progress:
+                on_progress(
+                    f'Downloading ML model ({n_classes} classes): {local_name}',
+                    idx, total,
+                )
+            log.info(f'ModelUpdater: downloading {local_name} ({idx + 1}/{total})...')
+            final_path = models_dir / local_name
+            try:
+                downloaded = hf_hub_download(
+                    repo_id=hf_repo,
+                    filename=hf_path,
+                    repo_type='dataset',
+                    token=token or None,
+                )
+                tmp_files.append((Path(downloaded), final_path))
+            except Exception as e:
+                # icon_classifier.pt and label_map.json are required
+                if local_name in ('icon_classifier.pt', 'label_map.json'):
+                    log.warning(f'ModelUpdater: required file {hf_path} unavailable: {e}')
+                    return False
+                log.debug(f'ModelUpdater: optional file {hf_path} unavailable: {e}')
+
+        if on_progress:
+            on_progress(f'Installing ML model ({n_classes} classes)…', total - 1, total)
+
+        # Copy all files atomically (only after all required files downloaded OK)
+        for src, dst in tmp_files:
+            shutil.copy2(src, dst)
+            log.debug(f'ModelUpdater: installed {dst.name}')
+
+        if on_progress:
+            on_progress(f'ML model ready  ({n_classes} classes)', total, total)
+
+        return True
+
+    def _ensure_screen_classifier(self, models_dir: Path) -> None:
+        """Download screen_classifier.pt from HF if it's missing (one-time, silent)."""
+        pt_path = models_dir / 'screen_classifier.pt'
+        if pt_path.exists():
+            return
+        log.info('ModelUpdater: screen_classifier.pt missing — downloading from HF...')
+        try:
+            from huggingface_hub import hf_hub_download
+        except ImportError:
+            return
+        import shutil
+        hf_repo = 'sets-sto/warp-knowledge'
+        token = self._read_hub_token(models_dir.parent)
+        models_dir.mkdir(parents=True, exist_ok=True)
+        for hf_path, local_name in _SCREEN_CLASSIFIER_FILES:
+            try:
+                downloaded = hf_hub_download(
+                    repo_id=hf_repo,
+                    filename=hf_path,
+                    repo_type='dataset',
+                    token=token or None,
+                )
+                shutil.copy2(downloaded, models_dir / local_name)
+                log.info(f'ModelUpdater: downloaded {local_name}')
+            except Exception as e:
+                log.warning(f'ModelUpdater: could not download {hf_path}: {e}')
+
+    # ── rate-limiting (check at most once per 24 h) ───────────────────────────
+
+    def _due_for_check(self, sets_root: Path) -> bool:
+        cache_path = self._cache_path(sets_root)
+        if not cache_path.exists():
+            return True
+        try:
+            data     = json.loads(cache_path.read_text(encoding='utf-8'))
+            last_ts  = data.get('last_check', 0)
+            elapsed  = (time.time() - last_ts) / 3600   # hours
+            return elapsed >= _CHECK_INTERVAL_HOURS
+        except Exception:
+            return True
+
+    def _save_check_timestamp(self, sets_root: Path) -> None:
+        cache_path = self._cache_path(sets_root)
+        try:
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(
+                json.dumps({'last_check': time.time()}),
+                encoding='utf-8',
+            )
+        except Exception:
+            pass
+
+    # ── helpers ───────────────────────────────────────────────────────────────
+
+    @staticmethod
+    def _read_hub_token(warp_dir: Path) -> str:
+        """Read hub_token.txt from warp/ directory. Returns '' if not found."""
+        try:
+            return (warp_dir / 'hub_token.txt').read_text().strip()
+        except Exception:
+            return ''
+
+    @staticmethod
+    def _embedder_needs_refresh(models_dir: Path) -> bool:
+        """
+        Return True if the local ArcFace embedder is missing or stale.
+
+        Stale = embedder_label_map.json has snake_case labels (pre-cleanup,
+        pre-2026-05-16). These were trained on un-sanitized HF crops and emit
+        names like 'miniaturized_chrono-capacitor' that don't match the SETS
+        canonical name cache.
+        """
+        emb_pt    = models_dir / 'icon_embedder.pt'
+        emb_label = models_dir / 'embedder_label_map.json'
+        emb_index = models_dir / 'embedding_index.npz'
+        if not (emb_pt.exists() and emb_label.exists() and emb_index.exists()):
+            return True
+        try:
+            raw = json.loads(emb_label.read_text(encoding='utf-8'))
+            # snake_case heuristic: underscore between two lowercase letters in
+            # a label. Pretty labels use spaces. Allow a small false-positive
+            # threshold for legitimate names like 'beam_array' which don't exist
+            # in canonical SETS naming.
+            n_snake = sum(
+                1 for v in raw.values()
+                if isinstance(v, str) and '_' in v and v == v.lower()
+            )
+            return n_snake > 5
+        except Exception:
+            return False
+
+    @staticmethod
+    def _read_local_trained_at(models_dir: Path) -> str:
+        """Return 'trained_at' from local model_version.json, or '' if not present."""
+        version_file = models_dir / 'model_version.json'
+        if not version_file.exists():
+            return ''
+        try:
+            return json.loads(version_file.read_text(encoding='utf-8')).get('trained_at', '')
+        except Exception:
+            return ''
+
+    @staticmethod
+    def _cache_path(sets_root: Path) -> Path:
+        return sets_root / _VERSION_CACHE_FILE
