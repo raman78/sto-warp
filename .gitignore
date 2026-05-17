@@ -27,7 +27,11 @@ dist/
 
 # WARP runtime (downloaded at first run; user-local)
 warp/models/
-warp/data/
+# warp/data/baseline/ IS committed (offline fallback snapshot).
+# Everything else under warp/data/ is local/runtime.
+warp/data/icons/
+warp/data/item_db.json
+warp/data/cache/
 warp/knowledge/knowledge_cache.json
 warp/knowledge/install_id.txt
 warp/knowledge/rate_limit.json
