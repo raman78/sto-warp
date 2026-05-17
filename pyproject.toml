@@ -1,0 +1,78 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sto-warp"
+description = "Star Trek Online screenshot recognition + ML training (standalone WARP/WARP CORE)."
+readme = "README.md"
+requires-python = ">=3.13"
+license = { file = "LICENSE" }
+authors = [{ name = "raman78" }]
+keywords = ["star-trek-online", "sto", "screenshot-recognition", "machine-learning", "ocr"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.13",
+    "Operating System :: OS Independent",
+    "Natural Language :: English",
+    "Topic :: Games/Entertainment",
+    "Topic :: Scientific/Engineering :: Image Recognition",
+    "Development Status :: 3 - Alpha",
+]
+dependencies = [
+    "PySide6>=6.7,<6.10",
+    "requests>=2.31",
+    "numpy>=1.26",
+    # Recognition stack
+    "opencv-python-headless>=4.9",
+    "easyocr>=1.7",
+    "python-bidi>=0.4",
+    "pyclipper>=1.3",
+    "shapely>=2.0",
+    "scikit-image>=0.21",
+    "scipy>=1.11",
+    "huggingface-hub>=0.22",
+    # ML stack (CPU-only torch by default)
+    "torch>=2.1",
+    "torchvision>=0.16",
+    "pillow>=9.0",
+    "typing_extensions>=4.8",
+    "pyyaml>=6.0",
+]
+dynamic = ["version"]
+
+[project.optional-dependencies]
+onnx = [
+    "onnxruntime>=1.18",
+    "onnx>=1.15",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-qt>=4.4",
+    "ruff>=0.5",
+]
+
+[project.urls]
+homepage = "https://github.com/raman78/sto-warp"
+repository = "https://github.com/raman78/sto-warp"
+issues = "https://github.com/raman78/sto-warp/issues"
+
+[project.scripts]
+sto-warp = "warp.cli:main"
+
+[tool.hatch.version]
+path = "warp/__init__.py"
+pattern = "__version__ = '(?P<version>.*)'"
+
+[tool.hatch.build.targets.wheel]
+packages = ["warp"]
+
+[tool.hatch.build.targets.sdist]
+include = [
+    "warp/",
+    "README.md",
+    "CHANGELOG.md",
+    "LICENSE",
+    "INSTALLATION.md",
+    "PROJECT_CONTEXT.md",
+]

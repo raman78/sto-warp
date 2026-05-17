@@ -1,0 +1,41 @@
+# Python
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+.python/
+
+# Build/dist
+build/
+dist/
+
+# IDE
+.idea/
+.vscode/
+
+# Claude Code local config
+.claude/
+
+# Editor / OS
+*.bak
+*.orig
+.DS_Store
+
+# Runtime
+*.log
+.env
+
+# WARP runtime (downloaded at first run; user-local)
+warp/models/
+warp/data/
+warp/knowledge/knowledge_cache.json
+warp/knowledge/install_id.txt
+warp/knowledge/rate_limit.json
+warp/training_data/
+
+# Local-only developer diagnostics
+tests/diag_*.py
+tests/_diag_out/
+
+# Backup directories from upstream migration
+*_backup_*/
