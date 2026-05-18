@@ -38,7 +38,7 @@ import threading
 from pathlib import Path
 
 try:
-    from warp.debug import log
+    from warp.debug import syslog as log
 except Exception:
     log = logging.getLogger(__name__)
 

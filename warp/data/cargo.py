@@ -31,7 +31,7 @@ import urllib.request
 from pathlib import Path
 from typing import Any, Iterable
 
-from warp.debug import log
+from warp.debug import syslog as log
 
 # --- constants ----------------------------------------------------------
 

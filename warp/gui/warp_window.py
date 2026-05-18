@@ -224,15 +224,17 @@ class WarpWindow(QMainWindow):
     # ── File picking ────────────────────────────────────────────────
 
     def _on_open_files(self):
-        exts = ' '.join(f'*{e}' for e in sorted(SCREENSHOT_EXTENSIONS))
-        files, _ = QFileDialog.getOpenFileNames(
-            self, 'Open screenshot(s)',
-            _restore_dir(_SETTINGS_LAST_FILES_DIR),
-            f'Screenshots ({exts});;All files (*)',
+        from warp.folder_picker import pick_files
+        filters = tuple(f'*{e}' for e in sorted(SCREENSHOT_EXTENSIONS))
+        files = pick_files(
+            self,
+            title='Open screenshot(s)',
+            start_dir=_restore_dir(_SETTINGS_LAST_FILES_DIR),
+            image_filters=filters,
         )
         if not files:
             return
-        _remember_dir(_SETTINGS_LAST_FILES_DIR, Path(files[0]).parent)
+        _remember_dir(_SETTINGS_LAST_FILES_DIR, files[0].parent)
         # Stage selections into a temp dir so the importer's folder
         # pipeline picks them up unchanged.
         self._tmp_dir = tempfile.TemporaryDirectory(prefix='warp-gui-')
@@ -248,14 +250,16 @@ class WarpWindow(QMainWindow):
         self._run_against(staged)
 
     def _on_open_folder(self):
-        d = QFileDialog.getExistingDirectory(
-            self, 'Open screenshot folder',
-            _restore_dir(_SETTINGS_LAST_FOLDER_DIR),
+        from warp.folder_picker import pick_folder
+        folder = pick_folder(
+            self,
+            title='Open screenshot folder',
+            start_dir=_restore_dir(_SETTINGS_LAST_FOLDER_DIR),
         )
-        if not d:
+        if folder is None:
             return
-        _remember_dir(_SETTINGS_LAST_FOLDER_DIR, Path(d))
-        self._run_against(Path(d))
+        _remember_dir(_SETTINGS_LAST_FOLDER_DIR, folder)
+        self._run_against(folder)
 
     # ── Pipeline plumbing ───────────────────────────────────────────
 

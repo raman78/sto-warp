@@ -43,7 +43,7 @@ from warp.trainer.training_data import TrainingDataManager, NON_ICON_SLOTS
 
 logger = logging.getLogger(__name__)
 try:
-    from warp.debug import log as _slog
+    from warp.debug import syslog as _slog
 except Exception:
     _slog = logger
 

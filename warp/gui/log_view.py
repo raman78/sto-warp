@@ -30,10 +30,11 @@ class LogViewWidget(QWidget):
     Qt routes the signal to the GUI thread via auto/queued connection.
     """
 
-    _new_line = Signal(str, str)   # level, line
+    _new_line = Signal(str, str, str)   # channel, level, line
 
-    def __init__(self, parent: QObject | None = None):
+    def __init__(self, channel: str = 'detection', parent: QObject | None = None):
         super().__init__(parent)
+        self._channel = channel
         self._mode = 'CURRENT'
         self._build_ui()
         self._new_line.connect(self._on_new_line, Qt.ConnectionType.QueuedConnection)
@@ -85,7 +86,7 @@ class LogViewWidget(QWidget):
         self._view.setFont(f)
         v.addWidget(self._view, stretch=1)
 
-        cur_path, bak_path = _warp_debug.log_paths()
+        cur_path, bak_path = _warp_debug.log_paths(self._channel)
         self._path_lbl = QLabel(
             f'Current: {cur_path}    Previous: {bak_path}', self)
         self._path_lbl.setStyleSheet('color: #888;')
@@ -105,13 +106,13 @@ class LogViewWidget(QWidget):
 
     def _show_current_initial(self):
         # Load whatever's already been written this session, then live-tail.
-        cur_path, _ = _warp_debug.log_paths()
+        cur_path, _ = _warp_debug.log_paths(self._channel)
         text = self._read_tail(cur_path, max_lines=5000)
         self._view.setPlainText(text)
         self._scroll_to_end()
 
     def _show_previous(self):
-        _, bak_path = _warp_debug.log_paths()
+        _, bak_path = _warp_debug.log_paths(self._channel)
         if not bak_path.exists():
             self._view.setPlainText(f'(no previous session — {bak_path} not found)')
             return
@@ -132,11 +133,13 @@ class LogViewWidget(QWidget):
 
     # ── Live tail ───────────────────────────────────────────────────
 
-    def _on_log_record(self, level: str, line: str):
+    def _on_log_record(self, channel: str, level: str, line: str):
         # Called from arbitrary threads — bounce through signal.
-        self._new_line.emit(level, line)
+        if channel != self._channel:
+            return
+        self._new_line.emit(channel, level, line)
 
-    def _on_new_line(self, _level: str, line: str):
+    def _on_new_line(self, _channel: str, _level: str, line: str):
         if self._mode != 'CURRENT':
             return
         self._view.appendPlainText(line)

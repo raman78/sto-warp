@@ -26,7 +26,7 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, QTimer, Signal
 
-from warp.debug import log
+from warp.debug import syslog as log
 
 PERIOD_MIN = 5  # match legacy WARP CORE behaviour
 

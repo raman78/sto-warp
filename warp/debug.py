@@ -1,11 +1,17 @@
 """
 Standalone debug logger for sto-warp.
 
-Replaces upstream `src.setsdebug` import surface. Writes one rotated
-log file to `$WARP_LOG_DIR/warp_debug.log` (defaults to the platform
-user-config dir) and mirrors INFO/WARN/ERROR to stderr.
+Replaces upstream `src.setsdebug` import surface. Records are split into
+two channels written to separate rotated files under `$WARP_LOG_DIR`:
 
-Public API: `log.info / debug / warning / error`.
+  - `warp_detection.log` — recognition, OCR, layout, importer, trainer.
+    Imported as the bare `log` symbol (default).
+  - `warp_system.log`    — asset sync, model updater, knowledge client,
+    desktop integration, XDG migration. Imported as `syslog`.
+
+Each channel keeps its own `.bak` rotation across restarts. Subscribers
+receive `(channel, level, line)` so the launcher's two Logs tabs can
+filter on the channel they belong to.
 """
 from __future__ import annotations
 
@@ -15,6 +21,9 @@ import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Callable
+
+
+CHANNELS = ('detection', 'system')
 
 
 def _default_log_dir() -> Path:
@@ -33,78 +42,95 @@ try:
 except Exception:
     _log_dir = Path.home()
 
-_log_path = _log_dir / 'warp_debug.log'
-_lock = threading.Lock()
 
-try:
-    _bak_path = _log_path.with_suffix('.log.bak')
-    if _log_path.exists():
-        try:
-            if _bak_path.exists():
-                _bak_path.unlink()
-            _log_path.rename(_bak_path)
-        except Exception:
-            pass
-    _fh = open(_log_path, 'w', buffering=1)
-    _file_ok = True
-except Exception as e:
-    _fh = None
-    _file_ok = False
-    print(f'[WARP-LOG] WARNING: cannot open log file {_log_path}: {e}', flush=True)
+_paths: dict[str, tuple[Path, Path]] = {}
+_files: dict[str, object | None]    = {}
+_locks: dict[str, threading.Lock]   = {}
 
-
-# GUI tap — subscribers receive (level, formatted_line) for every record.
-# Used by the launcher's Logs tab; intentionally Qt-free so non-GUI callers
-# (CLI, tests) don't pay for it.
-_subscribers: list[Callable[[str, str], None]] = []
+for _ch in CHANNELS:
+    _cur = _log_dir / f'warp_{_ch}.log'
+    _bak = _cur.with_suffix('.log.bak')
+    _paths[_ch] = (_cur, _bak)
+    _locks[_ch] = threading.Lock()
+    try:
+        if _cur.exists():
+            try:
+                if _bak.exists():
+                    _bak.unlink()
+                _cur.rename(_bak)
+            except Exception:
+                pass
+        _files[_ch] = open(_cur, 'w', buffering=1)
+    except Exception as e:
+        _files[_ch] = None
+        print(f'[WARP-LOG] WARNING: cannot open {_cur}: {e}', flush=True)
 
 
-def subscribe(cb: Callable[[str, str], None]) -> None:
-    """Register `cb(level, line)` for live log records. Idempotent."""
+# Subscribers receive (channel, level, formatted_line) for every record.
+# Used by the launcher's two Logs tabs; intentionally Qt-free so non-GUI
+# callers (CLI, tests) don't pay for it.
+_subscribers: list[Callable[[str, str, str], None]] = []
+
+
+def subscribe(cb: Callable[[str, str, str], None]) -> None:
+    """Register `cb(channel, level, line)` for live log records. Idempotent."""
     if cb not in _subscribers:
         _subscribers.append(cb)
 
 
-def unsubscribe(cb: Callable[[str, str], None]) -> None:
+def unsubscribe(cb: Callable[[str, str, str], None]) -> None:
     try:
         _subscribers.remove(cb)
     except ValueError:
         pass
 
 
-def log_paths() -> tuple[Path, Path]:
-    """Return (current_session_log, previous_session_log) paths."""
-    return _log_path, _bak_path
+def log_paths(channel: str = 'detection') -> tuple[Path, Path]:
+    """Return (current_session_log, previous_session_log) for `channel`."""
+    return _paths.get(channel, _paths['detection'])
 
 
-def _write(level: str, msg: str) -> None:
-    ts = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+def _write(channel: str, level: str, msg: str) -> None:
+    ts  = datetime.now().strftime('%H:%M:%S.%f')[:-3]
     tid = threading.current_thread().name
     line = f'{ts}  [{level}]  [{tid}]  {msg}'
     if level != 'DEBUG':
-        print(f'[WARP] {line}', file=sys.stderr, flush=True)
-    if _file_ok and _fh:
-        with _lock:
+        print(f'[WARP/{channel[:3]}] {line}', file=sys.stderr, flush=True)
+    fh = _files.get(channel)
+    if fh is not None:
+        with _locks[channel]:
             try:
-                _fh.write(line + '\n')
-                _fh.flush()
-                os.fsync(_fh.fileno())
+                fh.write(line + '\n')
+                fh.flush()
+                os.fsync(fh.fileno())
             except Exception:
                 pass
     if _subscribers:
         for cb in list(_subscribers):
             try:
-                cb(level.strip(), line)
+                cb(channel, level.strip(), line)
             except Exception:
                 pass
 
 
 class _Log:
-    def info(self, msg):    _write('INFO ', str(msg))
-    def debug(self, msg):   _write('DEBUG', str(msg))
-    def warning(self, msg): _write('WARN ', str(msg))
-    def error(self, msg):   _write('ERROR', str(msg))
+    """Channel-bound logger facade. `log.info(...)` writes to one file."""
+
+    def __init__(self, channel: str):
+        self._ch = channel
+
+    def info(self, msg):    _write(self._ch, 'INFO ', str(msg))
+    def debug(self, msg):   _write(self._ch, 'DEBUG', str(msg))
+    def warning(self, msg): _write(self._ch, 'WARN ', str(msg))
+    def error(self, msg):   _write(self._ch, 'ERROR', str(msg))
 
 
-log = _Log()
-log.info(f'=== warp.debug initialized  pid={os.getpid()}  log={_log_path} ===')
+# Default channel: detection. Use `from warp.debug import log`.
+log    = _Log('detection')
+# System channel: sync, model updates, infrastructure.
+# Use `from warp.debug import syslog`.
+syslog = _Log('system')
+
+
+for _ch, (_cur, _bak) in _paths.items():
+    _Log(_ch).info(f'=== warp.debug initialized  pid={os.getpid()}  log={_cur} ===')

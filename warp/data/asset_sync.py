@@ -35,7 +35,7 @@ from urllib.parse import quote
 
 import requests
 
-from warp.debug import log
+from warp.debug import syslog as log
 from warp.data.cargo import _cache_dir, icons_dir, ship_images_dir
 
 GITHUB_API_TREE = (

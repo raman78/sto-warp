@@ -95,8 +95,11 @@ class LauncherWindow(QMainWindow):
         if not _core_icon.isNull():
             self._tabs.setTabIcon(core_idx, _core_icon)
 
-        self._log_view = LogViewWidget()
-        self._tabs.addTab(self._log_view, 'Logs')
+        self._log_view = LogViewWidget(channel='detection')
+        self._tabs.addTab(self._log_view, 'Detection logs')
+
+        self._syslog_view = LogViewWidget(channel='system')
+        self._tabs.addTab(self._syslog_view, 'System logs')
 
         # Refresh button lives in the status bar (bottom-right corner).
         self._refresh_btn = QPushButton('🔄 Refresh', self)

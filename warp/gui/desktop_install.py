@@ -21,7 +21,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from warp.debug import log
+from warp.debug import syslog as log
 from warp.resources import resource_path
 
 _DESKTOP_TEMPLATE = """\

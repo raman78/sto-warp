@@ -33,7 +33,7 @@ from typing import Callable
 from warp import userdata
 
 try:
-    from warp.debug import log
+    from warp.debug import syslog as log
 except Exception:
     log = logging.getLogger(__name__)
 
