@@ -80,6 +80,11 @@ SLOT_MAP: dict[str, tuple[str, str, bool]] = {
 }
 
 
+_META_SLOTS = frozenset({
+    'Ship Name', 'Ship Type', 'Ship Tier',
+    'Primary Specialization', 'Secondary Specialization',
+})
+
 _FUZZY_MATCH_CUTOFF        = 0.68
 _BOFF_Y_THRESHOLD_PX       = 30
 _BOFF_X_THRESHOLD_PX       = 50
@@ -198,6 +203,12 @@ def _write_equipment_and_traits(
 
     for ri in items:
         if not ri.name or ri.name in VIRTUAL_ITEM_NAMES:
+            continue
+
+        # Ship Name/Type/Tier and specialisations are already surfaced via
+        # ImportResult.ship_* / spec_* metadata — the items list carries them
+        # only so WARP CORE can show their OCR bboxes. Silently skip here.
+        if ri.slot in _META_SLOTS:
             continue
 
         if ri.slot.startswith('Boff '):

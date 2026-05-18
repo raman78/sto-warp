@@ -373,14 +373,16 @@ class WarpWindow(QMainWindow):
         for it in result.items:
             by_slot.setdefault(it.slot, []).append(it)
 
-        # Canonical pipeline order: equipment → BOFFs → traits → spec,
-        # taken from SLOT_ORDER[build_type]. Slots not in the canonical
-        # order (BOFF seat keys like `Boff Seat L[T]_392`, ad-hoc labels)
-        # are appended after — sorted, so output stays deterministic.
+        # Display order: ship metadata first (the three OCR signals SETS
+        # actually needs), then the canonical pipeline order from SLOT_ORDER
+        # (equipment → BOFFs → traits → spec). Anything left over — BOFF
+        # seat keys like `Boff Seat L[T]_392`, ad-hoc labels — is appended
+        # sorted so the output stays deterministic.
+        meta_slots = ['Ship Name', 'Ship Type', 'Ship Tier']
         canonical = [sd['name'] for sd in SLOT_ORDER.get(result.build_type, [])]
         seen: set[str] = set()
         ordered_slots: list[str] = []
-        for s in canonical:
+        for s in meta_slots + canonical:
             if s in by_slot and s not in seen:
                 ordered_slots.append(s)
                 seen.add(s)
@@ -398,7 +400,7 @@ class WarpWindow(QMainWindow):
             for it in entries:
                 child = QTreeWidgetItem(parent)
                 child.setText(0, '')
-                child.setText(1, str(it.slot_index))
+                child.setText(1, str(it.slot_index + 1))
                 child.setText(2, it.name or '—')
                 child.setText(3, f'{it.confidence:.2f}')
                 child.setText(4, Path(it.source_file).name if it.source_file else '')

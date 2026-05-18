@@ -371,6 +371,22 @@ def app_view():
 
 # --- builders -----------------------------------------------------------
 
+def _sanitize_equipment_name(name: str) -> str:
+    """Strip cargo-data modifier suffixes so cache keys match icon labels.
+
+    Mirrors `src.textedit.sanitize_equipment_name` from sets-warp — the
+    embedder and pHash knowledge ship clean names, so equipment cache keys
+    must match (otherwise candidate-name filtering rejects every ML hit).
+    """
+    name = name.replace('&quot;', '"').replace('&#34;', '"')
+    for sep in ('∞', 'Mk X', 'MK X', '['):
+        if sep in name:
+            name = name.split(sep, 1)[0]
+    if name.endswith('-S'):
+        name = name[:-2]
+    return name.strip()
+
+
 def _build_equipment() -> dict[str, dict[str, dict]]:
     raw = _load_raw('equipment.json')
     out: dict[str, dict[str, dict]] = {bk: {} for bk in EQUIPMENT_TYPES.values()}
@@ -379,11 +395,15 @@ def _build_equipment() -> dict[str, dict[str, dict]]:
         bucket = EQUIPMENT_TYPES.get(kind)
         if bucket is None:
             continue
-        name = item.get('name')
-        if not name:
+        raw_name = item.get('name')
+        if not raw_name:
             continue
-        if kind == 'Hangar Bay' and name not in _ELITE_HANGAR_WHITELIST and (
-                name.startswith('Hangar - Advanced') or name.startswith('Hangar - Elite')):
+        if kind == 'Hangar Bay' and raw_name not in _ELITE_HANGAR_WHITELIST and (
+                raw_name.startswith('Hangar - Advanced')
+                or raw_name.startswith('Hangar - Elite')):
+            continue
+        name = _sanitize_equipment_name(raw_name)
+        if not name:
             continue
         out[bucket][name] = item
 
