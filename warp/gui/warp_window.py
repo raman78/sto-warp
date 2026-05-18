@@ -18,7 +18,6 @@ from __future__ import annotations
 import json
 import sys
 import tempfile
-from dataclasses import asdict, is_dataclass
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QThread, Qt, Signal
@@ -30,7 +29,8 @@ from PySide6.QtWidgets import (
 
 from warp.debug import log
 from warp.warp_importer import (
-    SCREENSHOT_EXTENSIONS, ImportResult, RecognisedItem, WarpImporter,
+    SCREENSHOT_EXTENSIONS, SLOT_ORDER, ImportResult, RecognisedItem,
+    WarpImporter,
 )
 
 BUILD_TYPES = (
@@ -48,15 +48,23 @@ BUILD_TYPES = (
 
 
 def _result_to_dict(result: ImportResult) -> dict:
-    """JSON-safe serialisation of `ImportResult` (tuples → lists, drops
-    non-serialisable `thumbnail` field)."""
+    """JSON-safe serialisation of `ImportResult`.
+
+    Built field-by-field on purpose: `dataclasses.asdict` deep-copies and
+    chokes on `RecognisedItem.thumbnail` (a `QImage` / numpy array) before
+    we get a chance to drop it.
+    """
     items = []
     for it in result.items:
-        d = asdict(it) if is_dataclass(it) else dict(it.__dict__)
-        d.pop('thumbnail', None)
-        if isinstance(d.get('bbox'), tuple):
-            d['bbox'] = list(d['bbox'])
-        items.append(d)
+        items.append({
+            'slot':        it.slot,
+            'slot_index':  it.slot_index,
+            'name':        it.name,
+            'confidence':  float(it.confidence),
+            'source_file': it.source_file,
+            'bbox':        list(it.bbox) if it.bbox else [],
+            'seat_key':    it.seat_key,
+        })
     return {
         'build_type':   result.build_type,
         'ship_name':    result.ship_name,
@@ -280,7 +288,24 @@ class WarpWindow(QMainWindow):
         by_slot: dict[str, list[RecognisedItem]] = {}
         for it in result.items:
             by_slot.setdefault(it.slot, []).append(it)
-        for slot in sorted(by_slot):
+
+        # Canonical pipeline order: equipment → BOFFs → traits → spec,
+        # taken from SLOT_ORDER[build_type]. Slots not in the canonical
+        # order (BOFF seat keys like `Boff Seat L[T]_392`, ad-hoc labels)
+        # are appended after — sorted, so output stays deterministic.
+        canonical = [sd['name'] for sd in SLOT_ORDER.get(result.build_type, [])]
+        seen: set[str] = set()
+        ordered_slots: list[str] = []
+        for s in canonical:
+            if s in by_slot and s not in seen:
+                ordered_slots.append(s)
+                seen.add(s)
+        for s in sorted(by_slot):
+            if s not in seen:
+                ordered_slots.append(s)
+                seen.add(s)
+
+        for slot in ordered_slots:
             entries = sorted(by_slot[slot], key=lambda it: (it.slot_index, it.name))
             parent = QTreeWidgetItem(self._tree)
             parent.setText(0, slot)
