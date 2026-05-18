@@ -23,6 +23,7 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest='cmd')
     sub.add_parser('check', help='Verify installation and import the recognition pipeline.')
     sub.add_parser('gui', help='Launch the standalone WARP recognition window (default).')
+    sub.add_parser('warp-core', help='Launch the WARP CORE trainer window.')
 
     args = parser.parse_args(argv)
 
@@ -32,6 +33,14 @@ def main(argv: list[str] | None = None) -> int:
         log.info('sto-warp check: OK')
         print(f'sto-warp {__version__} — foundation modules import OK.')
         return 0
+
+    if args.cmd == 'warp-core':
+        from PySide6.QtWidgets import QApplication
+        from warp.trainer.trainer_window import WarpCoreWindow
+        app = QApplication.instance() or QApplication(argv or sys.argv)
+        win = WarpCoreWindow()
+        win.show()
+        return app.exec()
 
     if args.cmd in (None, 'gui'):
         from warp.gui.warp_window import main as gui_main

@@ -346,6 +346,19 @@ def cache_view() -> _CacheView:
     return _CacheView()
 
 
+def app_view():
+    """Minimal SETS-app stand-in for trainer call sites.
+
+    Trainer code reads `self._sets.cache.X` in dozens of places and
+    sometimes attaches extras (e.g. `self._sets._warp_core_window = self`
+    so the sync worker can locate the live `TrainingDataManager`).
+    Returning a mutable `SimpleNamespace` lets standalone callers swap
+    the SETS app for this shim with zero call-site changes.
+    """
+    import types
+    return types.SimpleNamespace(cache=cache_view())
+
+
 # --- builders -----------------------------------------------------------
 
 def _build_equipment() -> dict[str, dict[str, dict]]:

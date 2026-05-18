@@ -694,6 +694,14 @@ def _get_ml_icon() -> 'QIcon':
 class WarpCoreWindow(QMainWindow):
     def __init__(self, sets_app=None, parent=None):
         super().__init__(parent)
+        # Standalone sto-warp: synthesize a cargo-backed SETS-app shim
+        # whenever the caller doesn't hand in a real SETS app. The shim
+        # exposes `.cache` (cargo view) plus a settable `_warp_core_window`
+        # attribute used by `SyncManager._data_manager`.
+        if sets_app is None:
+            from warp.data.cargo import app_view
+            sets_app = app_view()
+            sets_app._warp_core_window = self
         self._sets = sets_app
         self._settings = QSettings()
         self._sets_root = self._find_sets_root()
