@@ -24,6 +24,9 @@ dist/
 # Runtime
 *.log
 .env
+.config/
+*.ini
+..debug/
 
 # WARP runtime (downloaded at first run; user-local)
 warp/models/
