@@ -49,6 +49,106 @@ SCREEN_TYPE_TO_BUILD_TYPE: dict[str, str] = {
 # warp_importer doesn't pull in the trainer package on the hot path.
 VIRTUAL_ITEM_NAMES = frozenset({'__empty__', '__inactive__'})
 
+# ── Cross-image block scoring (process_folder merge) ─────────────────────────
+# Multiple screenshots in the same folder may classify as the same build_type
+# (one correctly, others as mis-detections that still produce high-confidence
+# `__empty__` hits across a full slot grid). For each (slot) where >1 image
+# contributes results we pick the BLOCK of items from the single image whose
+# evidence is strongest. Score = WEIGHT_GEOM * geometry + WEIGHT_SIBLING *
+# sibling-panel coverage + WEIGHT_RECOG * recognition quality.
+PANEL_GROUPS: dict[str, str] = {
+    # SPACE equipment column
+    'Fore Weapons': 'space_eq', 'Aft Weapons': 'space_eq',
+    'Deflector': 'space_eq', 'Sec-Def': 'space_eq', 'Engines': 'space_eq',
+    'Warp Core': 'space_eq', 'Shield': 'space_eq', 'Experimental': 'space_eq',
+    'Devices': 'space_eq', 'Universal Consoles': 'space_eq',
+    'Engineering Consoles': 'space_eq', 'Science Consoles': 'space_eq',
+    'Tactical Consoles': 'space_eq', 'Hangars': 'space_eq',
+    # GROUND equipment column
+    'Kit Modules': 'ground_eq', 'Kit': 'ground_eq', 'Body Armor': 'ground_eq',
+    'EV Suit': 'ground_eq', 'Personal Shield': 'ground_eq',
+    'Weapons': 'ground_eq', 'Ground Devices': 'ground_eq',
+    # Trait panels
+    'Personal Space Traits': 'space_traits',
+    'Starship Traits':       'space_traits',
+    'Space Reputation':      'space_traits',
+    'Active Space Rep':      'space_traits',
+    'Personal Ground Traits': 'ground_traits',
+    'Ground Reputation':      'ground_traits',
+    'Active Ground Rep':      'ground_traits',
+    # BOFFs — keyed by profession; all share one panel
+    'Boff Tactical':     'boffs', 'Boff Engineering':   'boffs',
+    'Boff Science':      'boffs', 'Boff Intelligence':  'boffs',
+    'Boff Command':      'boffs', 'Boff Pilot':         'boffs',
+    'Boff Miracle Worker': 'boffs', 'Boff Temporal':    'boffs',
+    # Specs
+    'Primary Specialization':   'spec',
+    'Secondary Specialization': 'spec',
+}
+# How many distinct slot rows we expect in each panel group (used as denom
+# for sibling-coverage score). Approximate — real builds vary by ship.
+PANEL_GROUP_EXPECTED: dict[str, int] = {
+    'space_eq':      6,   # at least 6 of the 13 SPACE rows are mandatory
+    'ground_eq':     5,
+    'space_traits':  4,
+    'ground_traits': 3,
+    'boffs':         3,   # min 3 professions visible per build
+    'spec':          2,
+}
+# When `__empty__`/`__inactive__` is recognised below this confidence we treat
+# it as "matcher gave up" instead of "matcher confidently saw an empty slot".
+CONFIDENT_VIRTUAL_THRESHOLD = 0.70
+WEIGHT_GEOM    = 0.3
+WEIGHT_SIBLING = 0.3
+WEIGHT_RECOG   = 0.4
+
+
+def _panel_group(slot_name: str) -> str:
+    return PANEL_GROUPS.get(slot_name, '')
+
+
+def _geom_score(items: list) -> float:
+    """Reward blocks that form a clean grid (consistent X-pitch across items).
+
+    Single-item blocks score 1.0 — nothing to measure. Multi-item blocks score
+    by inverse coefficient-of-variation on the X-gaps between consecutive
+    bbox left edges, sorted by slot_index. A perfectly even row → CV≈0 → 1.0;
+    a chaotic spread → CV→1 → 0.0.
+    """
+    if len(items) <= 1:
+        return 1.0
+    xs = []
+    for it in items:
+        if it.bbox and len(it.bbox) >= 1:
+            xs.append(it.bbox[0])
+    if len(xs) <= 1:
+        return 0.5
+    xs.sort()
+    gaps = [xs[i+1] - xs[i] for i in range(len(xs) - 1)]
+    if not gaps:
+        return 0.5
+    mean_gap = sum(gaps) / len(gaps)
+    if mean_gap <= 0:
+        return 0.0
+    var = sum((g - mean_gap) ** 2 for g in gaps) / len(gaps)
+    std = var ** 0.5
+    cv = std / mean_gap
+    return max(0.0, min(1.0, 1.0 - cv))
+
+
+def _recog_score(items: list) -> float:
+    """Mean confidence, weighted so high-conf virtual matches count fully
+    but low-conf virtual (matcher uncertain) drops to half-weight."""
+    if not items:
+        return 0.0
+    total = 0.0
+    for it in items:
+        c = float(it.confidence or 0.0)
+        if it.name in VIRTUAL_ITEM_NAMES and c < CONFIDENT_VIRTUAL_THRESHOLD:
+            c *= 0.5
+        total += c
+    return total / len(items)
+
 
 def _bbox_iou(a, b) -> float:
     """IoU for two (x, y, w, h) bboxes."""
@@ -779,7 +879,7 @@ class WarpImporter:
                                 errors=[f'No images found in {folder}'])
 
         result = ImportResult(build_type=self._build_type)
-        best: dict[tuple[str, int], RecognisedItem] = {}
+        per_file: list[tuple[str, ImportResult]] = []
 
         for i, fpath in enumerate(files):
             base_pct = int(i / len(files) * 90)
@@ -809,22 +909,95 @@ class WarpImporter:
                     result.ship_tier    = file_result.ship_tier
                     result.ship_profile = file_result.ship_profile
                     result.build_type   = file_result.build_type
-                for item in file_result.items:
-                    # Include seat_key so multiple BOFF seats remapped to the
-                    # same profession (e.g. two Science seats both → Boff Science
-                    # with slot_index 0..3) don't collide and drop abilities.
-                    key = (item.slot, item.slot_index, getattr(item, 'seat_key', None))
-                    if key not in best or item.confidence > best[key].confidence:
-                        best[key] = item
+                elif not result.build_type:
+                    # AUTO mode + no ship info anywhere: keep the first
+                    # non-empty per-image build_type so the Results tree
+                    # has a canonical SLOT_ORDER to sort by.
+                    result.build_type = file_result.build_type
+                per_file.append((fpath.name, file_result))
                 result.errors.extend(file_result.errors)
             except Exception as e:
                 result.errors.append(f'{fpath.name}: {e}')
                 log.exception(f'WarpImporter: {fpath}')
 
-        result.items = list(best.values())
+        result.items = self._merge_items_by_block_score(per_file)
         if self._progress_callback:
             self._progress_callback(100, 'Done')
         return result
+
+    def _merge_items_by_block_score(
+        self,
+        per_file: list[tuple[str, ImportResult]],
+    ) -> list:
+        """Cross-image merge: when >1 image contributes items for the same
+        slot we pick the entire BLOCK from the single source whose evidence
+        is strongest.
+
+        Block = list of items for one (source, slot, seat_key) triple. Score
+        combines geometry (grid regularity), sibling-panel coverage (how many
+        slots in the same panel group this source also filled), and the mean
+        recognition confidence of its items. The block from the winning
+        source replaces all competing blocks for that slot.
+
+        Single-source slots pass through unchanged. Ship-meta items
+        (Ship Name/Type/Tier) are handled by the score-based upgrade in
+        process_folder; here we just collect non-meta items.
+        """
+        # ── 1. Index every item by (source, slot, seat_key) ────────────────
+        blocks: dict[tuple[str, str, str], list] = {}
+        # Per-source panel coverage: source → panel_group → set of slot names
+        # that received >=1 item. Used for the sibling score.
+        coverage: dict[str, dict[str, set]] = {}
+        for src, fr in per_file:
+            cov = coverage.setdefault(src, {})
+            for item in fr.items:
+                seat = getattr(item, 'seat_key', '') or ''
+                blocks.setdefault((src, item.slot, seat), []).append(item)
+                pg = _panel_group(item.slot)
+                if pg:
+                    cov.setdefault(pg, set()).add(item.slot)
+
+        # ── 2. Group competing blocks per (slot, seat_key) ──────────────────
+        per_slot: dict[tuple[str, str], list[tuple[str, list]]] = {}
+        for (src, slot, seat), items in blocks.items():
+            per_slot.setdefault((slot, seat), []).append((src, items))
+
+        # ── 3. For each (slot, seat) pick the highest-scoring source ────────
+        winners: list = []
+        for (slot, seat), candidates in per_slot.items():
+            if len(candidates) == 1:
+                winners.extend(candidates[0][1])
+                continue
+            pg = _panel_group(slot)
+            sib_expected = PANEL_GROUP_EXPECTED.get(pg, 1) if pg else 1
+            scored = []
+            for src, items in candidates:
+                g = _geom_score(items)
+                if pg:
+                    sib_filled = len(coverage.get(src, {}).get(pg, set()))
+                    s = min(1.0, sib_filled / max(sib_expected, 1))
+                else:
+                    s = 1.0
+                r = _recog_score(items)
+                total = (WEIGHT_GEOM * g
+                         + WEIGHT_SIBLING * s
+                         + WEIGHT_RECOG * r)
+                scored.append((total, g, s, r, src, items))
+            scored.sort(key=lambda t: t[0], reverse=True)
+            win_total, win_g, win_s, win_r, win_src, win_items = scored[0]
+            try:
+                losers = ', '.join(
+                    f'{src}={tot:.2f}' for tot, *_ , src, _ in scored[1:])
+                _slog.info(
+                    f'WarpImporter: merge {slot!r}'
+                    f"{(' / ' + seat) if seat else ''}"
+                    f' winner={win_src} score={win_total:.2f} '
+                    f'(geom={win_g:.2f} sib={win_s:.2f} recog={win_r:.2f}) '
+                    f'losers={losers or "—"}')
+            except Exception:
+                pass
+            winners.extend(win_items)
+        return winners
 
     def _process_image(self, img: np.ndarray, source: str, profile_override: dict | None = None,
                        _base_pct: int = 0, _end_pct: int = 90) -> ImportResult:
@@ -873,18 +1046,36 @@ class WarpImporter:
         _ml_bt = SCREEN_TYPE_TO_BUILD_TYPE.get(_ml_stype, '') if _ml_stype else ''
         _slog.info(f'WarpImporter: ML screen: stype={_ml_stype!r} conf={_ml_conf:.2f} → bt={_ml_bt!r}')
 
+        # Determine the per-image starting build_type. In AUTO mode
+        # (`self._build_type == ''` — GUI checkbox unchecked) every screen
+        # in a folder gets its own ML+OCR-derived classification, so a
+        # SPACE_EQ screen no longer drags trait/rep slot processing onto
+        # itself (which used to pollute cross-image merges with false
+        # `__empty__` hits at conf=0.99+).
+        if self._build_type == '':
+            if _ml_bt:
+                _caller_bt = _ml_bt
+            elif _ocr_bt == 'GROUND':
+                _caller_bt = 'GROUND'
+            else:
+                _caller_bt = 'SPACE'
+            _slog.info(f'WarpImporter: AUTO mode → base build_type={_caller_bt!r} '
+                       f'(ml={_ml_bt!r}, ocr={_ocr_bt!r})')
+        else:
+            _caller_bt = self._build_type
+
         if _is_trainer_call:
             # WARP CORE: user explicitly selected screen type in dropdown — that
             # is a stronger signal than OCR build_type. Skip the OCR upgrade step.
-            build_type = self._build_type
-        elif self._build_type in ('SPACE', 'GROUND', 'SPACE_TRAITS',
-                                  'GROUND_TRAITS', 'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
-                                  'SPEC', 'SPACE_MIXED', 'GROUND_MIXED'):
+            build_type = _caller_bt
+        elif _caller_bt in ('SPACE', 'GROUND', 'SPACE_TRAITS',
+                            'GROUND_TRAITS', 'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
+                            'SPEC', 'SPACE_MIXED', 'GROUND_MIXED'):
             # Use caller's build_type as primary, OCR as confirmation.
             # Upgrade SPACE→SPACE_MIXED / GROUND→GROUND_MIXED when OCR signals
             # a richer screen type (broadside screenshots contain equipment +
             # traits + boffs simultaneously).  Never downgrade.
-            build_type = self._build_type
+            build_type = _caller_bt
             if build_type == 'SPACE' and _ocr_bt in ('SPACE_TRAITS', 'SPACE_MIXED'):
                 build_type = 'SPACE_MIXED'
                 _slog.info('WarpImporter: upgraded SPACE → SPACE_MIXED (OCR detected richer screen)')
@@ -907,7 +1098,7 @@ class WarpImporter:
             # ML upgrade — fires when OCR didn't upgrade and ML is confident.
             # Mirrors the OCR ladder so WARP gets the same screen-type detection
             # that WARP CORE's folder pre-classifier already provides.
-            if build_type == self._build_type and _ml_bt and _ml_bt != self._build_type:
+            if build_type == _caller_bt and _ml_bt and _ml_bt != _caller_bt:
                 if build_type == 'SPACE' and _ml_bt in ('SPACE_TRAITS', 'SPACE_MIXED'):
                     build_type = 'SPACE_MIXED'
                     _slog.info(f'WarpImporter: upgraded SPACE → SPACE_MIXED (ML classifier, conf={_ml_conf:.2f})')

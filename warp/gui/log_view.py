@@ -7,8 +7,8 @@ the running session and the prior session loaded from `warp_debug.log.bak`.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QFont
+from PySide6.QtCore import QObject, Qt, QUrl, Signal
+from PySide6.QtGui import QDesktopServices, QFont
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
     QVBoxLayout, QWidget,
@@ -73,6 +73,13 @@ class LogViewWidget(QWidget):
         self._reload_btn = QPushButton('Reload', self)
         self._reload_btn.clicked.connect(self._reload_current_mode)
         bar.addWidget(self._reload_btn)
+
+        self._open_dir_btn = QPushButton('Open folder', self)
+        self._open_dir_btn.setToolTip(
+            'Open the log directory in the system file manager.'
+        )
+        self._open_dir_btn.clicked.connect(self._open_log_dir)
+        bar.addWidget(self._open_dir_btn)
 
         v.addLayout(bar)
 
@@ -161,6 +168,10 @@ class LogViewWidget(QWidget):
         hsb.setValue(h_before)
         if self._autoscroll.isChecked():
             self._scroll_to_end()
+
+    def _open_log_dir(self):
+        cur_path, _ = _warp_debug.log_paths(self._channel)
+        QDesktopServices.openUrl(QUrl.fromLocalFile(str(cur_path.parent)))
 
     def clear_live(self):
         """Wipe the view only when tailing the live session — leaves the

@@ -21,8 +21,8 @@ from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QFileDialog, QHeaderView, QLabel, QMainWindow,
-    QMessageBox, QProgressBar, QPushButton, QTabWidget, QToolBar,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QHeaderView, QLabel,
+    QMainWindow, QMessageBox, QProgressBar, QPushButton, QTabWidget, QToolBar,
     QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout,
 )
 
@@ -36,6 +36,8 @@ from warp.warp_importer import (
 
 _SETTINGS_LAST_FILES_DIR  = 'warp/last_files_dir'
 _SETTINGS_LAST_FOLDER_DIR = 'warp/last_folder_dir'
+_SETTINGS_FORCE_BT_ON     = 'warp/force_build_type_on'
+_SETTINGS_FORCE_BT_VALUE  = 'warp/force_build_type_value'
 
 
 def _restore_dir(key: str) -> str:
@@ -135,11 +137,31 @@ class WarpWindow(QMainWindow):
         tb.addWidget(self._open_folder_btn)
 
         tb.addSeparator()
-        tb.addWidget(QLabel(' Build type: ', self))
+
+        # Force build type: when unchecked, every image in the folder is
+        # classified independently by ML+OCR (AUTO mode). When checked, the
+        # combo's value is forced on every image — same behavior as before.
+        s = QSettings()
+        force_on    = s.value(_SETTINGS_FORCE_BT_ON, False, type=bool)
+        force_value = s.value(_SETTINGS_FORCE_BT_VALUE, 'SPACE_MIXED', type=str)
+
+        self._force_bt_check = QCheckBox(' Force build type: ', self)
+        self._force_bt_check.setToolTip(
+            'Unchecked (default): each screenshot in the folder is classified '
+            'independently by ML+OCR.\n'
+            'Checked: every screenshot is processed as the selected type.'
+        )
+        self._force_bt_check.setChecked(force_on)
+        self._force_bt_check.toggled.connect(self._on_force_bt_toggled)
+        tb.addWidget(self._force_bt_check)
 
         self._build_combo = QComboBox(self)
         self._build_combo.addItems(BUILD_TYPES)
-        self._build_combo.setCurrentText('SPACE_MIXED')
+        if force_value in BUILD_TYPES:
+            self._build_combo.setCurrentText(force_value)
+        self._build_combo.setEnabled(force_on)
+        self._build_combo.currentTextChanged.connect(
+            lambda v: QSettings().setValue(_SETTINGS_FORCE_BT_VALUE, v))
         tb.addWidget(self._build_combo)
 
         tb.addSeparator()
@@ -259,7 +281,11 @@ class WarpWindow(QMainWindow):
         self._set_controls_enabled(False)
 
         self._thread = QThread(self)
-        self._worker = RecognitionWorker(folder, self._build_combo.currentText())
+        # AUTO mode = empty string; importer derives per-image build_type
+        # from ML+OCR. Forced mode = combo's current text.
+        forced_bt = (self._build_combo.currentText()
+                     if self._force_bt_check.isChecked() else '')
+        self._worker = RecognitionWorker(folder, forced_bt)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
@@ -329,10 +355,16 @@ class WarpWindow(QMainWindow):
             self._tmp_dir.cleanup()
             self._tmp_dir = None
 
+    def _on_force_bt_toggled(self, checked: bool):
+        self._build_combo.setEnabled(checked)
+        QSettings().setValue(_SETTINGS_FORCE_BT_ON, checked)
+
     def _set_controls_enabled(self, enabled: bool):
         self._open_files_btn.setEnabled(enabled)
         self._open_folder_btn.setEnabled(enabled)
-        self._build_combo.setEnabled(enabled)
+        self._force_bt_check.setEnabled(enabled)
+        # The combo only takes input when the checkbox is on AND we're idle.
+        self._build_combo.setEnabled(enabled and self._force_bt_check.isChecked())
 
     # ── Result rendering ────────────────────────────────────────────
 
