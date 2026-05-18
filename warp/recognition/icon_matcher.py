@@ -36,6 +36,8 @@ from urllib.parse import unquote_plus
 
 import numpy as np
 
+from warp import userdata
+
 log = logging.getLogger(__name__)
 
 # ── Tunable thresholds ─────────────────────────────────────────────────────────
@@ -496,8 +498,7 @@ class SETSIconMatcher:
         if self._ml_session:
             return self._ml_session
 
-        sets_root  = self._find_sets_root()
-        models_dir = sets_root / 'warp' / 'models'
+        models_dir = userdata.models_dir()
 
         # Priority 0: metric-learning embedder (icon_embedder.pt + gallery index)
         # Uses embedder_label_map.json so its class space stays disjoint from

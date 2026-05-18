@@ -30,6 +30,8 @@ import time
 from pathlib import Path
 from typing import Callable
 
+from warp import userdata
+
 try:
     from warp.debug import log
 except Exception:
@@ -37,7 +39,7 @@ except Exception:
 
 _BACKEND_URL          = 'https://sets-warp-backend.onrender.com'
 _CHECK_INTERVAL_HOURS = 0.25        # minimum hours between remote checks (15 min)
-_VERSION_CACHE_FILE   = 'warp/models/model_version_remote_cache.json'
+_VERSION_CACHE_FILENAME = 'model_version_remote_cache.json'
 _CONNECT_TIMEOUT      = 5           # seconds
 # Render free tier cold-starts in ~50 s. 60 s read-timeout covers the wake-up;
 # anything shorter guarantees the very first call after idle will fail.
@@ -75,12 +77,12 @@ class ModelUpdater:
     Non-blocking remote model update checker.
 
     Usage:
-        ModelUpdater().check_and_update(sets_root, on_updated=lambda: log.info('reloaded'))
+        ModelUpdater().check_and_update(on_updated=lambda: log.info('reloaded'))
     """
 
     def check_and_update(
         self,
-        sets_root: Path,
+        sets_root: Path | None = None,
         on_updated: Callable[[], None] | None = None,
         on_progress: Callable[[str, int, int], None] | None = None,
     ) -> None:
@@ -88,11 +90,15 @@ class ModelUpdater:
         Check for a newer centrally-trained model and download it if available.
         Non-blocking — returns immediately; the check runs in a daemon thread.
 
+        `sets_root` is accepted for backward compatibility and ignored — model
+        files live under `userdata.models_dir()` regardless of how the app
+        was installed (pipx / AUR / source).
+
         on_progress(text, current, total) — optional splash/progress callback.
         """
         threading.Thread(
             target=self._bg_check,
-            args=(Path(sets_root), on_updated, on_progress, 0),
+            args=(None, on_updated, on_progress, 0),
             daemon=True,
             name='warp-model-update',
         ).start()
@@ -101,14 +107,15 @@ class ModelUpdater:
 
     def _bg_check(
         self,
-        sets_root: Path,
-        on_updated: Callable | None,
+        sets_root: Path | None = None,
+        on_updated: Callable | None = None,
         on_progress: Callable[[str, int, int], None] | None = None,
         retry_idx: int = 0,
     ) -> None:
         _t0 = time.time()
         try:
-            models_dir = sets_root / 'warp' / 'models'
+            userdata.ensure_migrated()
+            models_dir = userdata.models_dir()
 
             # Always ensure screen_classifier is present (static, not version-managed)
             self._ensure_screen_classifier(models_dir)
@@ -118,7 +125,7 @@ class ModelUpdater:
             # attempt that returned "no model published yet").
             model_missing = not (models_dir / 'model_version.json').exists()
             embedder_stale = self._embedder_needs_refresh(models_dir)
-            if not model_missing and not embedder_stale and not self._due_for_check(sets_root):
+            if not model_missing and not embedder_stale and not self._due_for_check():
                 return
 
             log.info('ModelUpdater: checking for remote model update...')
@@ -136,7 +143,7 @@ class ModelUpdater:
                     t = threading.Timer(
                         delay_min * 60,
                         self._bg_check,
-                        args=(sets_root, on_updated, None, retry_idx + 1),
+                        args=(None, on_updated, None, retry_idx + 1),
                     )
                     t.daemon = True
                     t.name = f'warp-model-update-retry-{retry_idx + 1}'
@@ -149,7 +156,7 @@ class ModelUpdater:
                 return
             if not remote.get('available'):
                 log.debug('ModelUpdater: no model published on remote yet')
-                self._save_check_timestamp(sets_root)
+                self._save_check_timestamp()
                 return
 
             local_ts  = self._read_local_trained_at(models_dir)
@@ -170,7 +177,7 @@ class ModelUpdater:
                         f'ModelUpdater: local model is current '
                         f'(local={local_ts[:10]}, remote={remote_ts[:10]})'
                     )
-                    self._save_check_timestamp(sets_root)
+                    self._save_check_timestamp()
                     return
 
             log.info(
@@ -232,7 +239,7 @@ class ModelUpdater:
                     except Exception:
                         pass
 
-            self._save_check_timestamp(sets_root)
+            self._save_check_timestamp()
 
         except Exception as e:
             log.warning(f'ModelUpdater: update check failed: {e}')
@@ -295,7 +302,7 @@ class ModelUpdater:
 
         # Use upload token if available — suppresses HF unauthenticated warning
         # and gets higher rate limits. Falls back to anonymous (public repo).
-        token = self._read_hub_token(models_dir.parent)
+        token = self._read_hub_token()
 
         total = len(_MODEL_FILES)
         n_classes = remote_meta.get('n_classes', '?')
@@ -347,7 +354,7 @@ class ModelUpdater:
             return
         import shutil
         hf_repo = 'sets-sto/warp-knowledge'
-        token = self._read_hub_token(models_dir.parent)
+        token = self._read_hub_token()
         models_dir.mkdir(parents=True, exist_ok=True)
         for hf_path, local_name in _SCREEN_CLASSIFIER_FILES:
             try:
@@ -364,8 +371,8 @@ class ModelUpdater:
 
     # ── rate-limiting (check at most once per 24 h) ───────────────────────────
 
-    def _due_for_check(self, sets_root: Path) -> bool:
-        cache_path = self._cache_path(sets_root)
+    def _due_for_check(self) -> bool:
+        cache_path = self._cache_path()
         if not cache_path.exists():
             return True
         try:
@@ -376,10 +383,9 @@ class ModelUpdater:
         except Exception:
             return True
 
-    def _save_check_timestamp(self, sets_root: Path) -> None:
-        cache_path = self._cache_path(sets_root)
+    def _save_check_timestamp(self) -> None:
+        cache_path = self._cache_path()
         try:
-            cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(
                 json.dumps({'last_check': time.time()}),
                 encoding='utf-8',
@@ -390,10 +396,10 @@ class ModelUpdater:
     # ── helpers ───────────────────────────────────────────────────────────────
 
     @staticmethod
-    def _read_hub_token(warp_dir: Path) -> str:
-        """Read hub_token.txt from warp/ directory. Returns '' if not found."""
+    def _read_hub_token() -> str:
+        """Read hub_token.txt from XDG config dir. Returns '' if not found."""
         try:
-            return (warp_dir / 'hub_token.txt').read_text().strip()
+            return userdata.hub_token_file().read_text().strip()
         except Exception:
             return ''
 
@@ -438,5 +444,5 @@ class ModelUpdater:
             return ''
 
     @staticmethod
-    def _cache_path(sets_root: Path) -> Path:
-        return sets_root / _VERSION_CACHE_FILE
+    def _cache_path() -> Path:
+        return userdata.cache_dir() / _VERSION_CACHE_FILENAME

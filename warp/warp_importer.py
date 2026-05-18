@@ -788,8 +788,6 @@ class WarpImporter:
                 progress_cb(i, len(files), fpath.name)
             if self._interrupt_check and self._interrupt_check():
                 break
-            if self._progress_callback:
-                self._progress_callback(base_pct, f'Analysing {fpath.name}…')
             try:
                 img         = self._load_image(fpath)
                 file_result = self._process_image(
@@ -831,11 +829,23 @@ class WarpImporter:
     def _process_image(self, img: np.ndarray, source: str, profile_override: dict | None = None,
                        _base_pct: int = 0, _end_pct: int = 90) -> ImportResult:
         _slog.info(f'####### WARP: {Path(source).name} | {self._build_type} #######')
+        # Sub-stage progress: split per-image range into ~45% for OCR/classify/
+        # layout-detect and ~55% for the per-slot icon-matching loop. Each
+        # stage emits a single pct/label so the UI advances steadily on
+        # single-image jobs instead of jumping 0→100% at the end.
+        _span = max(_end_pct - _base_pct, 1)
+        _img_name = Path(source).name
+        def _emit_stage(frac: float, label: str):
+            if self._progress_callback:
+                self._progress_callback(_base_pct + int(frac * _span),
+                                        f'{_img_name}: {label}')
+
         # Step 1 — extract ship info via OCR (single mechanism for WARP and WARP CORE).
         # Trainer-mode legitimate overlay: user's screen-type combo wins over
         # OCR build_type upgrades — but ship_name/type/tier from OCR still feed
         # ShipDB so profile matches the actual ship (carrier vs standard, etc.).
         _is_trainer_call = self._from_trainer
+        _emit_stage(0.02, 'OCR…')
         _text = self._get_text()
         text_info = _text.extract_ship_info(img)
 
@@ -858,6 +868,7 @@ class WarpImporter:
         # ML screen-type classifier — second autodetection signal (shared by
         # WARP and WARP CORE). Used to upgrade generic build_type when OCR
         # alone can't decide (e.g. MIXED screens where text labels are sparse).
+        _emit_stage(0.15, 'Classifying screen…')
         _ml_stype, _ml_conf = self._classify_screen(img)
         _ml_bt = SCREEN_TYPE_TO_BUILD_TYPE.get(_ml_stype, '') if _ml_stype else ''
         _slog.info(f'WarpImporter: ML screen: stype={_ml_stype!r} conf={_ml_conf:.2f} → bt={_ml_bt!r}')
@@ -1019,6 +1030,7 @@ class WarpImporter:
             # each row-group's section independently.
             'SPACE_TRAITS', 'GROUND_TRAITS',
         )
+        _emit_stage(0.25, 'Detecting layout…')
         layout = self._get_layout().detect(
             img, build_type, profile,
             icon_matcher=self._get_matcher() if _needs_matcher else None,
@@ -1176,6 +1188,11 @@ class WarpImporter:
             if profile.get(sd['name'], 0) > 0
         )
         processed_bboxes = 0
+        # Per-slot icon matching consumes the upper ~55% of this image's
+        # progress window (OCR/classify/layout-detect already used the
+        # first ~45%). _match_base..._end_pct is the slot-loop range.
+        _match_base = _base_pct + int(0.45 * _span)
+        _emit_stage(0.45, 'Matching icons…')
 
         # P5: Dynamic anchoring state
         current_dy = 0
@@ -1220,8 +1237,8 @@ class WarpImporter:
             for idx, bbox in enumerate(bboxes):
                 # Emit per-slot progress so the UI stays responsive
                 if self._progress_callback and total_bboxes > 0:
-                    pct = _base_pct + int(processed_bboxes / total_bboxes * (_end_pct - _base_pct))
-                    self._progress_callback(pct, f'{slot_name} {idx + 1}/{len(bboxes)}')
+                    pct = _match_base + int(processed_bboxes / total_bboxes * (_end_pct - _match_base))
+                    self._progress_callback(pct, f'{_img_name}: {slot_name} {idx + 1}/{len(bboxes)}')
                 processed_bboxes += 1
 
                 # 5-element bboxes carry a cell state from layout detection
@@ -1808,7 +1825,8 @@ class WarpImporter:
                     _slog.info(f'│   {slot_name:30s}  {ok:2d}/{ok+skip:2d}  {bar}')
 
         # ── Persist + trend ───────────────────────────────────────────────
-        stats_path = Path(__file__).resolve().parent.parent / '.config' / 'recognition_stats.json'
+        from warp import userdata as _userdata
+        stats_path = _userdata.recognition_stats_file()
         try:
             history: list[dict] = _json.loads(stats_path.read_text(encoding='utf-8'))
         except Exception:
@@ -1867,12 +1885,9 @@ class WarpImporter:
         _NON_ICON = frozenset({'Ship Name', 'Ship Type', 'Ship Tier',
                                'Primary Specialization', 'Secondary Specialization'})
         try:
-            here = Path(__file__).resolve().parent
-            for _ in range(6):
-                ann_path = here / 'warp' / 'training_data' / 'annotations.json'
-                if ann_path.exists(): break
-                here = here.parent
-            else:
+            from warp import userdata as _userdata
+            ann_path = _userdata.training_data_dir() / 'annotations.json'
+            if not ann_path.exists():
                 return None
             import json
             data = json.loads(ann_path.read_text(encoding='utf-8'))
@@ -1900,13 +1915,9 @@ class WarpImporter:
         """Load confirmed annotation counts per slot from training_data on disk.
         Returns {slot_name: count} for the given source image file."""
         try:
-            here = Path(__file__).resolve().parent
-            for _ in range(6):
-                ann_path = here / 'warp' / 'training_data' / 'annotations.json'
-                if ann_path.exists():
-                    break
-                here = here.parent
-            else:
+            from warp import userdata as _userdata
+            ann_path = _userdata.training_data_dir() / 'annotations.json'
+            if not ann_path.exists():
                 return {}
             import json
             data = json.loads(ann_path.read_text(encoding='utf-8'))
@@ -2168,15 +2179,9 @@ class WarpImporter:
             # WARP must not read annotations.json — that would hide detection bugs behind
             # user-confirmed ground truth. Mirrors the _use_confirmed gate at line ~707.
             if self._from_trainer:
-                here = Path(__file__).resolve().parent
-                for _ in range(6):
-                    td = here / 'warp' / 'training_data'
-                    if td.exists():
-                        break
-                    here = here.parent
-                else:
-                    td = None
-                if td is not None:
+                from warp import userdata as _userdata
+                td = _userdata.training_data_dir()
+                if td.exists():
                     SETSIconMatcher.seed_from_training_data(td)
             else:
                 # WARP path: clear any session examples a prior trainer run left in the
@@ -2198,8 +2203,9 @@ class WarpImporter:
     def _get_text(self):
         if self._text is None:
             from warp.recognition.text_extractor import TextExtractor
+            from warp import userdata as _userdata
             self._text = TextExtractor()
-            corrections_path = Path(__file__).resolve().parent / 'models' / 'ship_type_corrections.json'
+            corrections_path = _userdata.models_dir() / 'ship_type_corrections.json'
             if corrections_path.exists():
                 TextExtractor.load_corrections(corrections_path)
         return self._text
@@ -2213,8 +2219,8 @@ class WarpImporter:
         try:
             if self._screen_classifier is None:
                 from warp.recognition.screen_classifier import ScreenTypeClassifier
-                models_dir = Path(__file__).resolve().parent / 'models'
-                self._screen_classifier = ScreenTypeClassifier(models_dir)
+                from warp import userdata as _userdata
+                self._screen_classifier = ScreenTypeClassifier(_userdata.models_dir())
             return self._screen_classifier.classify(img)
         except Exception as e:
             _slog.debug(f'WarpImporter: screen classifier unavailable — {e}')
@@ -2222,16 +2228,13 @@ class WarpImporter:
 
     def _get_shipdb(self) -> ShipDB:
         if self._shipdb is None:
-            # Find cargo dir relative to SETS root
-            here = Path(__file__).resolve().parent
-            for _ in range(5):
-                candidate = here / '.config' / 'cargo'
-                if (candidate / 'ship_list.json').exists():
-                    break
-                here = here.parent
-            else:
-                candidate = Path('.config') / 'cargo'
-            self._shipdb = ShipDB(candidate)
+            # Cargo lives in the XDG cache dir managed by warp.data.cargo.
+            # The legacy SETS-root walk (.config/cargo near __file__) never
+            # resolved in sto-warp and silently fell back to a relative path
+            # → ShipDB loaded 0 ships → every lookup hit keyword-fallback
+            # → profile lost Sec-Def / Experimental → EQ rows shifted.
+            from warp.data.cargo import _cache_dir
+            self._shipdb = ShipDB(_cache_dir())
         return self._shipdb
 
     def _find_anchor_recalibration(

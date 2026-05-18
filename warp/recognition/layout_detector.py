@@ -25,6 +25,7 @@ try:
 except Exception:
     _slog = log
 
+from warp import userdata as _userdata
 from warp.recognition import boff_marker as _boff_marker
 from warp.recognition import trait_grid as _trait_grid
 from warp.recognition.eq_geometry import detect_eq_geometry, EQGeometry, STD_ORDER
@@ -46,9 +47,9 @@ _STD_IDX_TO_PROD_SLOT: dict[int, str] = {
 
 OCR_CONF_THRESHOLD = 0.40
 LABEL_FUZZY_CUTOFF = 0.68
-# Calibration file is stored in training_data
-CALIBRATION_FILE        = Path('warp') / 'training_data' / 'anchors.json'
-CANONICAL_LAYOUT_FILE   = Path('warp') / 'training_data' / 'canonical_layout.json'
+# Calibration file is stored in the XDG training-data dir.
+CALIBRATION_FILENAME      = 'anchors.json'
+CANONICAL_LAYOUT_FILENAME = 'canonical_layout.json'
 # Minimum brightness score for canonical layout to be accepted
 _CANONICAL_MIN_SCORE    = 0.35
 
@@ -707,18 +708,13 @@ class LayoutDetector:
         """
         import statistics as _st
 
-        # Locate anchors.json
-        p = Path(__file__).resolve().parent
+        cfile = _userdata.training_data_dir() / CALIBRATION_FILENAME
         cal_data = None
-        for _ in range(6):
-            cfile = p / CALIBRATION_FILE
-            if cfile.exists():
-                try:
-                    cal_data = json.loads(cfile.read_text(encoding='utf-8'))
-                except Exception:
-                    pass
-                break
-            p = p.parent
+        if cfile.exists():
+            try:
+                cal_data = json.loads(cfile.read_text(encoding='utf-8'))
+            except Exception:
+                cal_data = None
         if not cal_data:
             return {}
 
@@ -764,33 +760,24 @@ class LayoutDetector:
                 }
 
         # Save next to anchors.json
-        p2 = Path(__file__).resolve().parent
-        for _ in range(6):
-            if (p2 / 'pyproject.toml').exists():
-                out = p2 / CANONICAL_LAYOUT_FILE
-                out.parent.mkdir(parents=True, exist_ok=True)
-                out.write_text(json.dumps(canonical, indent=2), encoding='utf-8')
-                _slog.info(
-                    f'LayoutDetector: canonical_layout.json saved '
-                    f'({len(canonical["types"])} types, '
-                    f'{sum(len(v["slots"]) for v in canonical["types"].values())} slot entries)'
-                )
-                break
-            p2 = p2.parent
+        out = _userdata.training_data_dir() / CANONICAL_LAYOUT_FILENAME
+        out.write_text(json.dumps(canonical, indent=2), encoding='utf-8')
+        _slog.info(
+            f'LayoutDetector: canonical_layout.json saved '
+            f'({len(canonical["types"])} types, '
+            f'{sum(len(v["slots"]) for v in canonical["types"].values())} slot entries)'
+        )
 
         return canonical
 
     def _load_canonical_layout(self) -> dict | None:
         """Load canonical_layout.json. Returns None if missing/corrupt."""
-        p = Path(__file__).resolve().parent
-        for _ in range(6):
-            cfile = p / CANONICAL_LAYOUT_FILE
-            if cfile.exists():
-                try:
-                    return json.loads(cfile.read_text(encoding='utf-8'))
-                except Exception:
-                    return None
-            p = p.parent
+        cfile = _userdata.training_data_dir() / CANONICAL_LAYOUT_FILENAME
+        if cfile.exists():
+            try:
+                return json.loads(cfile.read_text(encoding='utf-8'))
+            except Exception:
+                return None
         return None
 
     def _detect_via_canonical_layout(
@@ -1162,7 +1149,7 @@ class LayoutDetector:
         if self._community_anchors is not None:
             return self._community_anchors
         try:
-            p = Path('warp') / 'models' / 'community_anchors.json'
+            p = _userdata.models_dir() / 'community_anchors.json'
             if not p.exists():
                 self._community_anchors = []
                 return []
@@ -2903,23 +2890,14 @@ class LayoutDetector:
         return self._ocr
 
     def _load_calibration(self) -> dict | None:
-        p = Path(__file__).resolve().parent
-        for _ in range(6):
-            cfile = p / CALIBRATION_FILE
-            if cfile.exists():
-                try: return json.loads(cfile.read_text())
-                except: pass
-            p = p.parent
+        cfile = _userdata.training_data_dir() / CALIBRATION_FILENAME
+        if cfile.exists():
+            try:
+                return json.loads(cfile.read_text())
+            except Exception:
+                return None
         return None
 
     def _save_calibration(self):
-        p = Path(__file__).resolve().parent
-        cfile = None
-        for _ in range(6):
-            if (p / 'pyproject.toml').exists():
-                cfile = p / CALIBRATION_FILE
-                break
-            p = p.parent
-        if cfile:
-            cfile.parent.mkdir(parents=True, exist_ok=True)
-            cfile.write_text(json.dumps(self._calibration, indent=2))
+        cfile = _userdata.training_data_dir() / CALIBRATION_FILENAME
+        cfile.write_text(json.dumps(self._calibration, indent=2))

@@ -31,6 +31,7 @@ class _ColorPreservingDelegate(QStyledItemDelegate):
             option.palette.setColor(QPalette.ColorRole.HighlightedText, brush.color())
 
 
+from warp import userdata
 from warp.trainer.annotation_widget import AnnotationWidget
 from warp.trainer.training_data      import TrainingDataManager, AnnotationState
 from warp.style import (
@@ -46,7 +47,7 @@ _KEY_AUTO_ACCEPT    = 'warp_core/auto_accept_enabled'
 _KEY_AUTO_CONF      = 'warp_core/auto_accept_conf'
 
 # ── Match summary table + history ──────────────────────────────────────────
-_RECOG_HISTORY_PATH = Path(__file__).resolve().parent.parent / 'training_data' / 'recog_history.json'
+_RECOG_HISTORY_PATH = userdata.training_data_dir() / 'recog_history.json'
 _DELTA_EPS = 0.03  # minimum absolute conf change to render an arrow
 
 
@@ -340,7 +341,7 @@ class ScreenTypeDetectorWorker(QThread):
         import datetime
         from warp.debug import log as _slog
 
-        stats_path = self._sets_root / '.config' / 'screen_type_stats.json'
+        stats_path = userdata.screen_type_stats_file()
         
         # Load historical data
         try:
@@ -457,8 +458,7 @@ class MatchWorker(QThread):
             from warp.debug import log as _slog
             # Seed confirmed crops as session examples (guarded — runs at most once)
             matcher = SETSIconMatcher(self._sets)
-            SETSIconMatcher.seed_from_training_data(
-                matcher._find_sets_root() / 'warp' / 'training_data')
+            SETSIconMatcher.seed_from_training_data(userdata.training_data_dir())
             name, conf, thumb, _ = matcher.match(
                 self._crop, candidate_names=self._candidates)
             _slog.info(f'match_worker → name={name!r} conf={conf:.2f} '
@@ -692,7 +692,7 @@ def _get_ml_icon() -> 'QIcon':
 
 
 class WarpCoreWindow(QMainWindow):
-    def __init__(self, sets_app=None, parent=None):
+    def __init__(self, sets_app=None, parent=None, embed: bool = False):
         super().__init__(parent)
         # Standalone sto-warp: synthesize a cargo-backed SETS-app shim
         # whenever the caller doesn't hand in a real SETS app. The shim
@@ -702,10 +702,18 @@ class WarpCoreWindow(QMainWindow):
             from warp.data.cargo import app_view
             sets_app = app_view()
             sets_app._warp_core_window = self
+        else:
+            # Always make sure the live trainer window is reachable from
+            # the shared app shim — SyncManager looks it up by attribute.
+            try:
+                sets_app._warp_core_window = self
+            except Exception:
+                pass
         self._sets = sets_app
+        self._embed = embed
         self._settings = QSettings()
         self._sets_root = self._find_sets_root()
-        self._data_mgr = TrainingDataManager(self._sets_root / 'warp' / 'training_data')
+        self._data_mgr = TrainingDataManager(userdata.training_data_dir())
         self._screenshots: list[Path] = []
         self._current_idx = -1
         self._screen_types: dict[str, str] = {}
@@ -720,7 +728,8 @@ class WarpCoreWindow(QMainWindow):
         self._loading_row = False
         self._sync_client = None
         self._sync_timer = None
-        self._init_sync_client()
+        if not self._embed:
+            self._init_sync_client()
         self._detect_worker = None
         self._suppress_next_focus_popup = False  # set True after programmatic setFocus
         self._recog_worker = None
@@ -739,11 +748,14 @@ class WarpCoreWindow(QMainWindow):
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage('Ready — open a folder of STO screenshots to start annotating.')
 
-        # Periodic HF sync — fires every 5 minutes, uploads only if data changed
-        self._sync_timer = QTimer(self)
-        self._sync_timer.setInterval(5 * 60 * 1000)   # 5 minutes in ms
-        self._sync_timer.timeout.connect(self._on_sync_timer)
-        self._sync_timer.start()
+        # Periodic HF sync — fires every 5 minutes, uploads only if data changed.
+        # Skipped in embed mode: the launcher's SyncCoordinator owns the timer
+        # so we don't fire two refreshes per cycle.
+        if not self._embed:
+            self._sync_timer = QTimer(self)
+            self._sync_timer.setInterval(5 * 60 * 1000)   # 5 minutes in ms
+            self._sync_timer.timeout.connect(self._on_sync_timer)
+            self._sync_timer.start()
 
 
     def showEvent(self, event):
@@ -1056,7 +1068,7 @@ class WarpCoreWindow(QMainWindow):
         total = len(self._screenshots)
         if self._detect_dlg:
             self._detect_dlg.reset_progress(total)
-        models_dir = self._sets_root / 'warp' / 'models'
+        models_dir = userdata.models_dir()
         # Iteration 1: seed from green only. Subsequent iterations: green + yellow (ml_auto).
         seed_names = (self._screen_types_manual if self._detect_loop_iter == 1
                       else self._screen_types_manual | self._screen_types_ml_auto)
@@ -1398,7 +1410,7 @@ class WarpCoreWindow(QMainWindow):
         """
         try:
             from warp.recognition.icon_matcher import SETSIconMatcher
-            SETSIconMatcher.seed_from_training_data(self._sets_root / 'warp' / 'training_data')
+            SETSIconMatcher.seed_from_training_data(userdata.training_data_dir())
         except Exception as e:
             log.warning(f'seed_matcher_from_confirmed failed: {e}')
 
@@ -3292,7 +3304,7 @@ class WarpCoreWindow(QMainWindow):
         # Check for newer central model (rate-limited to once per 15 min internally)
         try:
             from warp.trainer.model_updater import ModelUpdater
-            ModelUpdater().check_and_update(self._sets_root)
+            ModelUpdater().check_and_update()
         except Exception as e:
             log.debug(f'WARP CORE: model update check error: {e}')
 

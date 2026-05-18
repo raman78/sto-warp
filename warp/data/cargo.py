@@ -109,6 +109,16 @@ def icons_dir() -> Path:
     return base / 'icons'
 
 
+def ship_images_dir() -> Path:
+    """Local ship-image library mirrored from STOCD/SETS-Data ship_images/."""
+    env = os.environ.get('WARP_SHIP_IMAGES_DIR')
+    if env:
+        return Path(env)
+    xdg = os.environ.get('XDG_CONFIG_HOME')
+    base = Path(xdg) / 'warp' if xdg else Path.home() / '.config' / 'warp'
+    return base / 'ship_images'
+
+
 # --- raw fetch / cache primitives ---------------------------------------
 
 _lock = threading.RLock()

@@ -22,8 +22,10 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--version', action='version', version=f'sto-warp {__version__}')
     sub = parser.add_subparsers(dest='cmd')
     sub.add_parser('check', help='Verify installation and import the recognition pipeline.')
-    sub.add_parser('gui', help='Launch the standalone WARP recognition window (default).')
+    sub.add_parser('launcher', help='Launch the combined WARP + WARP CORE tabbed window (default).')
+    sub.add_parser('gui', help='Launch the standalone WARP recognition window.')
     sub.add_parser('warp-core', help='Launch the WARP CORE trainer window.')
+    sub.add_parser('install-desktop', help='Install or refresh the Linux .desktop entry.')
 
     args = parser.parse_args(argv)
 
@@ -34,6 +36,16 @@ def main(argv: list[str] | None = None) -> int:
         print(f'sto-warp {__version__} — foundation modules import OK.')
         return 0
 
+    if args.cmd == 'install-desktop':
+        from warp.gui.desktop_install import install_desktop_entry
+        path = install_desktop_entry(force=True)
+        if path is None:
+            print('install-desktop: no .desktop file written '
+                  '(non-Linux, or `sto-warp` not on PATH).')
+            return 1
+        print(f'install-desktop: wrote {path}')
+        return 0
+
     if args.cmd == 'warp-core':
         from PySide6.QtWidgets import QApplication
         from warp.trainer.trainer_window import WarpCoreWindow
@@ -42,9 +54,13 @@ def main(argv: list[str] | None = None) -> int:
         win.show()
         return app.exec()
 
-    if args.cmd in (None, 'gui'):
+    if args.cmd == 'gui':
         from warp.gui.warp_window import main as gui_main
         return gui_main(argv)
+
+    if args.cmd in (None, 'launcher'):
+        from warp.gui.launcher import main as launcher_main
+        return launcher_main(argv)
 
     parser.print_help()
     return 0

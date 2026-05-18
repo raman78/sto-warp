@@ -11,7 +11,7 @@ recognition + ML training toolkit, distributed as its own pip / pipx package
 - **WARP CORE** — Qt trainer UI for reviewing recognition output and fine-tuning the EfficientNet / MobileNetV3 models.
 - **Bridges** — thin adapters that publish recognition results to external build planners (e.g. SETS v3.0.0) live in **separate** packages and consume sto-warp as a library.
 
-**Stack:** Python 3.13+, PySide6, OpenCV, PyTorch, EasyOCR
+**Stack:** Python 3.14+, PySide6, OpenCV, PyTorch, EasyOCR
 **Entry point:** `sto-warp` (console script, installed by pipx) → `warp.app:main`
 
 ---
@@ -148,7 +148,7 @@ ETag-aware via `If-None-Match` when available).
 ## Distribution
 
 Primary: **pipx** — `pipx install sto-warp` installs into an isolated venv
-and exposes the `sto-warp` console script. Python 3.13+ required.
+and exposes the `sto-warp` console script. Python 3.14+ required.
 
 Native packages (planned, in this order): Arch AUR, Debian/Ubuntu `.deb`,
 Fedora COPR `.rpm`, Windows MSI/EXE.

@@ -6,13 +6,13 @@ build-backend = "hatchling.build"
 name = "sto-warp"
 description = "Star Trek Online screenshot recognition + ML training (standalone WARP/WARP CORE)."
 readme = "README.md"
-requires-python = ">=3.13"
+requires-python = ">=3.14"
 license = { file = "LICENSE" }
 authors = [{ name = "raman78" }]
 keywords = ["star-trek-online", "sto", "screenshot-recognition", "machine-learning", "ocr"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.13",
+    "Programming Language :: Python :: 3.14",
     "Operating System :: OS Independent",
     "Natural Language :: English",
     "Topic :: Games/Entertainment",
@@ -20,7 +20,7 @@ classifiers = [
     "Development Status :: 3 - Alpha",
 ]
 dependencies = [
-    "PySide6>=6.7,<6.10",
+    "PySide6>=6.10",
     "requests>=2.31",
     "numpy>=1.26",
     # Recognition stack
@@ -66,6 +66,9 @@ pattern = "__version__ = '(?P<version>.*)'"
 
 [tool.hatch.build.targets.wheel]
 packages = ["warp"]
+# Hatchling's default file-selection rule includes every non-excluded
+# file under `warp/` (both .py and data files like baseline JSONs and
+# icons in warp/resources/), so no explicit listing is needed.
 
 [tool.hatch.build.targets.sdist]
 include = [

@@ -64,8 +64,18 @@ MIN_TEXT_CROP_W   = 50   # text crops: minimum width
 def _get_install_id() -> str:
     """Stable anonymous identifier for this installation."""
     try:
-        from warp.knowledge.sync_client import _get_install_id as _gid
-        return _gid()
+        from warp import userdata
+        userdata.ensure_migrated()
+        p = userdata.install_id_file()
+        if p.exists():
+            return p.read_text().strip()
+        import uuid
+        new_id = str(uuid.uuid4())
+        try:
+            p.write_text(new_id)
+        except Exception:
+            pass
+        return new_id
     except Exception:
         import uuid
         return str(uuid.uuid4())[:16]
@@ -698,7 +708,8 @@ class SyncManager:
         # WARP CORE not open — create a read-only instance from disk
         try:
             from warp.trainer.training_data import TrainingDataManager
-            data_dir = Path(__file__).resolve().parent.parent / 'training_data'
+            from warp import userdata
+            data_dir = userdata.training_data_dir()
             if data_dir.exists():
                 return TrainingDataManager(str(data_dir))
         except Exception:
@@ -708,8 +719,8 @@ class SyncManager:
     @staticmethod
     def _read_token() -> str:
         try:
-            p = Path(__file__).resolve().parent.parent / 'hub_token.txt'
-            t = p.read_text().strip()
+            from warp import userdata
+            t = userdata.hub_token_file().read_text().strip()
             if t and t != 'YOUR_HF_TOKEN_HERE':
                 return t
         except Exception:

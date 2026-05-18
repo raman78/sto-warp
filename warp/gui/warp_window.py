@@ -20,7 +20,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QThread, Qt, Signal
+from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QHeaderView, QLabel, QMainWindow,
     QMessageBox, QProgressBar, QPushButton, QToolBar, QTreeWidget,
@@ -32,6 +32,22 @@ from warp.warp_importer import (
     SCREENSHOT_EXTENSIONS, SLOT_ORDER, ImportResult, RecognisedItem,
     WarpImporter,
 )
+
+_SETTINGS_LAST_FILES_DIR  = 'warp/last_files_dir'
+_SETTINGS_LAST_FOLDER_DIR = 'warp/last_folder_dir'
+
+
+def _restore_dir(key: str) -> str:
+    s = QSettings()
+    v = s.value(key)
+    if isinstance(v, str) and v and Path(v).is_dir():
+        return v
+    return str(Path.home())
+
+
+def _remember_dir(key: str, path: Path):
+    QSettings().setValue(key, str(path))
+
 
 BUILD_TYPES = (
     'SPACE_MIXED',
@@ -86,6 +102,7 @@ class RecognitionWorker(QObject):
     """
 
     progress = Signal(int, int, str)   # done, total, current file name
+    stage    = Signal(int, str)        # sub-stage pct (0-100) + label
     finished = Signal(object)          # ImportResult
     failed   = Signal(str)
 
@@ -96,7 +113,10 @@ class RecognitionWorker(QObject):
 
     def run(self):
         try:
-            importer = WarpImporter(build_type=self._build_type)
+            importer = WarpImporter(
+                build_type=self._build_type,
+                progress_callback=lambda pct, label: self.stage.emit(pct, label),
+            )
             result = importer.process_folder(
                 self._folder,
                 progress_cb=lambda done, total, name: self.progress.emit(done, total, name),
@@ -148,13 +168,34 @@ class WarpWindow(QMainWindow):
 
         tb.addSeparator()
         self._export_btn = QPushButton('Export JSON…', self)
+        self._export_btn.setToolTip('Raw recognition result (debug format).')
         self._export_btn.clicked.connect(self._on_export_json)
         self._export_btn.setEnabled(False)
         tb.addWidget(self._export_btn)
 
+        self._export_sets_btn = QPushButton('Export to SETS JSON…', self)
+        self._export_sets_btn.setToolTip(
+            'SETS v3.0.0-compatible build JSON — loadable via SETS '
+            'File → Load Build.'
+        )
+        self._export_sets_btn.clicked.connect(self._on_export_sets_json)
+        self._export_sets_btn.setEnabled(False)
+        tb.addWidget(self._export_sets_btn)
+
         central = QWidget(self)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
+
+        # Ship banner — surfaces the three signals SETS needs (name, type,
+        # tier) above everything else so the user can sanity-check the OCR
+        # result at a glance before exporting.
+        self._ship_banner = QLabel('', central)
+        f = self._ship_banner.font()
+        f.setPointSizeF(f.pointSizeF() + 2.0)
+        f.setBold(True)
+        self._ship_banner.setFont(f)
+        self._ship_banner.setVisible(False)
+        layout.addWidget(self._ship_banner)
 
         self._summary_lbl = QLabel('Open a screenshot to begin.', central)
         layout.addWidget(self._summary_lbl)
@@ -186,11 +227,12 @@ class WarpWindow(QMainWindow):
         exts = ' '.join(f'*{e}' for e in sorted(SCREENSHOT_EXTENSIONS))
         files, _ = QFileDialog.getOpenFileNames(
             self, 'Open screenshot(s)',
-            str(Path.home()),
+            _restore_dir(_SETTINGS_LAST_FILES_DIR),
             f'Screenshots ({exts});;All files (*)',
         )
         if not files:
             return
+        _remember_dir(_SETTINGS_LAST_FILES_DIR, Path(files[0]).parent)
         # Stage selections into a temp dir so the importer's folder
         # pipeline picks them up unchanged.
         self._tmp_dir = tempfile.TemporaryDirectory(prefix='warp-gui-')
@@ -207,10 +249,12 @@ class WarpWindow(QMainWindow):
 
     def _on_open_folder(self):
         d = QFileDialog.getExistingDirectory(
-            self, 'Open screenshot folder', str(Path.home()),
+            self, 'Open screenshot folder',
+            _restore_dir(_SETTINGS_LAST_FOLDER_DIR),
         )
         if not d:
             return
+        _remember_dir(_SETTINGS_LAST_FOLDER_DIR, Path(d))
         self._run_against(Path(d))
 
     # ── Pipeline plumbing ───────────────────────────────────────────
@@ -223,7 +267,9 @@ class WarpWindow(QMainWindow):
 
         self._tree.clear()
         self._result = None
+        self._ship_banner.setVisible(False)
         self._export_btn.setEnabled(False)
+        self._export_sets_btn.setEnabled(False)
         self._summary_lbl.setText(f'Recognising {folder}…')
         self._progress.setVisible(True)
         self._progress.setValue(0)
@@ -234,6 +280,7 @@ class WarpWindow(QMainWindow):
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
+        self._worker.stage.connect(self._on_stage)
         self._worker.finished.connect(self._on_finished)
         self._worker.failed.connect(self._on_failed)
         self._worker.finished.connect(self._thread.quit)
@@ -242,27 +289,49 @@ class WarpWindow(QMainWindow):
         self._thread.start()
 
     def _on_progress(self, done: int, total: int, name: str):
-        pct = int(done / max(total, 1) * 100)
-        self._progress.setValue(pct)
-        self.statusBar().showMessage(f'[{done}/{total}] {name}')
+        # Per-image notification — only refresh the status text. The actual
+        # progress bar is driven by the sub-stage signal below, which moves
+        # smoothly through OCR / classify / layout / per-slot matching
+        # within the per-image window so single-image runs don't jump 0→100%.
+        self.statusBar().showMessage(f'[{done + 1}/{total}] {name}')
+
+    def _on_stage(self, pct: int, label: str):
+        self._progress.setValue(max(0, min(100, pct)))
+        self.statusBar().showMessage(label)
 
     def _on_finished(self, result: ImportResult):
         self._result = result
         self._populate_tree(result)
         self._progress.setValue(100)
         self._progress.setVisible(False)
+        self._set_ship_banner(result)
         msg = f'{len(result.items)} items recognised'
-        if result.ship_name or result.ship_type:
-            msg = f'{result.ship_name or "?"} ({result.ship_type or "?"}) — ' + msg
         if result.errors:
             msg += f'  ·  {len(result.errors)} error(s)'
         self._summary_lbl.setText(msg)
         self.statusBar().showMessage('Done.')
         self._export_btn.setEnabled(True)
+        self._export_sets_btn.setEnabled(True)
         self._set_controls_enabled(True)
+
+    def _set_ship_banner(self, result: ImportResult):
+        bits = []
+        if result.ship_name:
+            bits.append(result.ship_name)
+        if result.ship_type:
+            bits.append(result.ship_type)
+        if result.ship_tier:
+            bits.append(result.ship_tier)
+        if bits:
+            self._ship_banner.setText('   ·   '.join(bits))
+            self._ship_banner.setVisible(True)
+        else:
+            self._ship_banner.setText('(no ship info recognised)')
+            self._ship_banner.setVisible(True)
 
     def _on_failed(self, err: str):
         self._progress.setVisible(False)
+        self._ship_banner.setVisible(False)
         self._summary_lbl.setText(f'Recognition failed: {err}')
         self.statusBar().showMessage('Failed.')
         self._set_controls_enabled(True)
@@ -339,6 +408,35 @@ class WarpWindow(QMainWindow):
             QMessageBox.critical(self, 'Export failed', f'{type(e).__name__}: {e}')
             return
         self.statusBar().showMessage(f'Exported → {path}')
+
+    def _on_export_sets_json(self):
+        if self._result is None:
+            return
+        path, _ = QFileDialog.getSaveFileName(
+            self, 'Export SETS build JSON',
+            str(Path.home() / 'warp_sets_build.json'),
+            'JSON (*.json);;All files (*)',
+        )
+        if not path:
+            return
+        try:
+            from warp.build_writer import build_from_result
+            from warp.sets_export import write_sets_build
+            from warp.data.cargo import cache_view
+            cache = cache_view()
+            build, report = build_from_result(self._result, cache=cache)
+            write_sets_build(build, path, cache=cache)
+        except Exception as e:
+            log.exception('SETS export failed')
+            QMessageBox.critical(self, 'Export failed', f'{type(e).__name__}: {e}')
+            return
+        msg = (f'SETS build → {path}  ·  '
+               f'ship={report.ship or "—"}  '
+               f'eq={report.n_equipment}  traits={report.n_traits}  '
+               f'boff_ab={report.n_boff_abilities}')
+        if report.unmatched_items:
+            msg += f'  ·  {report.unmatched_items} unmatched'
+        self.statusBar().showMessage(msg)
 
 
 def main(argv: list[str] | None = None) -> int:

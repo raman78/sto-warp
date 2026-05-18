@@ -14,6 +14,7 @@ import sys
 import threading
 from datetime import datetime
 from pathlib import Path
+from typing import Callable
 
 
 def _default_log_dir() -> Path:
@@ -52,6 +53,30 @@ except Exception as e:
     print(f'[WARP-LOG] WARNING: cannot open log file {_log_path}: {e}', flush=True)
 
 
+# GUI tap — subscribers receive (level, formatted_line) for every record.
+# Used by the launcher's Logs tab; intentionally Qt-free so non-GUI callers
+# (CLI, tests) don't pay for it.
+_subscribers: list[Callable[[str, str], None]] = []
+
+
+def subscribe(cb: Callable[[str, str], None]) -> None:
+    """Register `cb(level, line)` for live log records. Idempotent."""
+    if cb not in _subscribers:
+        _subscribers.append(cb)
+
+
+def unsubscribe(cb: Callable[[str, str], None]) -> None:
+    try:
+        _subscribers.remove(cb)
+    except ValueError:
+        pass
+
+
+def log_paths() -> tuple[Path, Path]:
+    """Return (current_session_log, previous_session_log) paths."""
+    return _log_path, _bak_path
+
+
 def _write(level: str, msg: str) -> None:
     ts = datetime.now().strftime('%H:%M:%S.%f')[:-3]
     tid = threading.current_thread().name
@@ -64,6 +89,12 @@ def _write(level: str, msg: str) -> None:
                 _fh.write(line + '\n')
                 _fh.flush()
                 os.fsync(_fh.fileno())
+            except Exception:
+                pass
+    if _subscribers:
+        for cb in list(_subscribers):
+            try:
+                cb(level.strip(), line)
             except Exception:
                 pass
 

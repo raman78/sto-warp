@@ -51,7 +51,7 @@ Entry point for the application. Manages the full lifecycle of the Python enviro
    d. Relaunch with venv Python.
 
 **Portable Python source:** `astral-sh/python-build-standalone`
-- Version: Python 3.13.2 (tag `20250317`)
+- Version: Python 3.14.x (tag `20251008` or newer)
 - Supported platforms: Linux x86_64/aarch64, macOS x86_64/arm64, Windows x86_64
 
 **CLI flags:**
@@ -190,7 +190,7 @@ Two helper methods support ship disambiguation via boff seating:
 
 | Technology | Role |
 |---|---|
-| Python 3.13.2 | Runtime (portable, via python-build-standalone) |
+| Python 3.14.x | Runtime (portable, via python-build-standalone) |
 | PySide6 ≥6.7, <6.10 | GUI framework (all windows, widgets, dialogs) |
 | OpenCV (`opencv-python-headless`) | Template matching, image cropping, histogram comparison |
 | EasyOCR | OCR for ship name / screen type extraction from screenshots |

@@ -30,18 +30,16 @@ import threading
 import time
 import uuid
 from datetime import date
-from pathlib import Path
 from typing import Callable
 
 import numpy as np
+
+from warp import userdata
 
 log = logging.getLogger(__name__)
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 DEFAULT_BACKEND_URL       = 'https://sets-warp-backend.onrender.com'
-KNOWLEDGE_CACHE_FILE      = Path('warp') / 'knowledge' / 'knowledge_cache.json'
-INSTALL_ID_FILE           = Path('warp') / 'knowledge' / 'install_id.txt'
-RATE_LIMIT_FILE           = Path('warp') / 'knowledge' / 'rate_limit.json'
 MAX_CONTRIBUTIONS_PER_DAY = 200    # per installation, per day
 KNOWLEDGE_MAX_AGE_HOURS   = 24     # re-download knowledge base after this
 CONNECT_TIMEOUT           = 5      # seconds
@@ -147,7 +145,7 @@ class WARPSyncClient:
         """Download knowledge.json from backend; update self._knowledge."""
 
         # Check cache freshness
-        cache_path = self._resolve_path(KNOWLEDGE_CACHE_FILE)
+        cache_path = userdata.knowledge_cache_file()
         if not force and cache_path.exists():
             try:
                 mtime = cache_path.stat().st_mtime
@@ -293,7 +291,7 @@ class WARPSyncClient:
     def _check_rate_limit(self) -> bool:
         """Return True if we're below the daily contribution limit."""
         try:
-            p = self._resolve_path(RATE_LIMIT_FILE)
+            p = userdata.rate_limit_file()
             if not p.exists():
                 return True
             data = json.loads(p.read_text())
@@ -306,8 +304,7 @@ class WARPSyncClient:
 
     def _increment_rate_limit(self) -> None:
         try:
-            p = self._resolve_path(RATE_LIMIT_FILE)
-            p.parent.mkdir(parents=True, exist_ok=True)
+            p = userdata.rate_limit_file()
             today = str(date.today())
             data = {}
             if p.exists():
@@ -322,7 +319,8 @@ class WARPSyncClient:
     # ── Helpers ────────────────────────────────────────────────────────────────
 
     def _get_or_create_install_id(self) -> str:
-        p = self._resolve_path(INSTALL_ID_FILE)
+        userdata.ensure_migrated()
+        p = userdata.install_id_file()
         if p.exists():
             try:
                 return p.read_text().strip()
@@ -330,7 +328,6 @@ class WARPSyncClient:
                 pass
         install_id = str(uuid.uuid4())
         try:
-            p.parent.mkdir(parents=True, exist_ok=True)
             p.write_text(install_id)
         except Exception:
             pass
@@ -338,21 +335,13 @@ class WARPSyncClient:
 
     def _load_config_url(self) -> str | None:
         try:
-            p = self._resolve_path(Path('warp') / 'knowledge' / 'config.json')
+            userdata.ensure_migrated()
+            p = userdata.backend_config_file()
             if p.exists():
                 return json.loads(p.read_text()).get('backend_url')
         except Exception:
             pass
         return None
-
-    def _resolve_path(self, rel: Path) -> Path:
-        """Resolve a relative path from the SETS-WARP root."""
-        base = Path(__file__).resolve().parent
-        for _ in range(6):
-            if (base / 'pyproject.toml').exists():
-                return base / rel
-            base = base.parent
-        return Path(rel)
 
 
 # ── pHash helper (standalone, mirrors icon_matcher) ───────────────────────────

@@ -1,0 +1,61 @@
+# Maintainer: raman78 <gm.raman78@gmail.com>
+#
+# PKGBUILD for the Arch User Repository.
+#
+# Strategy: install the prebuilt wheel from PyPI into a system-wide
+# location using python-installer. The heavy ML stack (torch, easyocr,
+# opencv, …) is resolved as native Arch packages where they exist —
+# everything else is bundled directly into the wheel by pip via
+# `--break-system-packages` is NOT used; instead we rely on packaged
+# dependencies. Anything missing in `extra/` lands as an unresolved
+# import at runtime and the user installs via pipx as a fallback.
+#
+# Publish flow:
+#   1. `python -m build` + `twine upload dist/*` -> PyPI
+#   2. Update `pkgver`/`pkgrel`/`sha256sums` here.
+#   3. `makepkg --printsrcinfo > .SRCINFO`
+#   4. push to AUR git remote.
+
+pkgname=sto-warp
+pkgver=0.1.0
+pkgrel=1
+pkgdesc="Star Trek Online screenshot recognition + ML trainer (standalone WARP / WARP CORE)"
+arch=('any')
+url="https://github.com/raman78/sto-warp"
+license=('custom')
+depends=(
+  'python>=3.14'
+  'python-pyside6'
+  'python-numpy'
+  'python-requests'
+  'python-pillow'
+  'python-scipy'
+  'python-pyyaml'
+  'python-typing_extensions'
+  'opencv'
+  'python-huggingface-hub'
+  'python-pytorch'
+  'python-torchvision'
+  # The following are usually only on AUR / pip — listed in optdepends:
+)
+optdepends=(
+  'python-easyocr: text extraction during recognition'
+  'python-scikit-image: extra image-processing helpers'
+  'python-shapely: layout-detector geometry ops'
+  'python-pyclipper: layout polygon clipping'
+  'python-bidi: RTL text rendering inside OCR pipeline'
+)
+makedepends=('python-build' 'python-installer' 'python-hatchling' 'python-wheel')
+source=("https://files.pythonhosted.org/packages/source/s/${pkgname}/${pkgname}-${pkgver}.tar.gz")
+sha256sums=('SKIP')  # replace with the real hash on each version bump
+
+build() {
+  cd "${pkgname}-${pkgver}"
+  python -m build --wheel --no-isolation
+}
+
+package() {
+  cd "${pkgname}-${pkgver}"
+  python -m installer --destdir="${pkgdir}" dist/*.whl
+  install -Dm644 LICENSE "${pkgdir}/usr/share/licenses/${pkgname}/LICENSE"
+}

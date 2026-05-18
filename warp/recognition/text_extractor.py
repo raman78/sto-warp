@@ -806,13 +806,36 @@ class TextExtractor:
                                        f'bracket {inner!r} → {matches[0]!r}')
 
             # ── Apply community OCR corrections ───────────────────────────────
+            # The community map is shared between `ship_type` and `ship_tier`.
+            # For tier we apply TWO guards because tier has a closed 11-entry
+            # vocabulary and is therefore high-risk for cascading poison:
+            #   (a) if `raw` is already a valid tier (in SHIP_TIER_VALUES),
+            #       the OCR succeeded — never overwrite a valid value with a
+            #       crowd-sourced re-mapping (someone mis-confirmed a tier
+            #       crop → wrong T-value uploaded → poisons everyone). The
+            #       map is for FIXING garbage OCR like 'IT6-X21' or 'TB-X2',
+            #       not for remapping valid→valid.
+            #   (b) the corrected value must itself be a valid tier.
+            # Ship_type has no closed vocabulary, so we just trust the map.
             if self._corrections:
                 for key in ('ship_type', 'ship_tier'):
                     raw = result[key]
-                    if raw and raw in self._corrections:
-                        corrected = self._corrections[raw]
-                        _slog.debug(f'TextExtractor: OCR correction {raw!r} → {corrected!r}')
-                        result[key] = corrected
+                    if not raw or raw not in self._corrections:
+                        continue
+                    corrected = self._corrections[raw]
+                    if key == 'ship_tier':
+                        if raw in SHIP_TIER_VALUES:
+                            _slog.warning(
+                                f'TextExtractor: rejecting tier correction '
+                                f'{raw!r} → {corrected!r} (raw already valid)')
+                            continue
+                        if corrected not in SHIP_TIER_VALUES:
+                            _slog.warning(
+                                f'TextExtractor: rejecting tier correction '
+                                f'{raw!r} → {corrected!r} (target not a tier)')
+                            continue
+                    _slog.debug(f'TextExtractor: OCR correction {raw!r} → {corrected!r}')
+                    result[key] = corrected
 
         except Exception as e:
             _slog.debug(f'TextExtractor: unexpected error: {e}')
