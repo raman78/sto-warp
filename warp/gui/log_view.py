@@ -8,7 +8,7 @@ the running session and the prior session loaded from `warp_debug.log.bak`.
 from __future__ import annotations
 
 from PySide6.QtCore import QObject, Qt, Signal
-from PySide6.QtGui import QFont, QTextCursor
+from PySide6.QtGui import QFont
 from PySide6.QtWidgets import (
     QCheckBox, QComboBox, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
     QVBoxLayout, QWidget,
@@ -108,17 +108,26 @@ class LogViewWidget(QWidget):
         # Load whatever's already been written this session, then live-tail.
         cur_path, _ = _warp_debug.log_paths(self._channel)
         text = self._read_tail(cur_path, max_lines=5000)
-        self._view.setPlainText(text)
+        self._set_text_preserving_hscroll(text)
         self._scroll_to_end()
 
     def _show_previous(self):
         _, bak_path = _warp_debug.log_paths(self._channel)
         if not bak_path.exists():
-            self._view.setPlainText(f'(no previous session — {bak_path} not found)')
+            self._set_text_preserving_hscroll(
+                f'(no previous session — {bak_path} not found)')
             return
         text = self._read_tail(bak_path, max_lines=20000)
-        self._view.setPlainText(text)
+        self._set_text_preserving_hscroll(text)
         self._scroll_to_end()
+
+    def _set_text_preserving_hscroll(self, text: str):
+        # setPlainText leaves the horizontal scrollbar at 0, which is what
+        # we want for a fresh load — but new lines arriving via
+        # appendPlainText would later drag it right. We anchor h=0 here
+        # explicitly so the initial view always opens left-aligned.
+        self._view.setPlainText(text)
+        self._view.horizontalScrollBar().setValue(0)
 
     @staticmethod
     def _read_tail(path, max_lines: int) -> str:
@@ -142,14 +151,31 @@ class LogViewWidget(QWidget):
     def _on_new_line(self, _channel: str, _level: str, line: str):
         if self._mode != 'CURRENT':
             return
+        # appendPlainText calls ensureCursorVisible() under the hood, which
+        # snaps the horizontal scrollbar to the end of the inserted line.
+        # Save the user's horizontal position before, restore after — so
+        # they stay wherever they parked the view (left edge by default).
+        hsb = self._view.horizontalScrollBar()
+        h_before = hsb.value()
         self._view.appendPlainText(line)
+        hsb.setValue(h_before)
         if self._autoscroll.isChecked():
             self._scroll_to_end()
 
+    def clear_live(self):
+        """Wipe the view only when tailing the live session — leaves the
+        Previous-session buffer alone so reviewing old logs is undisturbed."""
+        if self._mode == 'CURRENT':
+            self._view.clear()
+
     def _scroll_to_end(self):
-        c = self._view.textCursor()
-        c.movePosition(QTextCursor.MoveOperation.End)
-        self._view.setTextCursor(c)
+        # Terminal-style: jump to the newest line vertically, but leave the
+        # horizontal scrollbar wherever the user parked it. The cursor-based
+        # variant called ensureCursorVisible() which yanked the viewport
+        # right on every long line. Newline arrivals therefore no longer
+        # cause horizontal jumps in the Detection logs tab.
+        sb = self._view.verticalScrollBar()
+        sb.setValue(sb.maximum())
 
     # ── Lifecycle ───────────────────────────────────────────────────
 

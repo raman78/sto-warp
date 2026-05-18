@@ -97,6 +97,9 @@ class LauncherWindow(QMainWindow):
 
         self._log_view = LogViewWidget(channel='detection')
         self._tabs.addTab(self._log_view, 'Detection logs')
+        # Wipe the live log every time WARP starts a fresh run — keeps
+        # noise from earlier runs out of the new run's summary.
+        self._warp_win.detection_started.connect(self._log_view.clear_live)
 
         self._syslog_view = LogViewWidget(channel='system')
         self._tabs.addTab(self._syslog_view, 'System logs')

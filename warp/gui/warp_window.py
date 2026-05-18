@@ -100,6 +100,11 @@ class RecognitionWorker(QObject):
 
 
 class WarpWindow(QMainWindow):
+    # Emitted when the user kicks off a fresh detection run (single
+    # screenshot or folder). Launcher uses it to wipe the live Detection
+    # logs tab so each run starts on a clean slate.
+    detection_started = Signal()
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle('sto-warp — Star Trek Online screenshot recognition')
@@ -121,7 +126,7 @@ class WarpWindow(QMainWindow):
         tb.setMovable(False)
         self.addToolBar(tb)
 
-        self._open_files_btn = QPushButton('Open Screenshot(s)…', self)
+        self._open_files_btn = QPushButton('Open Screenshot…', self)
         self._open_files_btn.clicked.connect(self._on_open_files)
         tb.addWidget(self._open_files_btn)
 
@@ -200,9 +205,10 @@ class WarpWindow(QMainWindow):
         filters = tuple(f'*{e}' for e in sorted(SCREENSHOT_EXTENSIONS))
         files = pick_files(
             self,
-            title='Open screenshot(s)',
+            title='Open screenshot',
             start_dir=_restore_dir(_SETTINGS_LAST_FILES_DIR),
             image_filters=filters,
+            multi=False,
         )
         if not files:
             return
@@ -241,6 +247,7 @@ class WarpWindow(QMainWindow):
                                     'A recognition run is already in progress.')
             return
 
+        self.detection_started.emit()
         self._tree.clear()
         self._preview.clear()
         self._result = None

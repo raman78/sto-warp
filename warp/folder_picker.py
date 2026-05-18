@@ -150,9 +150,9 @@ def pick_folder(
 
 
 class FilePickerDialog(QDialog):
-    """Same split-pane layout as :class:`FolderPickerDialog`, but the right
-    pane allows multi-selecting one or more files. Open is enabled as soon
-    as at least one file is selected.
+    """Same split-pane layout as :class:`FolderPickerDialog`, with optional
+    multi-select on the right pane. Open is enabled as soon as at least one
+    file is selected. ``multi=False`` restricts to single-file selection.
     """
 
     def __init__(
@@ -161,6 +161,7 @@ class FilePickerDialog(QDialog):
         title: str = 'Select Files',
         start_dir: str | None = None,
         image_filters: tuple[str, ...] = DEFAULT_IMAGE_FILTERS,
+        multi: bool = True,
     ):
         super().__init__(parent)
         self.setWindowTitle(title)
@@ -192,7 +193,10 @@ class FilePickerDialog(QDialog):
 
         self._list = QListView(self)
         self._list.setModel(self._file_model)
-        self._list.setSelectionMode(QAbstractItemView.SelectionMode.ExtendedSelection)
+        self._list.setSelectionMode(
+            QAbstractItemView.SelectionMode.ExtendedSelection if multi
+            else QAbstractItemView.SelectionMode.SingleSelection
+        )
         self._list.setUniformItemSizes(True)
         self._list.doubleClicked.connect(self._on_file_double_click)
         self._list.selectionModel().selectionChanged.connect(self._on_files_changed)
@@ -277,11 +281,12 @@ def pick_files(
     title: str = 'Select Files',
     start_dir: str | None = None,
     image_filters: tuple[str, ...] = DEFAULT_IMAGE_FILTERS,
+    multi: bool = True,
 ) -> list[Path]:
     """Show the file picker modally; return chosen files (possibly empty
-    on cancel)."""
+    on cancel). Set ``multi=False`` for single-file selection."""
     dlg = FilePickerDialog(parent, title=title, start_dir=start_dir,
-                           image_filters=image_filters)
+                           image_filters=image_filters, multi=multi)
     if dlg.exec():
         return dlg.selected_files()
     return []
