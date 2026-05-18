@@ -23,9 +23,11 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication, QComboBox, QFileDialog, QHeaderView, QLabel, QMainWindow,
-    QMessageBox, QProgressBar, QPushButton, QToolBar, QTreeWidget,
-    QTreeWidgetItem, QWidget, QVBoxLayout,
+    QMessageBox, QProgressBar, QPushButton, QTabWidget, QToolBar,
+    QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout,
 )
+
+from warp.gui.preview_view import PreviewView
 
 from warp.debug import log
 from warp.warp_importer import (
@@ -200,7 +202,9 @@ class WarpWindow(QMainWindow):
         self._summary_lbl = QLabel('Open a screenshot to begin.', central)
         layout.addWidget(self._summary_lbl)
 
-        self._tree = QTreeWidget(central)
+        self._tabs = QTabWidget(central)
+
+        self._tree = QTreeWidget(self._tabs)
         self._tree.setColumnCount(5)
         self._tree.setHeaderLabels(['Slot', 'Idx', 'Item', 'Conf', 'Source'])
         self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
@@ -211,7 +215,12 @@ class WarpWindow(QMainWindow):
         self._tree.setColumnWidth(0, 220)
         self._tree.setColumnWidth(1, 50)
         self._tree.setColumnWidth(3, 70)
-        layout.addWidget(self._tree, stretch=1)
+        self._tabs.addTab(self._tree, 'Results')
+
+        self._preview = PreviewView(self._tabs)
+        self._tabs.addTab(self._preview, 'Preview')
+
+        layout.addWidget(self._tabs, stretch=1)
 
         self.setCentralWidget(central)
 
@@ -270,6 +279,7 @@ class WarpWindow(QMainWindow):
             return
 
         self._tree.clear()
+        self._preview.clear()
         self._result = None
         self._ship_banner.setVisible(False)
         self._export_btn.setEnabled(False)
@@ -306,6 +316,7 @@ class WarpWindow(QMainWindow):
     def _on_finished(self, result: ImportResult):
         self._result = result
         self._populate_tree(result)
+        self._preview.set_result(result)
         self._progress.setValue(100)
         self._progress.setVisible(False)
         self._set_ship_banner(result)
