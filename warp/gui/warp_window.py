@@ -3,7 +3,7 @@
 Lightweight QMainWindow used as the entry point for `sto-warp gui`.
 Replaces the SETS-coupled `warp/warp_dialog.py` — does not write into a
 SETS build; instead it surfaces the `ImportResult` for inspection and
-JSON export.
+SETS-compatible export.
 
 Flow:
   1. User picks one or more screenshots (or a folder).
@@ -11,11 +11,10 @@ Flow:
      thread; progress is forwarded to the status bar.
   3. Result populates the slot tree (one top-level row per slot, child
      rows per slot_index).
-  4. File → Export JSON serialises the result for downstream tooling.
+  4. Export to SETS JSON writes a SETS v3.0.0-compatible build file.
 """
 from __future__ import annotations
 
-import json
 import sys
 import tempfile
 from pathlib import Path
@@ -63,36 +62,6 @@ BUILD_TYPES = (
     'GROUND_TRAITS',
     'SPEC',
 )
-
-
-def _result_to_dict(result: ImportResult) -> dict:
-    """JSON-safe serialisation of `ImportResult`.
-
-    Built field-by-field on purpose: `dataclasses.asdict` deep-copies and
-    chokes on `RecognisedItem.thumbnail` (a `QImage` / numpy array) before
-    we get a chance to drop it.
-    """
-    items = []
-    for it in result.items:
-        items.append({
-            'slot':        it.slot,
-            'slot_index':  it.slot_index,
-            'name':        it.name,
-            'confidence':  float(it.confidence),
-            'source_file': it.source_file,
-            'bbox':        list(it.bbox) if it.bbox else [],
-            'seat_key':    it.seat_key,
-        })
-    return {
-        'build_type':   result.build_type,
-        'ship_name':    result.ship_name,
-        'ship_type':    result.ship_type,
-        'ship_tier':    result.ship_tier,
-        'ship_profile': result.ship_profile,
-        'items':        items,
-        'errors':       list(result.errors),
-        'warnings':     list(result.warnings),
-    }
 
 
 class RecognitionWorker(QObject):
@@ -169,12 +138,6 @@ class WarpWindow(QMainWindow):
         tb.addWidget(self._build_combo)
 
         tb.addSeparator()
-        self._export_btn = QPushButton('Export JSON…', self)
-        self._export_btn.setToolTip('Raw recognition result (debug format).')
-        self._export_btn.clicked.connect(self._on_export_json)
-        self._export_btn.setEnabled(False)
-        tb.addWidget(self._export_btn)
-
         self._export_sets_btn = QPushButton('Export to SETS JSON…', self)
         self._export_sets_btn.setToolTip(
             'SETS v3.0.0-compatible build JSON — loadable via SETS '
@@ -282,7 +245,6 @@ class WarpWindow(QMainWindow):
         self._preview.clear()
         self._result = None
         self._ship_banner.setVisible(False)
-        self._export_btn.setEnabled(False)
         self._export_sets_btn.setEnabled(False)
         self._summary_lbl.setText(f'Recognising {folder}…')
         self._progress.setVisible(True)
@@ -325,7 +287,6 @@ class WarpWindow(QMainWindow):
             msg += f'  ·  {len(result.errors)} error(s)'
         self._summary_lbl.setText(msg)
         self.statusBar().showMessage('Done.')
-        self._export_btn.setEnabled(True)
         self._export_sets_btn.setEnabled(True)
         self._set_controls_enabled(True)
 
@@ -407,24 +368,6 @@ class WarpWindow(QMainWindow):
             parent.setExpanded(True)
 
     # ── Export ──────────────────────────────────────────────────────
-
-    def _on_export_json(self):
-        if self._result is None:
-            return
-        path, _ = QFileDialog.getSaveFileName(
-            self, 'Export recognition result',
-            str(Path.home() / 'warp_result.json'),
-            'JSON (*.json);;All files (*)',
-        )
-        if not path:
-            return
-        try:
-            payload = _result_to_dict(self._result)
-            Path(path).write_text(json.dumps(payload, indent=2), encoding='utf-8')
-        except Exception as e:
-            QMessageBox.critical(self, 'Export failed', f'{type(e).__name__}: {e}')
-            return
-        self.statusBar().showMessage(f'Exported → {path}')
 
     def _on_export_sets_json(self):
         if self._result is None:

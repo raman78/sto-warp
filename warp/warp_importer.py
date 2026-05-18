@@ -1818,7 +1818,21 @@ class WarpImporter:
                 tgt['skip'] += skip
             if display:
                 _slog.info(f'│ Per-slot:')
-                for slot_name in sorted(display.keys()):
+                # Same display order as the Results tree: ship metadata
+                # first, then canonical SLOT_ORDER[build_type], then leftovers.
+                meta_slots = ['Ship Name', 'Ship Type', 'Ship Tier']
+                canonical = [sd['name'] for sd in SLOT_ORDER.get(build_type, [])]
+                seen: set[str] = set()
+                ordered: list[str] = []
+                for s in meta_slots + canonical:
+                    if s in display and s not in seen:
+                        ordered.append(s)
+                        seen.add(s)
+                for s in sorted(display.keys()):
+                    if s not in seen:
+                        ordered.append(s)
+                        seen.add(s)
+                for slot_name in ordered:
                     s = display[slot_name]
                     ok, skip = s['ok'], s['skip']
                     bar = '█' * ok + '░' * skip
