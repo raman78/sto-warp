@@ -22,6 +22,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument('--version', action='version', version=f'sto-warp {__version__}')
     sub = parser.add_subparsers(dest='cmd')
     sub.add_parser('check', help='Verify installation and import the recognition pipeline.')
+    sub.add_parser('gui', help='Launch the standalone WARP recognition window (default).')
 
     args = parser.parse_args(argv)
 
@@ -31,6 +32,10 @@ def main(argv: list[str] | None = None) -> int:
         log.info('sto-warp check: OK')
         print(f'sto-warp {__version__} — foundation modules import OK.')
         return 0
+
+    if args.cmd in (None, 'gui'):
+        from warp.gui.warp_window import main as gui_main
+        return gui_main(argv)
 
     parser.print_help()
     return 0
