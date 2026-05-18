@@ -79,7 +79,12 @@ class SETSIconMatcher:
     # Guard: prevent re-seeding from training data on every new matcher instance.
     _seeded_from_training_data: bool = False
 
-    def __init__(self, sets_app, sync_client=None):
+    def __init__(self, sets_app=None, sync_client=None):
+        # `sets_app` is accepted for backward compatibility with the SETS
+        # call sites (trainer code that still passes `self._sets`). When
+        # None or any non-SETS-object, `_get_images_dir` falls back to
+        # `warp.data.cargo.icons_dir()`. May also be a `str` / `Path`
+        # pointing directly at the icon library.
         self._sets        = sets_app
         self._index: list[dict] = []   # {name, tmpl64, hist_hsv, path}
         self._ml_session  = None
@@ -372,22 +377,29 @@ class SETSIconMatcher:
         log.info(f'WARP: indexed {count} icons from {images_dir}')
 
     def _get_images_dir(self) -> Path | None:
-        if self._sets is None:
+        arg = self._sets
+        # Direct path: trainer/importer can pass icons_dir explicitly.
+        if isinstance(arg, (str, Path)):
+            return Path(arg)
+        # Legacy SETS app object: read its config dict.
+        if arg is not None:
+            try:
+                return Path(arg.config['config_subfolders']['images'])
+            except Exception:
+                pass
+            try:
+                base = Path(arg.config['config_folder'])
+                candidate = base / 'images'
+                if candidate.exists():
+                    return candidate
+            except Exception:
+                pass
+        # Standalone sto-warp default: cargo-managed icons directory.
+        try:
+            from warp.data.cargo import icons_dir
+            return icons_dir()
+        except Exception:
             return None
-        try:
-            # Primary: config sub-folder key
-            return Path(self._sets.config['config_subfolders']['images'])
-        except Exception:
-            pass
-        try:
-            # Fallback: derive from config_folder
-            base = Path(self._sets.config['config_folder'])
-            candidate = base / 'images'
-            if candidate.exists():
-                return candidate
-        except Exception:
-            pass
-        return None
 
     # ── Feature helpers ─────────────────────────────────────────────────────────
 

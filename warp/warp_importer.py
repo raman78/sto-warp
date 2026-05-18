@@ -734,12 +734,19 @@ class WarpImporter:
 
     def __init__(
         self,
-        sets_app,
+        sets_app=None,
         build_type: str = 'SPACE',
         progress_callback: Callable[[int, str], None] | None = None,
         from_trainer: bool = False,
     ):
+        # sto-warp is standalone: cargo data comes from `warp.data.cargo`.
+        # `sets_app` is retained as an optional positional for callers that
+        # still hand in a SETS app object (legacy trainer code paths), but
+        # the importer no longer reads `sets_app.cache.*` — everything goes
+        # through `self._cache`, a cargo-backed cache view.
+        from warp.data.cargo import cache_view
         self._app              = sets_app
+        self._cache            = cache_view()
         self._build_type       = build_type
         self._from_trainer     = from_trainer
         self._progress_callback = progress_callback
@@ -837,8 +844,7 @@ class WarpImporter:
         # WARP CORE — same logic that the trainer's OCRWorker used to run
         # inline for user-drawn bboxes.
         try:
-            _valid_types = sorted(self._app.cache.ships.keys()) if (
-                self._app and getattr(self._app, 'cache', None)) else None
+            _valid_types = sorted(self._cache.ships.keys())
         except Exception:
             _valid_types = None
         from warp.recognition.text_extractor import SHIP_TIER_VALUES
@@ -1016,7 +1022,7 @@ class WarpImporter:
         layout = self._get_layout().detect(
             img, build_type, profile,
             icon_matcher=self._get_matcher() if _needs_matcher else None,
-            app_cache=self._app.cache if _needs_matcher else None,
+            app_cache=self._cache if _needs_matcher else None,
         )
         # Inject Ship Name/Type/Tier bboxes captured by the OCR pass so WARP
         # CORE can render them as reviewable slots on the canvas. Pure pass-
@@ -1260,7 +1266,7 @@ class WarpImporter:
                         if base_prof:
                             allowed_profs = {base_prof, 'Intelligence', 'Command', 'Pilot', 'Miracle Worker', 'Temporal Operative', 'Temporal'}
                             try:
-                                boff_cache = self._app.cache.boff_abilities.get('all', {})
+                                boff_cache = self._cache.boff_abilities.get('all', {})
                                 if boff_cache:
                                     candidates = {c_name for c_name, info in boff_cache.items() if info.get('profession') in allowed_profs}
                                     _slog.debug(f"  [{slot_name}][{idx}] Restricted candidates to {base_prof} + Specializations ({len(candidates)} items)")
@@ -1478,7 +1484,7 @@ class WarpImporter:
         if not ability_name:
             return None
         try:
-            cache = self._app.cache.boff_abilities
+            cache = self._cache.boff_abilities
         except Exception:
             return None
         for env in ('space', 'ground'):
@@ -1545,7 +1551,7 @@ class WarpImporter:
             return prof_cache[n]
 
         try:
-            boff_cache = self._app.cache.boff_abilities
+            boff_cache = self._cache.boff_abilities
         except Exception:
             return
         if not boff_cache:
@@ -1941,7 +1947,7 @@ class WarpImporter:
         """
         result: dict[str, set[str]] = {}
         try:
-            eq_cache = self._app.cache.equipment
+            eq_cache = self._cache.equipment
         except Exception:
             return result
 
@@ -1969,7 +1975,7 @@ class WarpImporter:
         _is_ground_bt = build_type in ('GROUND', 'GROUND_MIXED', 'GROUND_BOFFS')
         boff_names: set[str] = set()
         try:
-            cache = self._app.cache.boff_abilities
+            cache = self._cache.boff_abilities
             if _is_ground_bt:
                 for _prof, rank_lists in (cache.get('ground') or {}).items():
                     if not isinstance(rank_lists, (list, tuple)):
@@ -1992,9 +1998,8 @@ class WarpImporter:
         # trait land in a space trait slot, equipment icons match trait slots,
         # or the same name repeats across every slot of a panel.
         try:
-            traits_cache = self._app.cache.traits
-            starship_traits_cache = getattr(
-                self._app.cache, 'starship_traits', {}) or {}
+            traits_cache = self._cache.traits
+            starship_traits_cache = self._cache.starship_traits or {}
         except Exception:
             traits_cache = {}
             starship_traits_cache = {}
@@ -2041,7 +2046,7 @@ class WarpImporter:
         # ── Trait slots ──
         if slot_name == 'Starship Traits':
             try:
-                if item_name in (self._app.cache.starship_traits or {}):
+                if item_name in (self._cache.starship_traits or {}):
                     return True
             except Exception:
                 return True
@@ -2051,7 +2056,7 @@ class WarpImporter:
         if cat_tuple:
             env, cat = cat_tuple
             try:
-                pool = (self._app.cache.traits or {}).get(env, {}).get(cat, {})
+                pool = (self._cache.traits or {}).get(env, {}).get(cat, {})
                 if item_name in pool:
                     return True
             except Exception:
@@ -2090,7 +2095,7 @@ class WarpImporter:
             try:
                 for env in ('space', 'ground'):
                     for prof in accepted_profs:
-                        rank_lists = (self._app.cache.boff_abilities
+                        rank_lists = (self._cache.boff_abilities
                                       .get(env, {}).get(prof, []))
                         for rank_dict in rank_lists:
                             if isinstance(rank_dict, dict) and item_name in rank_dict:
@@ -2106,7 +2111,7 @@ class WarpImporter:
         if not valid_types:
             return True  # no constraint defined — allow
         try:
-            for cat_items in self._app.cache.equipment.values():
+            for cat_items in self._cache.equipment.values():
                 entry = cat_items.get(item_name)
                 if entry is None:
                     continue
@@ -2123,7 +2128,7 @@ class WarpImporter:
 
     def _is_experimental(self, item_name: str) -> bool:
         try:
-            for cat_items in self._app.cache.equipment.values():
+            for cat_items in self._cache.equipment.values():
                 entry = cat_items.get(item_name, {})
                 if isinstance(entry, dict) and entry.get('type') in EXPERIMENTAL_TYPES:
                     return True
@@ -2156,8 +2161,9 @@ class WarpImporter:
     def _get_matcher(self):
         if self._matcher is None:
             from warp.recognition.icon_matcher import SETSIconMatcher
-            self._matcher = SETSIconMatcher(self._app,
-                                            sync_client=self._get_sync_client())
+            # icons_dir defaults to cargo.icons_dir() inside the matcher
+            # when the first arg is None.
+            self._matcher = SETSIconMatcher(sync_client=self._get_sync_client())
             # Seed session examples with confirmed crops ONLY for WARP CORE (trainer) path.
             # WARP must not read annotations.json — that would hide detection bugs behind
             # user-confirmed ground truth. Mirrors the _use_confirmed gate at line ~707.

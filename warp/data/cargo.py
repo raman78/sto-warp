@@ -96,6 +96,19 @@ def _cache_dir() -> Path:
     return base / 'cache'
 
 
+def icons_dir() -> Path:
+    """Local icon library used by `SETSIconMatcher` (template + histogram index).
+
+    Order: `$WARP_ICONS_DIR` → `$XDG_CONFIG_HOME/warp/icons` → `~/.config/warp/icons`.
+    """
+    env = os.environ.get('WARP_ICONS_DIR')
+    if env:
+        return Path(env)
+    xdg = os.environ.get('XDG_CONFIG_HOME')
+    base = Path(xdg) / 'warp' if xdg else Path.home() / '.config' / 'warp'
+    return base / 'icons'
+
+
 # --- raw fetch / cache primitives ---------------------------------------
 
 _lock = threading.RLock()
@@ -289,6 +302,48 @@ def all_caches() -> dict[str, Any]:
         'starship_traits': starship_traits(),
         'boff_abilities': boff_abilities(),
     }
+
+
+class _CacheView:
+    """Drop-in stand-in for the SETS `app.cache` object.
+
+    Attribute reads are lazy — each accessor only builds its bucket when
+    first touched, so callers that only need one or two slices don't pay
+    for the rest. Returned dicts are the cached singletons from cargo's
+    bucket memo (`_BUCKET_MEMO`), so mutating them mutates the global
+    view; treat them as read-only.
+    """
+
+    __slots__ = ()
+
+    @property
+    def equipment(self) -> dict[str, dict[str, dict]]:
+        return equipment()
+
+    @property
+    def ships(self) -> dict[str, dict]:
+        return ships()
+
+    @property
+    def traits(self) -> dict[str, dict[str, dict[str, dict]]]:
+        return traits()
+
+    @property
+    def starship_traits(self) -> dict[str, dict]:
+        return starship_traits()
+
+    @property
+    def boff_abilities(self) -> dict:
+        return boff_abilities()
+
+
+def cache_view() -> _CacheView:
+    """Return a `cache`-shaped object (SETS-compatible attribute access).
+
+    Allows existing call sites (`app.cache.equipment`, etc.) to keep
+    working with cargo as the data source.
+    """
+    return _CacheView()
 
 
 # --- builders -----------------------------------------------------------
