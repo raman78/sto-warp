@@ -1,23 +1,28 @@
 # WARP & WARP CORE — User Guide
 
-WARP reads your Star Trek Online screenshots and fills in your SETS build automatically.
-WARP CORE lets you review, correct, and confirm what WARP found — and train the ML model to improve future recognition.
+WARP reads your Star Trek Online screenshots, recognises every slot (weapons, traits, BOFF abilities, …) and exports the result as a SETS v3.0.0-compatible build JSON.
+WARP CORE lets you review, correct, and confirm what WARP found — and feed those corrections back into the community model so future recognition improves.
 
 ---
 
 ## Table of contents
 
 1. [Preparing screenshots](#1-preparing-screenshots)
-2. [Using WARP — import a build](#2-using-warp--import-a-build)
-   - [Step 4 — Run recognition](#step-4--run-recognition)
-   - [Step 4b — Automatic transfer to SETS](#step-4b--automatic-transfer-to-sets)
-3. [WARP CORE — interface overview](#3-warp-core--interface-overview)
-4. [Reviewing and correcting recognition](#4-reviewing-and-correcting-recognition)
-5. [Confirming items and accepting results](#5-confirming-items-and-accepting-results)
-6. [Community model — how it works](#6-community-model--how-it-works)
-7. [Community sync details](#7-community-sync-details)
-8. [Keyboard shortcuts](#8-keyboard-shortcuts)
-9. [Tips and troubleshooting](#9-tips-and-troubleshooting)
+2. [Launcher window — tabs and global controls](#2-launcher-window--tabs-and-global-controls)
+3. [Using WARP — recognise a build](#3-using-warp--recognise-a-build)
+   - [Force build type vs AUTO mode](#force-build-type-vs-auto-mode)
+   - [Run recognition](#run-recognition)
+   - [Results tab](#results-tab)
+   - [Preview tab — bbox overlay](#preview-tab--bbox-overlay)
+   - [Export to SETS JSON](#export-to-sets-json)
+4. [WARP CORE — interface overview](#4-warp-core--interface-overview)
+5. [Reviewing and correcting recognition](#5-reviewing-and-correcting-recognition)
+6. [Confirming items and accepting results](#6-confirming-items-and-accepting-results)
+7. [Detection logs / System logs tabs](#7-detection-logs--system-logs-tabs)
+8. [Community model — how it works](#8-community-model--how-it-works)
+9. [Community sync details](#9-community-sync-details)
+10. [Keyboard shortcuts](#10-keyboard-shortcuts)
+11. [Tips and troubleshooting](#11-tips-and-troubleshooting)
 
 ---
 
@@ -60,35 +65,73 @@ my_build/
 
 ---
 
-## 2. Using WARP — import a build
+## 2. Launcher window — tabs and global controls
 
-### Step 1 — Open the WARP dialog
+`sto-warp` opens a single launcher window with four tabs:
 
-Click the **WARP** button in the SETS menu bar (next to Export and Settings).
+| Tab | Purpose |
+|-----|---------|
+| **WARP — Recognition** | Open one screenshot or a whole folder, run the recognition pipeline, review results, export to SETS JSON |
+| **WARP CORE — Trainer** | Review and confirm detected items so they feed back into the community model |
+| **Detection logs** | Terminal-like live tail of the current detection run; auto-clears when a fresh run starts |
+| **System logs** | Background activity (asset sync, model updates, knowledge cache, desktop integration) — separate from detection noise |
 
-<!-- screenshot: SETS menu bar with WARP button highlighted -->
+A `🔄 Refresh` button in the bottom-right status bar manually re-runs the
+community sync (re-download knowledge, check for newer central models, upload
+pending confirmed crops). It is disabled while a sync is already in flight.
 
-### Step 2 — Select screenshot folder
+Window geometry and tab state are persisted across runs.
 
-In the WARP dialog, click **Select folder** and navigate to the folder containing your screenshots.
-The folder path appears in the field below the button.
+---
 
-### Step 3 — Choose build type
+## 3. Using WARP — recognise a build
 
-Use the **Build type** selector to match the SETS tab you want to fill:
+The **WARP — Recognition** tab has a single toolbar:
 
-| Build type | Fills |
-|------------|-------|
-| **Space Build** | Space equipment, consoles, boffs, space traits |
-| **Ground Build** | Ground equipment, boffs, ground traits |
-| **Space Skills** | Space skill tree point allocation |
-| **Ground Skills** | Ground skill tree point allocation |
+| Control | What it does |
+|---------|--------------|
+| **Open Screenshot…** | Single-file picker (split-pane dark dialog). The file is staged into a temporary directory so the folder pipeline picks it up unchanged. |
+| **Open Folder…** | Folder picker for multi-image builds. Every screenshot in the folder is processed in one run. |
+| **Force build type** (checkbox + combo) | See below. |
+| **Export to SETS JSON…** | Enabled after a successful run. Writes a SETS v3.0.0-compatible build file. |
 
-Choose the type that matches the screenshots you took. One import fills one tab.
+Both pickers remember the last directory you used and reopen there on the
+next click.
 
-### Step 4 — Run recognition
+### Force build type vs AUTO mode
 
-Click **Import**. WARP processes each screenshot through this pipeline:
+When the **Force build type** checkbox is **off** (the default), WARP runs in
+**AUTO mode**: every screenshot in the folder is classified independently by
+the screen classifier + OCR, and per-image build type is derived from that.
+This is the right mode for mixed folders where some screenshots are equipment
+and others are traits, BOFFs, or specialisations.
+
+When the checkbox is **on**, the combo's value is forced on every image — useful
+when the classifier mis-reads a deliberately cropped capture and you want to
+short-circuit it. Available values: `SPACE_MIXED`, `GROUND_MIXED`, `SPACE`,
+`GROUND`, `BOFFS`, `SPACE_BOFFS`, `GROUND_BOFFS`, `SPACE_TRAITS`,
+`GROUND_TRAITS`, `SPEC`.
+
+Both the checkbox state and the last selected build type are persisted.
+
+**Cross-image merge (AUTO mode).** When multiple screenshots in the folder
+classify to the same build type (e.g. two SPACE_EQ frames), WARP no longer
+keeps the highest-confidence item per slot. Instead each slot's candidates
+compete on a blended score:
+
+```
+0.3 · geometry  (X-pitch regularity across the block)
+0.3 · sibling   (panel-group coverage from the same source image)
+0.4 · recog     (mean confidence; low-confidence virtuals halved)
+```
+
+This prevents a confident `__empty__` from a mis-classified frame from
+overwriting a real item from the correctly classified one.
+
+### Run recognition
+
+Click **Open Screenshot…** or **Open Folder…**. WARP processes each
+screenshot through this pipeline:
 
 ```
    [screenshot.png]
@@ -131,70 +174,86 @@ Click **Import**. WARP processes each screenshot through this pipeline:
         │
         ▼
   ┌─────────────────────┐
-  │ 6. Write to SETS    │  ship_data → align_space_frame → slot_equipment_item /
-  │                     │  slot_trait_item; BOFF cluster→seat assignment
+  │ 6. Render to GUI    │  RecognisedItem stream → Results tree + Preview tab
+  │                     │  + ship banner. SETS write happens only on demand
+  │                     │  via Export to SETS JSON…
   └─────────────────────┘
 ```
 
-A progress bar shows the current step. Recognition typically takes 5–30 seconds per screenshot, depending on the number of screens, image resolution, and whether your hardware is CPU- or GPU-accelerated.
+A progress bar in the status bar shows the current step. Per-image progress is
+forwarded as `[done/total] file.png` text, and the sub-stage progress bar moves
+smoothly within each image's OCR / classify / layout / per-slot matching window
+so a single-image run does not just jump 0 → 100%.
 
-### Step 4b — Automatic transfer to SETS
+Recognition typically takes 5–30 seconds per screenshot, depending on the
+number of screens, image resolution, and whether your hardware is CPU- or
+GPU-accelerated.
 
-WARP does not stop at recognition — once a screenshot is processed, it writes the result directly into the SETS build. The transfer happens in `_apply_to_sets()` (warp_dialog.py) and follows this sequence:
+### Results tab
+
+After a run finishes, the **Results** tab shows a tree grouped by slot:
 
 ```
-RecognisedItem stream from importer
-        │
-        ├──► ship_type / ship_tier        ──► _resolve_and_apply_ship()
-        │                                       • match against sets_app.cache.ships
-        │                                       • set ship button text + image
-        │                                       • populate tier combo (T6 / T6-X / T6-X2)
-        │                                       • align_space_frame() — rebuilds the
-        │                                         SPACE/GROUND tab to match ship's
-        │                                         slot counts (consoles, devices,
-        │                                         hangars, sec-def, …)
-        │
-        ├──► equipment & traits           ──► _import_equipment_and_traits()
-        │                                       • SLOT_MAP translates WARP slot
-        │                                         names → SETS build keys
-        │                                       • slot_equipment_item / slot_trait_item
-        │                                         writes the item into the right column
-        │                                       • universal-console overflow handled
-        │                                         (extra Universal consoles get queued)
-        │
-        ├──► BOFF abilities (Boff *)      ──► _write_boffs_to_build()
-        │                                       • cluster abilities by Y proximity
-        │                                       • match each cluster to a ship seat
-        │                                         (profession + spec)
-        │                                       • _slot_indices_from_x maps each
-        │                                         ability to its rank position using
-        │                                         X-gap analysis (handles empty mid-slots)
-        │
-        └──► virtual items (__empty__,    ──► silently skipped on the SETS write
-             __inactive__)                       (still uploaded to HF for training)
+Slot              Idx   Item                           Conf   Source
+─────────────────────────────────────────────────────────────────────
+Ship Name         1     U.S.S. Enterprise              –      eq.jpg
+Ship Type         1     Fleet Heavy Cruiser            –      eq.jpg
+Ship Tier         1     T6-X                           –      eq.jpg
+Fore Weapon       4     ▸ (expanded)
+                  1     Phaser Beam Array Mk XV          0.94   eq.jpg
+                  2     Phaser Beam Array Mk XV          0.91   eq.jpg
+                  …
 ```
 
-After all items are written, the dialog switches the SETS tab to match the build type and runs `sets.autosave()`. A summary message box reports detected / imported / unmatched counts and the ship that WARP picked.
+Order: ship metadata first (the three OCR signals SETS needs), then the
+canonical pipeline order (equipment → BOFFs → traits → spec), then anything
+else sorted alphabetically. A bold ship banner appears above the tree with
+the recognised name / type / tier so you can sanity-check OCR at a glance
+before exporting.
 
-**If the ship is not recognised** — the ship dropdown is cleared, slots are left at their default profile, and you can pick the correct ship manually in SETS afterwards. The equipment items that WARP did identify are still imported into the default layout where possible.
+### Preview tab — bbox overlay
 
-### Step 5 — Review results
+The **Preview** tab visualises *what WARP saw*. The left pane lists every
+source file from the latest run; the right pane paints the selected
+screenshot fitted to the viewport with bounding boxes drawn over each
+detected slot. Each box is stamped with the slot name and confidence.
 
-After import, a **Results summary** shows:
-- Ship detected (with tier)
-- Slots filled vs total
-- Average recognition confidence
-- Items that need manual review (low confidence)
+Box colour is keyed to slot family — deterministic so the same slot always
+gets the same hue across screenshots in a batch:
 
-Items with confidence below the threshold are flagged. Click **Open WARP CORE** to review and correct them.
+| Family | Colour |
+|--------|--------|
+| BOFF abilities | Orange |
+| Traits | Green |
+| Specializations | Magenta |
+| Consoles | Violet |
+| Deflector / engines / warp core / shields / devices | Blue |
+| Weapons | Red |
+| Ground armor / kit / kit modules / personal shield / ground devices | Cyan |
+| Everything else | Stable hashed hue derived from the slot string |
 
-<!-- screenshot: WARP dialog after successful import, showing results summary -->
+Use Preview to spot mis-aligned bboxes (wrong row, off-by-one column) at a
+glance, then jump into WARP CORE to correct them. The preview is read-only —
+it never re-runs detection.
+
+### Export to SETS JSON
+
+When a run finishes the **Export to SETS JSON…** button enables. It writes a
+SETS v3.0.0-compatible build file (via `warp.build_writer` + `warp.sets_export`)
+that you can load in the SETS build planner via `File → Load Build`.
+
+The status bar reports a one-line summary on success:
+
+```
+SETS build → /path/to/build.json  ·  ship=Fleet Heavy Cruiser
+            eq=24  traits=11  boff_ab=12  ·  3 unmatched
+```
 
 ---
 
-## 3. WARP CORE — interface overview
+## 4. WARP CORE — interface overview
 
-WARP CORE opens as a separate window with three panels.
+The **WARP CORE — Trainer** tab in the launcher has three panels.
 
 ```
 +------------------+------------------------------+----------------------+
@@ -347,7 +406,7 @@ At the bottom:
 
 ---
 
-## 4. Reviewing and correcting recognition
+## 5. Reviewing and correcting recognition
 
 ### Step-by-step user journey
 
@@ -467,7 +526,7 @@ If a box covers the wrong area or a non-slot area:
 
 ---
 
-## 5. Confirming items and accepting results
+## 6. Confirming items and accepting results
 
 ### Manual accept
 
@@ -498,7 +557,40 @@ If you confirm an item into a slot that already has a confirmed item at the same
 
 ---
 
-## 6. Community model — how it works
+## 7. Detection logs / System logs tabs
+
+The launcher's last two tabs surface what is happening under the hood.
+
+### Detection logs
+
+Live tail of the current recognition run — OCR results, classifier picks,
+layout-detector strategy choices, per-slot match scores. The view auto-scrolls
+to the newest line (vertical), but **horizontal scroll position is preserved**
+so a long line doesn't bounce the view sideways every time it appears.
+
+A fresh **Open Screenshot / Open Folder** wipes the live view automatically
+(but not the underlying log file) so each run starts on a clean slate. The
+`Source:` combo at the top switches between the current session and the
+previous session loaded from `warp_detection.log.bak`. **Open folder** opens
+the log directory in the system file manager.
+
+### System logs
+
+Background activity: asset sync (cargo / ship DB downloads), model updates,
+knowledge cache, desktop entry installation, sync coordinator. Kept on a
+separate channel so detection noise stays focused.
+
+Both views share the same controls — `Auto-scroll`, `Clear view`, `Reload`,
+and `Open folder`. On-disk log files (rotated):
+
+| File | Channel | Path |
+|------|---------|------|
+| `warp_detection.log` | Detection | `~/.config/warp/` |
+| `warp_system.log` | System | `~/.config/warp/` |
+
+---
+
+## 8. Community model — how it works
 
 ### Architecture
 
@@ -532,7 +624,7 @@ checks for updates **every 15 minutes** (rate-limit cache; uses `requests` with 
 
 ---
 
-## 7. Community sync details
+## 9. Community sync details
 
 ### What is sent to HuggingFace
 
@@ -550,7 +642,7 @@ and never uploaded — ship names are treated as personal data.
 
 ---
 
-## 8. Keyboard shortcuts
+## 10. Keyboard shortcuts
 
 ### WARP CORE
 
@@ -575,11 +667,11 @@ and never uploaded — ship names are treated as personal data.
 | Grey (empty name) | Detected bbox without a usable match — type the name and Accept |
 | Gold crosshair | Currently being drawn (Alt + LMB drag in progress) |
 
-See section 3 for the full colour legend with diagram.
+See section 4 for the full colour legend with diagram.
 
 ---
 
-## 9. Tips and troubleshooting
+## 11. Tips and troubleshooting
 
 ### WARP didn't detect my ship
 
@@ -587,26 +679,31 @@ See section 3 for the full colour legend with diagram.
 - The ship name must be visible at the top of the screen in the screenshot.
 - If OCR fails, WARP falls back to a keyword-based match using the slots it finds. Check the log for the detected ship name.
 
-### Wrong ship was selected
+### Wrong ship was recognised
 
-After import, the ship dropdown in SETS shows what WARP detected. Click the dropdown and select the correct ship manually. The slot layout will update automatically.
+The ship banner above the Results tree shows what WARP picked up from OCR. If
+it's wrong, the underlying OCR tokens are in the Detection logs tab — useful
+when the name is a near-miss (e.g. *"Legondary Bortasqu'"* instead of
+*"Legendary Bortasqu'"*). Open the screenshot in WARP CORE and confirm a
+**Ship Name / Ship Type / Ship Tier** bbox manually; on the next recognition
+run the confirmed text wins.
 
 ### Recognition accuracy is low on first use
 
 On a fresh install, WARP uses the community model. If you have unusual items, high-resolution screenshots, or a non-standard UI scale, accuracy may be lower initially. Run a few imports and confirm the results in WARP CORE — your confirmed crops are uploaded to the community dataset, and the model improves as more users contribute.
 
-### "???" items after import
+### "???" items after recognition
 
 Items shown as "???" have a confidence below the minimum threshold (40%). They were not matched to any known item. To fix:
-1. Open WARP CORE.
+1. Switch to the **WARP CORE — Trainer** tab.
 2. Find the ??? item in the review list (shown in red).
 3. Type the correct item name in the Item field.
 4. Accept.
 5. Repeat for all ??? items — confirmed crops will be uploaded automatically and help improve future recognition.
 
-### Import is slow
+### Recognition is slow
 
-First import after a fresh install may take 30–60 seconds because EasyOCR initialises its language model. Subsequent imports are faster (model stays in memory while SETS-WARP is open).
+The first run after a fresh install may take 30–60 seconds because EasyOCR initialises its language model. Subsequent runs are faster (model stays in memory while sto-warp is open).
 
 On CPU-only hardware, the ML inference step adds 2–5 seconds per screenshot. This is normal.
 
@@ -620,9 +717,3 @@ This appears when two confirmed items overlap by more than 70% in the same scree
 - If you only have a handful of unique items, accuracy metrics may fluctuate — this is normal with small datasets.
 - More data always helps. Confirm items from 5–10 screenshots before training for the best results.
 
-### The WARP button is greyed out
-
-WARP is only available in **SETS + WARP** installations. If you chose **SETS only** during setup, the WARP button is not present. To add WARP:
-1. Delete `.config/install_mode.txt` in the SETS-WARP folder.
-2. Relaunch — the setup window will appear and let you choose SETS + WARP.
-3. The additional ~2 GB of dependencies will be downloaded automatically.
