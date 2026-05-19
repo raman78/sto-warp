@@ -1057,17 +1057,28 @@ class WarpCoreWindow(QMainWindow):
         self._detect_loop_max = max_iter
         self._detect_loop_iter = 0
         self._detect_loop_prev_unresolved = None
-        total = len(self._screenshots)
-        self._detect_dlg = _DetectProgressDialog(total, max_iter=max_iter, parent=self)
+        # Iteration-1 seed is `_screen_types_manual` only. If every screenshot
+        # is already user-confirmed, there is nothing left for the classifier
+        # to do — skip the dialog entirely instead of opening an empty one.
+        pending = [p for p in self._screenshots
+                   if p.name not in self._screen_types_manual]
+        if not pending:
+            # Popup only when triggered by the toolbar button — folder-open
+            # auto-runs the same function and should stay quiet.
+            if trigger == 'detect_screen_types_button':
+                QMessageBox.information(
+                    self,
+                    'Detect Screen Types',
+                    'All screenshots are already confirmed — nothing to detect.',
+                )
+            return
+        self._detect_dlg = _DetectProgressDialog(len(pending), max_iter=max_iter, parent=self)
         self._detect_dlg.cancelled.connect(self._on_detect_cancelled)
         self._detect_dlg.show()
         self._run_detect_iteration()
 
     def _run_detect_iteration(self):
         self._detect_loop_iter += 1
-        total = len(self._screenshots)
-        if self._detect_dlg:
-            self._detect_dlg.reset_progress(total)
         models_dir = userdata.models_dir()
         # Iteration 1: seed from green only. Subsequent iterations: green + yellow (ml_auto).
         seed_names = (self._screen_types_manual if self._detect_loop_iter == 1
@@ -1078,8 +1089,15 @@ class WarpCoreWindow(QMainWindow):
             if p.name in seed_names
             and self._screen_types.get(p.name, 'UNKNOWN') != 'UNKNOWN'
         }
+        # Skip already-confirmed screenshots: their type is fixed and the ML
+        # result would be discarded downstream anyway. Saves a classify() call
+        # per confirmed file on every folder open / re-detect.
+        paths_to_scan = [p for p in self._screenshots if p.name not in seed_names]
+        total = len(paths_to_scan)
+        if self._detect_dlg:
+            self._detect_dlg.reset_progress(total)
         self._detect_worker = ScreenTypeDetectorWorker(
-            self._screenshots, models_dir=models_dir,
+            paths_to_scan, models_dir=models_dir,
             confirmed_types=confirmed_types, parent=self,
         )
         self._detect_worker.progress.connect(self._on_detect_progress)
