@@ -329,15 +329,15 @@ class AnnotationWidget(QWidget):
         pos = event.pos()
         
         if self._locked:
-            clicked = self._hit_test(pos)
-            if clicked >= 0:
-                self._selected_idx = clicked; self._pending_bbox = None; ann = self._annotations[clicked]
-                self.item_selected.emit({'slot': ann.slot, 'name': ann.name, 'bbox': ann.bbox})
+            row = self._hit_test_review(pos)
+            if row >= 0:
+                ri = self._review_items[row]
+                self.item_selected.emit({'slot': ri.get('slot', ''), 'name': ri.get('name', ''), 'bbox': ri.get('bbox')})
             else:
-                row = self._hit_test_review(pos)
-                if row >= 0:
-                    ri = self._review_items[row]
-                    self.item_selected.emit({'slot': ri.get('slot', ''), 'name': ri.get('name', ''), 'bbox': ri.get('bbox')})
+                clicked = self._hit_test(pos)
+                if clicked >= 0:
+                    self._selected_idx = clicked; self._pending_bbox = None; ann = self._annotations[clicked]
+                    self.item_selected.emit({'slot': ann.slot, 'name': ann.name, 'bbox': ann.bbox})
                 else:
                     self._selected_idx = -1
                     self.item_deselected.emit()
@@ -388,15 +388,15 @@ class AnnotationWidget(QWidget):
             self.setCursor(self._make_draw_cursor())
             self.update()
             return
-        clicked = self._hit_test(pos)
-        if clicked >= 0:
-            self._selected_idx = clicked; self._pending_bbox = None; ann = self._annotations[clicked]
-            self.item_selected.emit({'slot': ann.slot, 'name': ann.name, 'bbox': ann.bbox})
+        row = self._hit_test_review(pos)
+        if row >= 0:
+            ri = self._review_items[row]
+            self.item_selected.emit({'slot': ri.get('slot', ''), 'name': ri.get('name', ''), 'bbox': ri.get('bbox')})
         else:
-            row = self._hit_test_review(pos)
-            if row >= 0:
-                ri = self._review_items[row]
-                self.item_selected.emit({'slot': ri.get('slot', ''), 'name': ri.get('name', ''), 'bbox': ri.get('bbox')})
+            clicked = self._hit_test(pos)
+            if clicked >= 0:
+                self._selected_idx = clicked; self._pending_bbox = None; ann = self._annotations[clicked]
+                self.item_selected.emit({'slot': ann.slot, 'name': ann.name, 'bbox': ann.bbox})
             else:
                 self._selected_idx = -1
                 self.item_deselected.emit()

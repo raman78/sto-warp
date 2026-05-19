@@ -649,8 +649,6 @@ class SETSIconMatcher:
             'hist_hsv': hist,
             'orig':     crop_bgr,
         })
-        log.debug(f'WARP: session example added for {name!r} '
-                  f'({len(cls._session_examples)} total)')
 
     @classmethod
     def seed_from_training_data(cls, training_data_dir) -> int:
