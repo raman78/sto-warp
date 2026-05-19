@@ -816,6 +816,11 @@ class ImportResult:
     items:        list = field(default_factory=list)
     errors:       list = field(default_factory=list)
     warnings:     list = field(default_factory=list)
+    # Per-image build_type, keyed by source file path. Populated by
+    # process_folder so the Preview tab can show every processed image —
+    # including those that yielded zero recognised items — along with the
+    # screen-type the autodetector settled on for each one.
+    per_file:     dict = field(default_factory=dict)
 
 
 # ── WarpImporter ───────────────────────────────────────────────────────────────
@@ -915,9 +920,11 @@ class WarpImporter:
                     # has a canonical SLOT_ORDER to sort by.
                     result.build_type = file_result.build_type
                 per_file.append((fpath.name, file_result))
+                result.per_file[str(fpath.resolve())] = file_result.build_type
                 result.errors.extend(file_result.errors)
             except Exception as e:
                 result.errors.append(f'{fpath.name}: {e}')
+                result.per_file[str(fpath.resolve())] = ''
                 log.exception(f'WarpImporter: {fpath}')
 
         result.items = self._merge_items_by_block_score(per_file)
@@ -1053,14 +1060,20 @@ class WarpImporter:
         # itself (which used to pollute cross-image merges with false
         # `__empty__` hits at conf=0.99+).
         if self._build_type == '':
-            if _ml_bt:
+            # ML's generic 'TRAITS' class can't distinguish space vs ground
+            # (7-class model: BOFFS, GROUND_EQ, GROUND_MIXED, SPACE_EQ,
+            # SPACE_MIXED, SPECIALIZATIONS, TRAITS). When OCR found an
+            # explicit anchor that disambiguates, trust OCR.
+            if _ml_stype == 'TRAITS' and _ocr_bt.startswith(('SPACE', 'GROUND')):
+                _caller_bt = _ocr_bt
+            elif _ml_bt:
                 _caller_bt = _ml_bt
-            elif _ocr_bt == 'GROUND':
-                _caller_bt = 'GROUND'
+            elif _ocr_bt:
+                _caller_bt = _ocr_bt
             else:
                 _caller_bt = 'SPACE'
             _slog.info(f'WarpImporter: AUTO mode → base build_type={_caller_bt!r} '
-                       f'(ml={_ml_bt!r}, ocr={_ocr_bt!r})')
+                       f'(ml_stype={_ml_stype!r}, ml={_ml_bt!r}, ocr={_ocr_bt!r})')
         else:
             _caller_bt = self._build_type
 

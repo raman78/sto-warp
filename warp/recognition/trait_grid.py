@@ -62,7 +62,12 @@ def _detect_icon_ccs(img):
     """Find icon-sized bright connected components."""
     H = img.shape[0]
     gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
-    _, mask = cv2.threshold(gray, 30, 255, cv2.THRESH_BINARY)
+    # Threshold tuned across 117-screenshot corpus: 50 vs 30 recovers
+    # Space/Ground Reputation rows that previously merged with their
+    # bright header banner into a single oversized CC and got rejected
+    # by the icon AR filter. Net effect: +19% real panels detected,
+    # cleaner LOCK-letter false positives. tests/diag_thr_corpus.py.
+    _, mask = cv2.threshold(gray, 50, 255, cv2.THRESH_BINARY)
     n, _, stats, _ = cv2.connectedComponentsWithStats(mask, connectivity=8)
     h_lo = int(H * ICON_H_FRAC_LO)
     # Tiny cropped panels: a single icon row can fill 50-65% of image height,
