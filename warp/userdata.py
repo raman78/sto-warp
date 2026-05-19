@@ -231,3 +231,88 @@ def migrate_legacy(force: bool = False) -> dict[str, bool]:
 def ensure_migrated() -> None:
     """Cheap idempotent wrapper — every userdata caller can invoke at will."""
     migrate_legacy(force=False)
+
+
+# ── Cross-project migration from sets-warp ────────────────────────────────
+
+_SETS_WARP_COMMON_PATHS = (
+    '~/PycharmProjects/sets-warp',
+    '~/Projects/sets-warp',
+    '~/git/sets-warp',
+    '~/dev/sets-warp',
+    '~/code/sets-warp',
+)
+
+
+def _find_sets_warp_root() -> Path | None:
+    """Locate a sets-warp checkout from `$SETS_WARP_ROOT` or common paths.
+
+    Used by `migrate_from_sets_warp` to recover the upstream install_id
+    (and other per-user state) so HF identity carries over from the
+    pre-rename sets-warp project. Returns None when nothing plausible
+    exists on disk.
+    """
+    env = os.environ.get('SETS_WARP_ROOT')
+    candidates: list[Path] = []
+    if env:
+        candidates.append(Path(env).expanduser())
+    candidates.extend(Path(p).expanduser() for p in _SETS_WARP_COMMON_PATHS)
+    for p in candidates:
+        if (p / 'warp' / 'knowledge' / 'install_id.txt').is_file():
+            return p
+    return None
+
+
+def migrate_from_sets_warp(overwrite_install_id: bool = False,
+                            sets_warp_root: Path | None = None) -> dict[str, bool]:
+    """Copy per-user identity and cache files from a sets-warp checkout.
+
+    sto-warp is a continuation of sets-warp's WARP / WARP CORE modules,
+    so the same HF install_id and tokens should follow the user across
+    the rename — otherwise their HF contributions appear under a fresh
+    UUID and the old uploads become orphaned.
+
+    By default this only fills in files that don't yet exist in XDG. Pass
+    `overwrite_install_id=True` to replace an already-present sto-warp
+    `install_id.txt` (the current value is preserved as `install_id.txt.bak`).
+    """
+    root = sets_warp_root or _find_sets_warp_root()
+    if root is None:
+        log.warning(
+            'userdata: sets-warp checkout not found; set SETS_WARP_ROOT or '
+            'pass --path to `sto-warp migrate-from-sets-warp`')
+        return {}
+
+    legacy = root / 'warp'
+    moved: dict[str, bool] = {}
+
+    src_iid = legacy / 'knowledge' / 'install_id.txt'
+    dst_iid = install_id_file()
+    if src_iid.is_file():
+        if dst_iid.exists() and not overwrite_install_id:
+            moved['install_id'] = False
+        else:
+            try:
+                if dst_iid.exists():
+                    bak = dst_iid.with_suffix('.txt.bak')
+                    shutil.copy2(dst_iid, bak)
+                    log.info(f'userdata: backed up existing install_id → {bak}')
+                shutil.copy2(src_iid, dst_iid)
+                moved['install_id'] = True
+            except Exception as e:
+                log.warning(f'userdata: install_id copy failed: {e}')
+                moved['install_id'] = False
+
+    moved['hub_token']       = _copy_if_missing(legacy / 'hub_token.txt',
+                                                 hub_token_file())
+    moved['knowledge_cache'] = _copy_if_missing(
+        legacy / 'knowledge' / 'knowledge_cache.json', knowledge_cache_file())
+    moved['rate_limit']      = _copy_if_missing(
+        legacy / 'knowledge' / 'rate_limit.json', rate_limit_file())
+    moved['backend']         = _copy_if_missing(
+        legacy / 'knowledge' / 'config.json', backend_config_file())
+
+    applied = [k for k, v in moved.items() if v]
+    log.info(f'userdata: sets-warp migration from {root}: '
+             f'{", ".join(applied) if applied else "no new files"}')
+    return moved

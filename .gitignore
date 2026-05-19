@@ -38,6 +38,7 @@ warp/data/cache/
 warp/knowledge/knowledge_cache.json
 warp/knowledge/install_id.txt
 warp/knowledge/rate_limit.json
+warp/hub_token.txt
 warp/training_data/
 
 # Local-only developer diagnostics
