@@ -80,6 +80,8 @@ class SETSIconMatcher:
 
     # Guard: prevent re-seeding from training data on every new matcher instance.
     _seeded_from_training_data: bool = False
+    # Same one-shot guard for the HF-mirrored approved-truth crops.
+    _seeded_from_community: bool = False
 
     def __init__(self, sets_app=None, sync_client=None):
         # `sets_app` is accepted for backward compatibility with the SETS
@@ -724,6 +726,73 @@ class SETSIconMatcher:
         return count
 
     @classmethod
+    def seed_from_community_crops(cls) -> int:
+        """Seed the session-example pool from the HF-mirrored approved truth.
+
+        Reads `data/annotations.jsonl` + `data/crops/<sha>.png` from
+        `warp.knowledge.community_crops`, so every install starts with the
+        same recognition baseline. Idempotent via `_seeded_from_community`.
+        """
+        if cls._seeded_from_community:
+            return 0
+
+        import cv2
+        from warp.knowledge.community_crops import (
+            community_annotations_file, community_crops_dir,
+        )
+
+        ann_path  = community_annotations_file()
+        crops_dir = community_crops_dir()
+        if not ann_path.exists() or not crops_dir.exists():
+            cls._seeded_from_community = True
+            return 0
+
+        _TEXT_SLOTS = frozenset({
+            'Ship Name', 'Ship Type', 'Ship Tier',
+            'Primary Specialization', 'Secondary Specialization',
+        })
+
+        # Last-wins per sha so maintainer label corrections take effect.
+        latest: dict[str, dict] = {}
+        try:
+            with open(ann_path, encoding='utf-8') as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        d = json.loads(line)
+                    except Exception:
+                        continue
+                    sha = d.get('crop_sha256')
+                    if sha:
+                        latest[sha] = d
+        except Exception as e:
+            log.warning(f'WARP: seed_from_community_crops: read failed: {e}')
+            cls._seeded_from_community = True
+            return 0
+
+        count = 0
+        for sha, d in latest.items():
+            name = (d.get('name') or '').strip()
+            slot = d.get('slot') or ''
+            if not name or slot in _TEXT_SLOTS:
+                continue
+            p = crops_dir / f'{sha}.png'
+            if not p.exists():
+                continue
+            img = cv2.imread(str(p))
+            if img is None:
+                continue
+            cls.add_session_example(img, name)
+            count += 1
+
+        cls._seeded_from_community = True
+        log.info(f'WARP: community seed: {count} session examples '
+                 f'from {len(latest)} approved entries ({crops_dir})')
+        return count
+
+    @classmethod
     def reset_ml_session(cls):
         """
         Force reload of the ML model on next inference call.
@@ -734,6 +803,7 @@ class SETSIconMatcher:
         # (_shared_* attributes don't exist; instance attrs are _ml_session etc.)
         cls._session_examples         = []
         cls._seeded_from_training_data = False
+        cls._seeded_from_community     = False
         log.info('WARP: ML session reset -- will reload on next match')
 
     def _check_repo_exists(self) -> bool:

@@ -2380,9 +2380,10 @@ class WarpImporter:
             # icons_dir defaults to cargo.icons_dir() inside the matcher
             # when the first arg is None.
             self._matcher = SETSIconMatcher(sync_client=self._get_sync_client())
-            # Seed session examples with confirmed crops ONLY for WARP CORE (trainer) path.
-            # WARP must not read annotations.json — that would hide detection bugs behind
-            # user-confirmed ground truth. Mirrors the _use_confirmed gate at line ~707.
+            # Seed session examples with personal training_data ONLY for WARP CORE
+            # (trainer) path. WARP must not read annotations.json — that would hide
+            # detection bugs behind user-confirmed ground truth. Mirrors the
+            # _use_confirmed gate at line ~707.
             if self._from_trainer:
                 from warp import userdata as _userdata
                 td = _userdata.training_data_dir()
@@ -2392,6 +2393,11 @@ class WarpImporter:
                 # WARP path: clear any session examples a prior trainer run left in the
                 # class-level state, so WARP sees pristine detection quality.
                 SETSIconMatcher.reset_ml_session()
+            # The HF-mirrored approved-truth pool IS allowed on both paths — it's
+            # maintainer-reviewed shared knowledge, not user-confirmed ground
+            # truth for the current screenshot, so it gives every install the
+            # same baseline without violating the WARP-vs-CORE rule.
+            SETSIconMatcher.seed_from_community_crops()
         return self._matcher
 
     def _get_sync_client(self):

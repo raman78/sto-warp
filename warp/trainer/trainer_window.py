@@ -459,6 +459,7 @@ class MatchWorker(QThread):
             # Seed confirmed crops as session examples (guarded — runs at most once)
             matcher = SETSIconMatcher(self._sets)
             SETSIconMatcher.seed_from_training_data(userdata.training_data_dir())
+            SETSIconMatcher.seed_from_community_crops()
             name, conf, thumb, _ = matcher.match(
                 self._crop, candidate_names=self._candidates)
             _slog.info(f'match_worker → name={name!r} conf={conf:.2f} '
@@ -1429,6 +1430,7 @@ class WarpCoreWindow(QMainWindow):
         try:
             from warp.recognition.icon_matcher import SETSIconMatcher
             SETSIconMatcher.seed_from_training_data(userdata.training_data_dir())
+            SETSIconMatcher.seed_from_community_crops()
         except Exception as e:
             log.warning(f'seed_matcher_from_confirmed failed: {e}')
 
