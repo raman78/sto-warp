@@ -45,5 +45,12 @@ warp/training_data/
 tests/diag_*.py
 tests/_diag_out/
 
+# Maintainer review tools — superseded by the democratic merger cron,
+# kept locally for emergency one-shot use.
+warp/tools/review_staging.py
+warp/tools/conflict_reviewer.py
+staging_review.json
+conflict_decisions.json
+
 # Backup directories from upstream migration
 *_backup_*/
