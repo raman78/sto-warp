@@ -33,7 +33,7 @@ import tempfile
 from pathlib import Path
 from typing import Callable
 
-from PySide6.QtCore import Qt, QThread, Signal
+from PySide6.QtCore import Qt, QObject, QThread, Signal
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QLabel,
     QLineEdit, QPushButton, QCheckBox
@@ -231,6 +231,7 @@ class SyncWorker(QThread):
         new_annotations: list[dict] = []
         operations:      list       = []
         uploaded = 0
+        skipped_unchanged = 0
         total    = len(confirmed)
 
         self.progress.emit(10, "Preparing files…")
@@ -270,6 +271,7 @@ class SyncWorker(QThread):
                 _slog.debug(f'HF Sync: label correction [{item["slot"]}] {item["name"]} → {sha[:12]} (was {cached_label!r})')
             else:
                 # File on HF AND label unchanged — nothing to do for this item.
+                skipped_unchanged += 1
                 continue
             uploaded_labels[sha] = current_label
             ann_entry: dict = {
@@ -284,6 +286,9 @@ class SyncWorker(QThread):
 
         ann_total = len(new_annotations)
         ann_corrections = ann_total - uploaded  # entries reusing an existing HF crop
+        _slog.info(
+            f'HF Sync: queued {uploaded} new crops + {ann_corrections} label corrections '
+            f'(skipped {skipped_unchanged} already on HF with unchanged labels)')
         if new_annotations:
             self.progress.emit(88, f"Uploading {uploaded} crops + {ann_total} annotations…")
             self._append_staging_annotations_to_ops(operations, staging_anno, new_annotations, api)
@@ -644,7 +649,7 @@ class SyncWorker(QThread):
 # SyncManager — WARP-specific background sync task
 # ---------------------------------------------------------------------------
 
-class SyncManager:
+class SyncManager(QObject):
     """
     WARP background sync — uploads confirmed crops / screen-types / anchors to HF Hub.
 
@@ -653,9 +658,16 @@ class SyncManager:
         btm.on_stop(sync_mgr.stop)
 
     check_and_upload() is a single sync cycle; safe to call from any periodic timer.
+
+    `progress(int, str)` re-emits SyncWorker progress and also fires for early-
+    return paths (no token / no data / nothing to upload) so the launcher
+    status bar can mirror what the syslog records.
     """
 
-    def __init__(self, sets_app) -> None:
+    progress = Signal(int, str)
+
+    def __init__(self, sets_app, parent: QObject | None = None) -> None:
+        super().__init__(parent)
         self._sets_app = sets_app
         self._worker: SyncWorker | None = None
 
@@ -665,9 +677,10 @@ class SyncManager:
         """One sync cycle: upload pending crops if any. Called by BackgroundTaskManager."""
         token = self._read_token()
         if not token:
-            _slog.info(
-                'SyncManager: skipped — no HuggingFace token configured '
-                '(~/.config/warp/hub_token missing or placeholder)')
+            msg = ('SyncManager: skipped — no HuggingFace token configured '
+                   '(~/.config/warp/hub_token missing or placeholder)')
+            _slog.warning(msg)
+            self.progress.emit(0, '⚠ Upload skipped — no HuggingFace token configured')
             return
 
         mgr = self._data_manager()
@@ -675,11 +688,13 @@ class SyncManager:
             _slog.info(
                 'SyncManager: skipped — no training data manager available '
                 '(WARP CORE never opened and no on-disk training_data/)')
+            self.progress.emit(0, 'Upload skipped — no training data')
             return
 
         confirmed = [c for c in mgr.get_confirmed_crops() if Path(c['path']).exists()]
         if not confirmed:
             _slog.info('SyncManager: skipped — no confirmed crops to upload')
+            self.progress.emit(0, 'Upload skipped — no confirmed crops')
             return
 
         if self._worker and self._worker.isRunning():
@@ -689,6 +704,8 @@ class SyncManager:
         _slog.info(f'SyncManager: {len(confirmed)} confirmed crops — checking for new uploads…')
         self._worker = SyncWorker(data_manager=mgr, hf_token=token, mode='upload')
         self._worker.finished.connect(self._on_finished)
+        # Forward worker's per-stage progress to coordinator/launcher.
+        self._worker.progress.connect(self.progress)
         self._worker.start()
 
     def stop(self) -> None:

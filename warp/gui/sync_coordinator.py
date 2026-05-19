@@ -112,10 +112,17 @@ class SyncCoordinator(QObject):
 
         from warp.trainer.sync import SyncManager
         try:
-            self.sync_manager = SyncManager(sets_app)
+            self.sync_manager = SyncManager(sets_app, parent=self)
         except Exception as e:
             log.warning(f'SyncCoordinator: SyncManager init failed: {e}')
             self.sync_manager = None
+
+        # Forward HF upload progress to the launcher's status bar. The
+        # SyncManager only emits the textual `msg`; numeric `pct` is ignored
+        # at this layer because the status bar has no progress widget.
+        if self.sync_manager is not None:
+            self.sync_manager.progress.connect(
+                lambda _pct, msg: self.status.emit(msg))
 
         self._timer = QTimer(self)
         self._timer.setInterval(PERIOD_MIN * 60 * 1000)
