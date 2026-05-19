@@ -1,15 +1,17 @@
-# sto-warp
+# STO-WARP
 
 Star Trek Online screenshot recognition + ML training, distributed as a
 standalone Python package.
 
-> sto-warp is the successor to the WARP / WARP CORE modules that used to
-> live inside [sets-warp](https://github.com/raman78/sets-warp). It runs
-> on its own, with no SETS build planner dependency, so you can use it as
-> a library, a CLI, or behind any build planner that wants screenshot
-> input.
+## What is this?
 
-## Components
+**STO-WARP** combines three tools in one package:
+
+**WARP** *(Weaponry & Armament Recognition Platform)* — reads your in-game screenshots and automatically fills in your SETS build. Detects equipment, traits, bridge officers, and ship information using computer vision and machine learning.
+
+**WARP CORE** — trainer interface built into WARP. Review and correct recognition results, confirm annotations, and retrain the local ML models (Icon Classifier + Layout Regressor) on your own data to improve accuracy over time.
+
+## Technology
 
 - **WARP** — recognition pipeline (OCR + layout detection + icon matching).
   Reads STO screenshots and emits structured slot/item results.
@@ -43,17 +45,6 @@ On first run sto-warp downloads:
 
 Everything is cached under `~/.config/warp/` (or `$XDG_CONFIG_HOME/warp/`
 when set). Nothing is committed to this repository.
-
-## Development
-
-```bash
-git clone https://github.com/raman78/sto-warp.git
-cd sto-warp
-git checkout develop
-python -m venv .venv && source .venv/bin/activate
-pip install -e ".[dev]"
-sto-warp check
-```
 
 ## License
 
