@@ -76,6 +76,14 @@ class _RefreshWorker(QThread):
         except Exception as e:
             log.warning(f'SyncCoordinator: model update check failed: {e}')
 
+        self.step.emit('community')
+        log.info('SyncCoordinator: step=community — approved crops + labels mirror')
+        try:
+            from warp.knowledge.community_crops import CommunityCropsClient
+            CommunityCropsClient().fetch()
+        except Exception as e:
+            log.warning(f'SyncCoordinator: community crops fetch failed: {e}')
+
         self.step.emit('upload')
         log.info('SyncCoordinator: step=upload — confirmed-crop HuggingFace upload')
         try:
@@ -170,6 +178,7 @@ class SyncCoordinator(QObject):
             'assets':    'Syncing icons and ship images…',
             'knowledge': 'Refreshing community knowledge…',
             'model':     'Checking for newer model…',
+            'community': 'Fetching approved crops mirror…',
             'upload':    'Uploading confirmed crops…',
             'done':      'Sync complete.',
         }
