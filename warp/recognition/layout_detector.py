@@ -2062,8 +2062,17 @@ class LayoutDetector:
         # Aft Weapons). Mirrors _detect_via_ocr_anchored extended_order logic
         # so ships with Secondary Deflector or Experimental Weapons don't
         # shift rows when OCR misses the label for those rows.
+        #
+        # ShipDB profile is the source of truth for slot presence: when the
+        # profile is known, drop base slots the ship has 0 of (e.g. ships
+        # without Universal Consoles) so the positional sequence does not
+        # reserve a row for them and shove the real rows below into the
+        # wrong label. Unknown profile → keep full slot_order (no regression).
+        profile_known = bool(profile)
         extended_order: list[str] = []
         for s in slot_order:
+            if profile_known and profile.get(s, -1) == 0:
+                continue
             extended_order.append(s)
             if s == 'Deflector' and profile.get('Sec-Def', 0) > 0 and 'Sec-Def' not in extended_order:
                 extended_order.append('Sec-Def')
