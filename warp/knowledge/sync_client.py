@@ -92,6 +92,21 @@ class WARPSyncClient:
         with self._knowledge_lock:
             return dict(self._knowledge)
 
+    def backend_status(self) -> str:
+        """One-line snapshot of the circuit-breaker state for log/UI display.
+
+        `READY`               — no recent failure recorded; next contribute
+                                will hit the backend.
+        `BACKOFF until HH:MM:SS` — last contribute failed; further calls are
+                                being skipped silently until the timestamp.
+        """
+        remaining = self._backend_unavailable_until - time.time()
+        if remaining <= 0:
+            return 'READY'
+        until = time.strftime('%H:%M:%S',
+                              time.localtime(self._backend_unavailable_until))
+        return f'BACKOFF until {until}'
+
     def contribute(
         self,
         crop_bgr:   np.ndarray,
@@ -255,12 +270,12 @@ class WARPSyncClient:
                         wait = 20
                     else:
                         wait = 5
-                    log.debug(f'WARPSync: attempt {_attempt+1} failed (HTTP {e.code}), '
-                              f'retrying in {wait}s...')
+                    log.warning(f'WARPSync: attempt {_attempt+1} failed (HTTP {e.code}), '
+                                f'retrying in {wait}s...')
                     time.sleep(wait)
                 except Exception as e:
                     last_err = e
-                    log.debug(f'WARPSync: attempt {_attempt+1} failed ({e}), retrying in 5s...')
+                    log.warning(f'WARPSync: attempt {_attempt+1} failed ({e}), retrying in 5s...')
                     time.sleep(5)
             if result is None:
                 raise last_err
@@ -279,8 +294,8 @@ class WARPSyncClient:
             # Activate circuit breaker on any network/HTTP error so subsequent
             # contributions are skipped silently instead of flooding the log.
             self._backend_unavailable_until = time.time() + self._BACKOFF_SECONDS
-            log.debug(f'WARPSync: contribution failed ({e}) — backing off '
-                      f'{self._BACKOFF_SECONDS}s')
+            log.warning(f'WARPSync: contribution failed ({e}) — backing off '
+                        f'{self._BACKOFF_SECONDS}s')
             if on_done:
                 on_done(False)
 

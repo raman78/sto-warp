@@ -48,6 +48,8 @@ class _RefreshWorker(QThread):
 
     def run(self):
         log.info(f'SyncCoordinator: cycle start (force={self._force})')
+        if self._sync_client is not None:
+            log.info(f'SyncCoordinator: WARPSync backend={self._sync_client.backend_status()}')
 
         self.step.emit('assets')
         log.info('SyncCoordinator: step=assets — GitHub icon/ship asset mirror')
