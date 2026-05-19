@@ -53,13 +53,16 @@ class _ImageCanvas(QWidget):
         self._pixmap: QPixmap | None = None
         self._scaled: QPixmap | None = None
         self._items: list[RecognisedItem] = []
+        self._build_type: str = ''
         self._scale: float = 1.0
         self.setMinimumSize(200, 200)
 
-    def set_image(self, path: Path, items: list[RecognisedItem]) -> None:
+    def set_image(self, path: Path, items: list[RecognisedItem],
+                  build_type: str = '') -> None:
         pm = QPixmap(str(path)) if path.is_file() else QPixmap()
         self._pixmap = pm if not pm.isNull() else None
         self._items = list(items)
+        self._build_type = build_type or ''
         self._scaled = None
         self._compute_fit()
         self.update()
@@ -68,6 +71,7 @@ class _ImageCanvas(QWidget):
         self._pixmap = None
         self._scaled = None
         self._items = []
+        self._build_type = ''
         self.update()
 
     def _compute_fit(self) -> None:
@@ -116,6 +120,26 @@ class _ImageCanvas(QWidget):
         y0 = (self.height() - self._scaled.height()) // 2
         p.drawPixmap(x0, y0, self._scaled)
 
+        # Build-type badge in the upper-left of the rendered image so the
+        # user can see what screen type the autodetector picked, including
+        # cases where no slots were detected.
+        if self._build_type:
+            badge = self._build_type
+            bf = QFont('Monospace')
+            bf.setPointSize(10)
+            bf.setBold(True)
+            p.setFont(bf)
+            fm = p.fontMetrics()
+            pad_x, pad_y = 8, 4
+            tw = fm.horizontalAdvance(badge)
+            th = fm.height()
+            bx = x0 + 6
+            by = y0 + 6
+            p.fillRect(bx, by, tw + pad_x * 2, th + pad_y * 2,
+                       QColor(0, 0, 0, 180))
+            p.setPen(QColor(220, 220, 220))
+            p.drawText(bx + pad_x, by + pad_y + fm.ascent(), badge)
+
         f = QFont('Monospace')
         f.setPointSize(8)
         p.setFont(f)
@@ -146,6 +170,7 @@ class PreviewView(QWidget):
     def __init__(self, parent=None):
         super().__init__(parent)
         self._items_by_file: dict[str, list[RecognisedItem]] = {}
+        self._bt_by_file:    dict[str, str] = {}
         self._keys: list[str] = []
         self._build_ui()
 
@@ -175,6 +200,7 @@ class PreviewView(QWidget):
 
     def clear(self) -> None:
         self._items_by_file = {}
+        self._bt_by_file = {}
         self._keys = []
         self._list.clear()
         self._canvas.clear()
@@ -193,13 +219,20 @@ class PreviewView(QWidget):
                 key = it.source_file
             by_file.setdefault(key, []).append(it)
         self._items_by_file = by_file
-        self._keys = sorted(by_file)
+        self._bt_by_file = dict(getattr(result, 'per_file', {}) or {})
+        # Union: every file the importer touched + every file that emitted
+        # an item. Files with zero items still appear so the user can
+        # confirm the image actually loaded and see the picked screen type.
+        self._keys = sorted(set(by_file) | set(self._bt_by_file))
         for src in self._keys:
-            n = len(by_file[src])
-            with_bbox = sum(1 for it in by_file[src]
+            items = by_file.get(src, [])
+            with_bbox = sum(1 for it in items
                             if it.bbox and len(it.bbox) >= 4)
+            bt = self._bt_by_file.get(src, '')
+            bt_tag = f'  [{bt}]' if bt else ''
             QListWidgetItem(
-                f'{Path(src).name}   ({with_bbox}/{n})', self._list,
+                f'{Path(src).name}   ({with_bbox}/{len(items)}){bt_tag}',
+                self._list,
             )
         if self._list.count():
             self._list.setCurrentRow(0)
@@ -212,4 +245,8 @@ class PreviewView(QWidget):
             self._canvas.clear()
             return
         src = self._keys[row]
-        self._canvas.set_image(Path(src), self._items_by_file[src])
+        self._canvas.set_image(
+            Path(src),
+            self._items_by_file.get(src, []),
+            self._bt_by_file.get(src, ''),
+        )

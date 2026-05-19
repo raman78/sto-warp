@@ -1,9 +1,14 @@
 """
 warp/folder_picker.py
 
-Two-pane folder picker:
-  Left  — directory tree (selectable).
-  Right — image files in the selected directory (preview only, no selection).
+Three-pane folder/file picker:
+  Left   — directory tree (selectable).
+  Middle — image files in the selected directory.
+  Right  — thumbnail preview of the highlighted file.
+
+In the folder variant the file list is single-selection so the user can
+preview without affecting the "Open Folder" outcome — the button always
+opens the highlighted directory regardless of which image is shown.
 
 Replaces QFileDialog(FileMode.Directory) which on PySide6 + non-native
 mode combined with a NameFilter became unselectable (NoSelection
@@ -14,6 +19,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from PySide6.QtCore import Qt, QDir, QModelIndex
+from PySide6.QtGui import QPixmap
 from PySide6.QtWidgets import (
     QDialog, QVBoxLayout, QHBoxLayout, QSplitter, QTreeView, QListView,
     QAbstractItemView, QPushButton, QLabel, QFileSystemModel,
@@ -25,6 +31,54 @@ from warp.style import (
 )
 
 DEFAULT_IMAGE_FILTERS = ('*.png', '*.jpg', '*.jpeg', '*.webp', '*.bmp')
+PREVIEW_MAX = 320
+
+
+class _PreviewPane(QLabel):
+    """Right-pane thumbnail. Scales the source image to fit while
+    preserving aspect ratio; shows a placeholder when empty."""
+
+    PLACEHOLDER = '(select an image)'
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.setMinimumWidth(PREVIEW_MAX)
+        self.setStyleSheet(
+            f'color:{FG};background:{MBG};border:1px solid {BC};'
+            f'border-radius:3px;padding:6px;'
+        )
+        self._path: Path | None = None
+        self.clear()
+
+    def clear(self):
+        self._path = None
+        super().setPixmap(QPixmap())
+        self.setText(self.PLACEHOLDER)
+
+    def show_path(self, path: Path):
+        self._path = path
+        pm = QPixmap(str(path))
+        if pm.isNull():
+            self.setText(f'(cannot preview: {path.name})')
+            return
+        self._render(pm)
+
+    def _render(self, pm: QPixmap):
+        side = max(64, min(self.width(), self.height()) - 12)
+        scaled = pm.scaled(
+            side, side,
+            Qt.AspectRatioMode.KeepAspectRatio,
+            Qt.TransformationMode.SmoothTransformation,
+        )
+        super().setPixmap(scaled)
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        if self._path is not None:
+            pm = QPixmap(str(self._path))
+            if not pm.isNull():
+                self._render(pm)
 
 
 class FolderPickerDialog(QDialog):
@@ -39,7 +93,7 @@ class FolderPickerDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(900, 600)
+        self.resize(1100, 640)
         apply_dark_style(self)
 
         self._selected: Path | None = None
@@ -67,14 +121,20 @@ class FolderPickerDialog(QDialog):
 
         self._list = QListView(self)
         self._list.setModel(self._file_model)
-        self._list.setSelectionMode(QAbstractItemView.SelectionMode.NoSelection)
-        self._list.setFocusPolicy(Qt.FocusPolicy.NoFocus)
+        # Single-selection so users can preview images without affecting
+        # the "Open Folder" semantics — the button stays bound to the
+        # selected directory regardless of which file is highlighted.
+        self._list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
         self._list.setUniformItemSizes(True)
+        self._list.selectionModel().currentChanged.connect(self._on_file_changed)
+
+        self._preview = _PreviewPane(self)
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
         splitter.addWidget(self._tree)
         splitter.addWidget(self._list)
-        splitter.setSizes([400, 500])
+        splitter.addWidget(self._preview)
+        splitter.setSizes([300, 320, 360])
 
         # ── Bottom bar ───────────────────────────────────────────────────────
         self._path_label = QLabel('—', self)
@@ -83,7 +143,7 @@ class FolderPickerDialog(QDialog):
             f'border-radius:3px;padding:4px 8px;'
         )
 
-        self._open_btn = QPushButton('Open', self)
+        self._open_btn = QPushButton('Open Folder', self)
         self._open_btn.setStyleSheet(primary_btn_style())
         self._open_btn.setEnabled(False)
         self._open_btn.clicked.connect(self._accept)
@@ -122,6 +182,13 @@ class FolderPickerDialog(QDialog):
         self._file_model.setRootPath(path)
         self._list.setRootIndex(self._file_model.index(path))
         self._open_btn.setEnabled(True)
+        self._preview.clear()
+
+    def _on_file_changed(self, current: QModelIndex, _previous: QModelIndex):
+        if current.isValid() and not self._file_model.isDir(current):
+            self._preview.show_path(Path(self._file_model.filePath(current)))
+        else:
+            self._preview.clear()
 
     def _on_tree_double_click(self, idx: QModelIndex):
         if idx.isValid() and self._dir_model.isDir(idx):
@@ -165,7 +232,7 @@ class FilePickerDialog(QDialog):
     ):
         super().__init__(parent)
         self.setWindowTitle(title)
-        self.resize(900, 600)
+        self.resize(1100, 640)
         apply_dark_style(self)
 
         self._selected_files: list[Path] = []
@@ -200,11 +267,15 @@ class FilePickerDialog(QDialog):
         self._list.setUniformItemSizes(True)
         self._list.doubleClicked.connect(self._on_file_double_click)
         self._list.selectionModel().selectionChanged.connect(self._on_files_changed)
+        self._list.selectionModel().currentChanged.connect(self._on_file_focused)
+
+        self._preview = _PreviewPane(self)
 
         splitter = QSplitter(Qt.Orientation.Horizontal, self)
         splitter.addWidget(self._tree)
         splitter.addWidget(self._list)
-        splitter.setSizes([400, 500])
+        splitter.addWidget(self._preview)
+        splitter.setSizes([300, 320, 360])
 
         # ── Bottom bar ───────────────────────────────────────────────────────
         self._path_label = QLabel('—', self)
@@ -251,10 +322,17 @@ class FilePickerDialog(QDialog):
         self._path_label.setText(path)
         self._file_model.setRootPath(path)
         self._list.setRootIndex(self._file_model.index(path))
+        self._preview.clear()
         self._refresh_selection()
 
     def _on_files_changed(self, *_):
         self._refresh_selection()
+
+    def _on_file_focused(self, current: QModelIndex, _previous: QModelIndex):
+        if current.isValid() and not self._file_model.isDir(current):
+            self._preview.show_path(Path(self._file_model.filePath(current)))
+        else:
+            self._preview.clear()
 
     def _refresh_selection(self):
         idxs = self._list.selectionModel().selectedIndexes()
