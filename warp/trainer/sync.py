@@ -665,19 +665,25 @@ class SyncManager:
         """One sync cycle: upload pending crops if any. Called by BackgroundTaskManager."""
         token = self._read_token()
         if not token:
+            _slog.info(
+                'SyncManager: skipped — no HuggingFace token configured '
+                '(~/.config/warp/hub_token missing or placeholder)')
             return
 
         mgr = self._data_manager()
         if mgr is None:
+            _slog.info(
+                'SyncManager: skipped — no training data manager available '
+                '(WARP CORE never opened and no on-disk training_data/)')
             return
 
         confirmed = [c for c in mgr.get_confirmed_crops() if Path(c['path']).exists()]
         if not confirmed:
-            _slog.debug('SyncManager: timer tick — no confirmed crops')
+            _slog.info('SyncManager: skipped — no confirmed crops to upload')
             return
 
         if self._worker and self._worker.isRunning():
-            _slog.debug('SyncManager: upload already running — skipping tick')
+            _slog.info('SyncManager: skipped — upload already in progress')
             return
 
         _slog.info(f'SyncManager: {len(confirmed)} confirmed crops — checking for new uploads…')
