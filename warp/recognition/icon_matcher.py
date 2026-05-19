@@ -29,7 +29,6 @@
 
 from __future__ import annotations
 
-import logging
 import json
 from pathlib import Path
 from urllib.parse import unquote_plus
@@ -37,8 +36,7 @@ from urllib.parse import unquote_plus
 import numpy as np
 
 from warp import userdata
-
-log = logging.getLogger(__name__)
+from warp.debug import log, syslog
 
 # ── Tunable thresholds ─────────────────────────────────────────────────────────
 MATCH_SIZE          = 64     # resize crop + template to this before matching
@@ -82,6 +80,9 @@ class SETSIconMatcher:
     _seeded_from_training_data: bool = False
     # Same one-shot guard for the HF-mirrored approved-truth crops.
     _seeded_from_community: bool = False
+    # mtime of data/annotations.jsonl at last seed — re-seed only when the
+    # mirror moves, so periodic sync ticks are cheap when nothing changed.
+    _seeded_community_mtime: float = 0.0
 
     def __init__(self, sets_app=None, sync_client=None):
         # `sets_app` is accepted for backward compatibility with the SETS
@@ -726,16 +727,18 @@ class SETSIconMatcher:
         return count
 
     @classmethod
-    def seed_from_community_crops(cls) -> int:
+    def seed_from_community_crops(cls, force: bool = False) -> int:
         """Seed the session-example pool from the HF-mirrored approved truth.
 
         Reads `data/annotations.jsonl` + `data/crops/<sha>.png` from
         `warp.knowledge.community_crops`, so every install starts with the
-        same recognition baseline. Idempotent via `_seeded_from_community`.
-        """
-        if cls._seeded_from_community:
-            return 0
+        same recognition baseline. Cheap on repeat calls: skips when the
+        annotations file mtime is unchanged (so the 5-min SyncCoordinator
+        tick doesn't re-load thousands of PNGs needlessly).
 
+        `force=True` bypasses both the boolean guard and the mtime check —
+        used by `reset_ml_session()` callers.
+        """
         import cv2
         from warp.knowledge.community_crops import (
             community_annotations_file, community_crops_dir,
@@ -745,6 +748,15 @@ class SETSIconMatcher:
         crops_dir = community_crops_dir()
         if not ann_path.exists() or not crops_dir.exists():
             cls._seeded_from_community = True
+            return 0
+
+        try:
+            mtime = ann_path.stat().st_mtime
+        except OSError:
+            mtime = 0.0
+
+        if not force and cls._seeded_from_community \
+                and mtime == cls._seeded_community_mtime:
             return 0
 
         _TEXT_SLOTS = frozenset({
@@ -768,7 +780,7 @@ class SETSIconMatcher:
                     if sha:
                         latest[sha] = d
         except Exception as e:
-            log.warning(f'WARP: seed_from_community_crops: read failed: {e}')
+            syslog.warning(f'CommunitySeed: read failed: {e}')
             cls._seeded_from_community = True
             return 0
 
@@ -788,8 +800,9 @@ class SETSIconMatcher:
             count += 1
 
         cls._seeded_from_community = True
-        log.info(f'WARP: community seed: {count} session examples '
-                 f'from {len(latest)} approved entries ({crops_dir})')
+        cls._seeded_community_mtime = mtime
+        syslog.info(f'CommunitySeed: {count} session examples '
+                    f'from {len(latest)} approved entries ({crops_dir})')
         return count
 
     @classmethod
@@ -804,6 +817,7 @@ class SETSIconMatcher:
         cls._session_examples         = []
         cls._seeded_from_training_data = False
         cls._seeded_from_community     = False
+        cls._seeded_community_mtime    = 0.0
         log.info('WARP: ML session reset -- will reload on next match')
 
     def _check_repo_exists(self) -> bool:
