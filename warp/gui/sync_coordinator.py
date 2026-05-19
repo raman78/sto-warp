@@ -47,7 +47,10 @@ class _RefreshWorker(QThread):
         self._force        = force
 
     def run(self):
+        log.info(f'SyncCoordinator: cycle start (force={self._force})')
+
         self.step.emit('assets')
+        log.info('SyncCoordinator: step=assets — GitHub icon/ship asset mirror')
         try:
             from warp.data.asset_sync import AssetSyncManager
             AssetSyncManager().run()
@@ -55,6 +58,7 @@ class _RefreshWorker(QThread):
             log.warning(f'SyncCoordinator: asset sync failed: {e}')
 
         self.step.emit('knowledge')
+        log.info('SyncCoordinator: step=knowledge — community pHash download')
         try:
             if self._sync_client is not None:
                 self._sync_client._download_knowledge_bg(force=self._force)
@@ -62,6 +66,7 @@ class _RefreshWorker(QThread):
             log.warning(f'SyncCoordinator: knowledge refresh failed: {e}')
 
         self.step.emit('model')
+        log.info('SyncCoordinator: step=model — central model version check')
         try:
             from warp.trainer.model_updater import ModelUpdater
             updater = ModelUpdater()
@@ -70,6 +75,7 @@ class _RefreshWorker(QThread):
             log.warning(f'SyncCoordinator: model update check failed: {e}')
 
         self.step.emit('upload')
+        log.info('SyncCoordinator: step=upload — confirmed-crop HuggingFace upload')
         try:
             if self._sync_manager is not None:
                 self._sync_manager.check_and_upload()
@@ -80,6 +86,7 @@ class _RefreshWorker(QThread):
             log.warning(f'SyncCoordinator: crop upload failed: {e}')
 
         self.step.emit('done')
+        log.info('SyncCoordinator: cycle done')
 
 
 class SyncCoordinator(QObject):

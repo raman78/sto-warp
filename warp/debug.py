@@ -92,8 +92,7 @@ def log_paths(channel: str = 'detection') -> tuple[Path, Path]:
 
 def _write(channel: str, level: str, msg: str) -> None:
     ts  = datetime.now().strftime('%H:%M:%S.%f')[:-3]
-    tid = threading.current_thread().name
-    line = f'{ts}  [{level}]  [{tid}]  {msg}'
+    line = f'{ts}  [{level}]  {msg}'
     if level != 'DEBUG':
         print(f'[WARP/{channel[:3]}] {line}', file=sys.stderr, flush=True)
     fh = _files.get(channel)

@@ -25,7 +25,6 @@ from __future__ import annotations
 import base64
 import hashlib
 import json
-import logging
 import threading
 import time
 import uuid
@@ -35,8 +34,7 @@ from typing import Callable
 import numpy as np
 
 from warp import userdata
-
-log = logging.getLogger(__name__)
+from warp.debug import syslog as log
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 DEFAULT_BACKEND_URL       = 'https://sets-warp-backend.onrender.com'
