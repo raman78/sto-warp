@@ -33,16 +33,13 @@ from typing import Callable
 
 import numpy as np
 
-from warp import userdata
+from warp import userdata, config
 from warp.debug import syslog as log
 
 # ── Constants ──────────────────────────────────────────────────────────────────
 DEFAULT_BACKEND_URL       = 'https://sets-warp-backend.onrender.com'
 MAX_CONTRIBUTIONS_PER_DAY = 200    # per installation, per day
 KNOWLEDGE_MAX_AGE_HOURS   = 24     # re-download knowledge base after this
-CONNECT_TIMEOUT           = 5      # seconds
-READ_TIMEOUT              = 15     # seconds — knowledge download (has cache fallback)
-CONTRIBUTE_TIMEOUT        = 60     # seconds — longer: covers Render cold-start (~50 s)
 
 WARP_VERSION = '1.0b'
 
@@ -178,7 +175,7 @@ class WARPSyncClient:
                 f'{self._url}/knowledge',
                 headers={'User-Agent': f'WARP/{WARP_VERSION}'},
             )
-            with urllib.request.urlopen(req, timeout=CONNECT_TIMEOUT + READ_TIMEOUT) as resp:
+            with urllib.request.urlopen(req, timeout=config.SYNC_CONNECT_TIMEOUT + config.SYNC_READ_TIMEOUT) as resp:
                 data = json.loads(resp.read().decode('utf-8'))
 
             knowledge = data.get('knowledge', {})
@@ -252,7 +249,7 @@ class WARPSyncClient:
                     },
                     method='POST',
                 )
-                with urllib.request.urlopen(req, timeout=CONTRIBUTE_TIMEOUT) as resp:
+                with urllib.request.urlopen(req, timeout=config.SYNC_CONTRIBUTE_TIMEOUT) as resp:
                     return json.loads(resp.read().decode('utf-8'))
 
             # Retry loop — Render free tier cold-starts in ~50 s,

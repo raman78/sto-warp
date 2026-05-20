@@ -35,6 +35,7 @@ from urllib.parse import quote
 
 import requests
 
+from warp import config
 from warp.debug import syslog as log
 from warp.data.cargo import _cache_dir, icons_dir, ship_images_dir
 
@@ -49,8 +50,6 @@ TREE_CACHE_MAX_AGE_S   = 60 * 60         # 1 hour
 FAILED_RETRY_TTL_S     = 7 * 24 * 60 * 60  # 7 days
 
 MAX_RETRIES     = 1
-RETRY_DELAY_S   = 3
-STALL_TIMEOUT_S = 10
 MAX_THREADS     = 5
 MAX_FORBIDDEN   = 3
 
@@ -99,7 +98,7 @@ def _save_tree_cache(path: Path, tree: list[dict]) -> None:
 def _fetch_github_tree(session: requests.Session) -> list[dict] | None:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = session.get(GITHUB_API_TREE, timeout=(10, STALL_TIMEOUT_S))
+            resp = session.get(GITHUB_API_TREE, timeout=(10, config.ASSET_STALL_TIMEOUT_S))
             if resp.ok:
                 blobs = [e for e in resp.json().get('tree', [])
                          if e.get('type') == 'blob']
@@ -113,7 +112,7 @@ def _fetch_github_tree(session: requests.Session) -> list[dict] | None:
             error = str(e)
         log.warning(f'AssetSync: tree attempt {attempt}/{MAX_RETRIES} — {error}')
         if attempt < MAX_RETRIES:
-            time.sleep(RETRY_DELAY_S)
+            time.sleep(config.ASSET_RETRY_DELAY_S)
     return None
 
 
@@ -345,7 +344,7 @@ class AssetSyncManager:
         for attempt in range(1, MAX_RETRIES + 1):
             try:
                 resp = session.get(url,
-                                   timeout=(10, STALL_TIMEOUT_S), stream=False)
+                                   timeout=(10, config.ASSET_STALL_TIMEOUT_S), stream=False)
                 last_status = resp.status_code
                 if resp.ok and len(resp.content) >= 10:
                     local_path.parent.mkdir(parents=True, exist_ok=True)
@@ -359,7 +358,7 @@ class AssetSyncManager:
             log.warning(f'AssetSync: attempt {attempt}/{MAX_RETRIES} — '
                         f'{url} → {error}')
             if attempt < MAX_RETRIES:
-                time.sleep(RETRY_DELAY_S)
+                time.sleep(config.ASSET_RETRY_DELAY_S)
 
         if last_status == 403:
             with self._cb_lock:

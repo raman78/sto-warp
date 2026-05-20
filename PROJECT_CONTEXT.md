@@ -31,32 +31,9 @@ Module for detecting Star Trek Online builds from screenshots using ML models. W
 
 ## Main Assumptions
 
-1. **SETS-WARP is a standalone, self-contained program** — independent from system Python and system libraries. It uses an autoconfigurator (`bootstrap.py`) to manage its own isolated environment.
-2. **All data is synchronized via SyncManager** — downloads item icons, ship images, and cargo data from GitHub and stowiki. Note: stowiki is currently blocked by Cloudflare anti-bot protection (active bug; no bypass implemented yet). As a workaround, cargo data falls back to the GitHub cache mirror (`STOCD/SETS-Data`).
-3. **All code comments and program communication messages are in English.**
+1. **All data is synchronized via SyncManager** — downloads item icons, ship images, and cargo data from GitHub and stowiki. Note: stowiki is currently blocked by Cloudflare anti-bot protection (active bug; no bypass implemented yet). As a workaround, cargo data falls back to the GitHub cache mirror (`STOCD/SETS-Data`).
+2. **All code comments and program communication messages are in English.**
 
----
-
-## Autoconfigurator — `bootstrap.py`
-
-Entry point for the application. Manages the full lifecycle of the Python environment before launching `main.py`.
-
-**Strategy (in order):**
-1. If already running inside the project's `.venv` → launch `main.py` directly.
-2. If `.venv` exists but not active → relaunch using the venv Python.
-3. If `.venv` does not exist → show installer GUI, then:
-   a. Download portable Python into `.python/` (~65 MB, no root, no compile).
-   b. Create `.venv` using that portable Python.
-   c. `pip install` all dependencies from `pyproject.toml`.
-   d. Relaunch with venv Python.
-
-**Portable Python source:** `astral-sh/python-build-standalone`
-- Version: Python 3.14.x (tag `20251008` or newer)
-- Supported platforms: Linux x86_64/aarch64, macOS x86_64/arm64, Windows x86_64
-
-**CLI flags:**
-- `--reinstall` — wipe `.venv` and `.python`, force full reinstall.
-- `--repair` — health-check / repair the venv without relaunching the app.
 
 ---
 
@@ -93,13 +70,6 @@ Cache age: cargo data is re-downloaded after 7 days.
 
 ## WARP Module Architecture
 
-### Entry Points
-
-- `warp/warp_button.py` — `inject_warp_buttons(sets_app, menu_layout)` called from `app.py` `setup_main_layout()`. Adds two buttons to the SETS top menu bar:
-  - **⚡ WARP** — opens the multi-step import dialog
-  - **🧠 WARP CORE** — opens the ML trainer window (singleton)
-
-- `warp/__init__.py` — module version `0.1.0`; WARP is gracefully disabled if its dependencies are missing (try/except import guard in `app.py`).
 
 ### Main Modules
 
@@ -211,4 +181,3 @@ Two helper methods support ship disambiguation via boff seating:
 3. **`requests_html`, `lxml_html_clean`, `cssselect`** — also in `pyproject.toml` but not visibly used in the main codebase (may be used indirectly or are leftovers).
 4. **Fore/aft weapon cross-validation gap** — WARP does not pre-filter fore-only weapons (e.g. Dual Heavy Cannons) from Aft slots. SETS handles this at the widget level; WARP relies on icon matcher confidence and type validation only.
 5. **Boff rank unknown in MIXED screens** — boff ability rows in MIXED screenshots cannot be reliably split into individual seats (abilities from multiple seats share similar y-coordinates). Rank is inferred from ability count per visual row, which may be incorrect for mixed-type rows. A dedicated BOFFS screen provides accurate rank data via OCR.
-6. **Direct slot-scoped filtering in WARP CORE name field** — not yet implemented. The item name autocomplete in the annotation widget shows all items for the slot group, not filtered by the exact slot type rules (e.g. Engineering Console shown when Science Console slot is selected). Pending feature.

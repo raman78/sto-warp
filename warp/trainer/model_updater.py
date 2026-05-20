@@ -30,7 +30,7 @@ import time
 from pathlib import Path
 from typing import Callable
 
-from warp import userdata
+from warp import userdata, config
 
 try:
     from warp.debug import syslog as log
@@ -40,15 +40,6 @@ except Exception:
 _BACKEND_URL          = 'https://sets-warp-backend.onrender.com'
 _CHECK_INTERVAL_HOURS = 0.25        # minimum hours between remote checks (15 min)
 _VERSION_CACHE_FILENAME = 'model_version_remote_cache.json'
-_CONNECT_TIMEOUT      = 5           # seconds
-# Render free tier cold-starts in ~50 s. 60 s read-timeout covers the wake-up;
-# anything shorter guarantees the very first call after idle will fail.
-# Matches CONTRIBUTE_TIMEOUT in sync_client.py for the same reason.
-_READ_TIMEOUT         = 60          # seconds
-# First retry shortened from 5 → 1 min so we re-hit the backend while it is
-# still warm from our previous attempt (Render sleeps after 15 min idle, but
-# stays warm for several minutes after any request).
-_RETRY_DELAYS_MIN     = (1, 5, 15, 60)    # backoff schedule on network failure
 _MODEL_FILES          = [           # files to download from HF knowledge repo
     ('models/icon_classifier.pt',            'icon_classifier.pt'),
     ('models/label_map.json',               'label_map.json'),
@@ -133,12 +124,12 @@ class ModelUpdater:
             if remote is None:
                 # Network failure — schedule a follow-up attempt without saving
                 # the rate-limit timestamp (so a fresh app start still retries).
-                if retry_idx < len(_RETRY_DELAYS_MIN):
-                    delay_min = _RETRY_DELAYS_MIN[retry_idx]
+                if retry_idx < len(config.MODEL_RETRY_DELAYS_MIN):
+                    delay_min = config.MODEL_RETRY_DELAYS_MIN[retry_idx]
                     log.warning(
                         f'ModelUpdater: remote version check failed (network) — '
                         f'retrying in {delay_min} min '
-                        f'(attempt {retry_idx + 2}/{len(_RETRY_DELAYS_MIN) + 1})'
+                        f'(attempt {retry_idx + 2}/{len(config.MODEL_RETRY_DELAYS_MIN) + 1})'
                     )
                     t = threading.Timer(
                         delay_min * 60,
@@ -267,7 +258,7 @@ class ModelUpdater:
             resp = requests.get(
                 f'{_BACKEND_URL}/model/version',
                 headers={'User-Agent': 'WARP/0.4.0'},
-                timeout=(_CONNECT_TIMEOUT, _READ_TIMEOUT),
+                timeout=(config.MODEL_CONNECT_TIMEOUT, config.MODEL_READ_TIMEOUT),
             )
             resp.raise_for_status()
             return resp.json()

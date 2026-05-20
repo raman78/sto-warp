@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from difflib import get_close_matches
 from typing import Iterable
 
+from warp import config
 from warp.data.cargo import cache_view
 from warp.data.empty_build import empty_build
 from warp.debug import log
@@ -86,8 +87,6 @@ _META_SLOTS = frozenset({
 })
 
 _FUZZY_MATCH_CUTOFF        = 0.68
-_BOFF_Y_THRESHOLD_PX       = 30
-_BOFF_X_THRESHOLD_PX       = 50
 _MIN_CONFIDENCE_PROFESSION = 0.40
 _DEFAULT_RARITY            = 'Epic'
 _DEFAULT_MARK              = 'XV'
@@ -372,7 +371,7 @@ def _cluster_boff_items(boff_items: list[RecognisedItem]) -> list[list[Recognise
     by_y = sorted(with_bbox, key=lambda ri: ri.bbox[1])
     y_bands: list[list[RecognisedItem]] = []
     for ri in by_y:
-        if not y_bands or ri.bbox[1] - y_bands[-1][-1].bbox[1] > _BOFF_Y_THRESHOLD_PX:
+        if not y_bands or ri.bbox[1] - y_bands[-1][-1].bbox[1] > config.BOFF_Y_THRESHOLD_PX:
             y_bands.append([ri])
         else:
             y_bands[-1].append(ri)
@@ -383,7 +382,7 @@ def _cluster_boff_items(boff_items: list[RecognisedItem]) -> list[list[Recognise
         cur = [x_sorted[0]]
         for ri in x_sorted[1:]:
             prev_right = cur[-1].bbox[0] + cur[-1].bbox[2]
-            if ri.bbox[0] - prev_right > _BOFF_X_THRESHOLD_PX:
+            if ri.bbox[0] - prev_right > config.BOFF_X_THRESHOLD_PX:
                 clusters.append(cur)
                 cur = [ri]
             else:

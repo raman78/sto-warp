@@ -26,8 +26,9 @@ try:
 except Exception:
     _slog = log
 
+from warp import config
+
 SCREENSHOT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
-TEMPLATE_CONF_THRESHOLD = 0.72
 
 # Single source of truth: ScreenTypeClassifier label → WarpImporter build_type.
 # Used both by the importer (per-image ML autodetection) and by the trainer's
@@ -97,7 +98,6 @@ PANEL_GROUP_EXPECTED: dict[str, int] = {
 }
 # When `__empty__`/`__inactive__` is recognised below this confidence we treat
 # it as "matcher gave up" instead of "matcher confidently saw an empty slot".
-CONFIDENT_VIRTUAL_THRESHOLD = 0.70
 WEIGHT_GEOM    = 0.3
 WEIGHT_SIBLING = 0.3
 WEIGHT_RECOG   = 0.4
@@ -144,7 +144,7 @@ def _recog_score(items: list) -> float:
     total = 0.0
     for it in items:
         c = float(it.confidence or 0.0)
-        if it.name in VIRTUAL_ITEM_NAMES and c < CONFIDENT_VIRTUAL_THRESHOLD:
+        if it.name in VIRTUAL_ITEM_NAMES and c < config.IMPORTER_CONFIDENT_VIRTUAL_THRESHOLD:
             c *= 0.5
         total += c
     return total / len(items)
@@ -164,7 +164,6 @@ def _bbox_iou(a, b) -> float:
 
 # Minimum confidence to include a recognition result in output
 # Below this threshold the matcher is essentially guessing
-MIN_ACCEPT_CONF = 0.35
 # When a bbox came from a detected/confirmed grid but matching produces conf
 # below MIN_ACCEPT_CONF, keep the bbox in the review list with an empty name
 # instead of dropping it. The user can then type the name manually in WARP
@@ -174,7 +173,6 @@ KEEP_LOW_CONF_GRID_BBOXES = True
 # ── P5: Anchoring constants ──────────────────────────────────────────────────
 # Slots used as reference points for layout recalibration
 ANCHOR_SLOTS = frozenset({'Deflector', 'Engines', 'Warp Core', 'Shield'})
-RECALIBRATION_MIN_CONF = 0.85
 
 
 # ── Canonical slot order ────────────────────────────────────────────────────────
@@ -1508,11 +1506,11 @@ class WarpImporter:
                 if (not confirmed_layout and _gear_type and 
                     slot_name in ANCHOR_SLOTS and not found_anchor):
                     
-                    if conf < RECALIBRATION_MIN_CONF:
+                    if conf < config.IMPORTER_RECALIBRATION_MIN_CONF:
                         # Initial match poor? Scan vertically for a better anchor!
                         dy_off, dy_conf, dy_name = self._find_anchor_recalibration(
                             img, slot_name, bbox, candidates)
-                        if dy_conf > RECALIBRATION_MIN_CONF:
+                        if dy_conf > config.IMPORTER_RECALIBRATION_MIN_CONF:
                             current_dy = dy_off
                             found_anchor = True
                             name, conf, thumb, used_session = dy_name, dy_conf, None, False
@@ -1530,8 +1528,8 @@ class WarpImporter:
                 # the review list with an empty name so the user can type the
                 # correct one manually. Set KEEP_LOW_CONF_GRID_BBOXES=False to
                 # restore the old "skip entirely" behavior.
-                if not name or conf < MIN_ACCEPT_CONF:
-                    _slog.info(f'  [{slot_name}][{idx}] LOW-CONF — conf {conf:.2f} < {MIN_ACCEPT_CONF} '
+                if not name or conf < config.IMPORTER_MIN_ACCEPT_CONF:
+                    _slog.info(f'  [{slot_name}][{idx}] LOW-CONF — conf {conf:.2f} < {config.IMPORTER_MIN_ACCEPT_CONF} '
                                f'(keep_bbox={KEEP_LOW_CONF_GRID_BBOXES})')
                     _stat_skip_conf += 1
                     _stat_per_slot.setdefault(slot_name, {'ok': 0, 'skip': 0})['skip'] += 1
@@ -1732,7 +1730,7 @@ class WarpImporter:
 
         For each item with conf < LOW_CONF_GATE we re-call the matcher
         with candidates restricted to abilities of (dominant_base ∪ spec).
-        Swap the original pick only when the new match clears MIN_ACCEPT_CONF
+        Swap the original pick only when the new match clears config.IMPORTER_MIN_ACCEPT_CONF
         AND beats the original by SWAP_MARGIN.
 
         `pending`: list of (RecognisedItem, crop_bgr, candidates_or_None)
@@ -1845,7 +1843,7 @@ class WarpImporter:
                     crop, candidate_names=pool)
                 if not new_name:
                     continue
-                if new_conf < MIN_ACCEPT_CONF:
+                if new_conf < config.IMPORTER_MIN_ACCEPT_CONF:
                     continue
                 if new_conf < (it.confidence or 0.0) + SWAP_MARGIN:
                     continue

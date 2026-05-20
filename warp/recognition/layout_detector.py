@@ -45,8 +45,7 @@ _STD_IDX_TO_PROD_SLOT: dict[int, str] = {
     for name, idx in STD_ORDER.items()
 }
 
-OCR_CONF_THRESHOLD = 0.40
-LABEL_FUZZY_CUTOFF = 0.68
+from warp import config
 # Calibration file is stored in the XDG training-data dir.
 CALIBRATION_FILENAME      = 'anchors.json'
 CANONICAL_LAYOUT_FILENAME = 'canonical_layout.json'
@@ -2219,7 +2218,7 @@ class LayoutDetector:
         # Extract raw candidates with positions
         raw: list[tuple[float, float, str]] = []
         for (bbox_pts, text, conf) in results:
-            if conf < OCR_CONF_THRESHOLD:
+            if conf < config.OCR_CONF_THRESHOLD:
                 continue
             cx = float(np.mean([pt[0] for pt in bbox_pts]))
             cy = float(np.mean([pt[1] for pt in bbox_pts]))
@@ -2814,7 +2813,7 @@ class LayoutDetector:
         cell_w, icon_h = max(30, int(row_h_est * 0.80)), max(26, int(row_h_est * 0.78))
         found = {}
         for (bbox_pts, text, conf) in results:
-            if conf < OCR_CONF_THRESHOLD: continue
+            if conf < config.OCR_CONF_THRESHOLD: continue
             can = self._match_label(text.strip().lower())
             if not can or can not in slot_order: continue
             n_icons = profile.get(can, SLOT_DEFAULT_COUNTS.get(can, 1))
@@ -2826,7 +2825,7 @@ class LayoutDetector:
 
     def _match_label(self, text_lower: str) -> str | None:
         if text_lower in SLOT_LABEL_ALIASES: return SLOT_LABEL_ALIASES[text_lower]
-        matches = get_close_matches(text_lower, list(SLOT_LABEL_ALIASES.keys()), n=1, cutoff=LABEL_FUZZY_CUTOFF)
+        matches = get_close_matches(text_lower, list(SLOT_LABEL_ALIASES.keys()), n=1, cutoff=config.LABEL_FUZZY_CUTOFF)
         return SLOT_LABEL_ALIASES.get(matches[0]) if matches else None
 
     SPACE_ANCHORS_REL: dict[str, tuple[float, int]] = {
