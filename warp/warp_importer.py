@@ -1416,8 +1416,24 @@ class WarpImporter:
         # ambiguous — sibling-vote + spec prior can refine low-conf picks.
         _u_refine_buf: list = []
 
+        _current_group = None
+        def _get_slot_group(s: str) -> str:
+            s_lower = s.lower()
+            if 'boff' in s_lower:
+                return 'BOFF ABILITIES'
+            elif 'trait' in s_lower or 'rep' in s_lower:
+                return 'TRAITS & REPUTATION'
+            else:
+                return 'EQUIPMENT'
+
         for slot_def in slot_defs_to_process:
             slot_name = slot_def['name']
+            
+            group = _get_slot_group(slot_name)
+            if group != _current_group:
+                _slog.info(f"─── {group} ─────────────────────────────")
+                _current_group = group
+
             # The merged layout is the authoritative truth (confirmed + freshly
             # detected after IoU dedup). For BOFF seat keys especially, the
             # detector emits the full 4-ability grid — capping by confirmed-only
@@ -1434,7 +1450,7 @@ class WarpImporter:
 
             bboxes = layout.get(slot_name, [])[:max_count]
             if not bboxes:
-                _slog.info(f'  [{slot_name}] no bboxes from layout (max_count={max_count})')
+                _slog.debug(f'  [{slot_name}] no bboxes from layout (max_count={max_count})')
             candidates = slot_candidates.get(slot_name)  # None = no type constraint
             for idx, bbox in enumerate(bboxes):
                 # Emit per-slot progress so the UI stays responsive
@@ -1467,7 +1483,7 @@ class WarpImporter:
                 crop = self._crop(img, (bx, by + current_dy, bw, bh))
                 
                 if crop is None or crop.size == 0:
-                    _slog.info(f'  [{slot_name}][{idx}] bbox={bbox} — empty crop, skipped')
+                    _slog.warning(f'  [{slot_name}][{idx}] bbox={bbox} — empty crop, skipped')
                     continue
                     
                 candidates = slot_candidates.get(slot_name)  # None = no type constraint
@@ -1522,14 +1538,14 @@ class WarpImporter:
                 
                 _tag = '[P5 Anchored]' if found_anchor and current_dy != 0 else ('[WARP CORE]' if used_session else '[Autodetect]')
                 _src = getattr(matcher, '_last_match_src', '') or '-'
-                _slog.info(f'  {_tag} [{slot_name}][{idx}] dy={current_dy:+} bbox={bbox} crop={crop.shape[1]}x{crop.shape[0]} → {name!r} conf={conf:.2f} src={_src}')
+                _slog.debug(f'  {_tag} [{slot_name}][{idx}] dy={current_dy:+} bbox={bbox} crop={crop.shape[1]}x{crop.shape[0]} → {name!r} conf={conf:.2f} src={_src}')
                 
                 # Low-confidence / no-name results: by default keep the bbox in
                 # the review list with an empty name so the user can type the
                 # correct one manually. Set KEEP_LOW_CONF_GRID_BBOXES=False to
                 # restore the old "skip entirely" behavior.
                 if not name or conf < config.IMPORTER_MIN_ACCEPT_CONF:
-                    _slog.info(f'  [{slot_name}][{idx}] LOW-CONF — conf {conf:.2f} < {config.IMPORTER_MIN_ACCEPT_CONF} '
+                    _slog.warning(f'  [{slot_name}][{idx}] LOW-CONF — conf {conf:.2f} < {config.IMPORTER_MIN_ACCEPT_CONF} '
                                f'(keep_bbox={KEEP_LOW_CONF_GRID_BBOXES})')
                     _stat_skip_conf += 1
                     _stat_per_slot.setdefault(slot_name, {'ok': 0, 'skip': 0})['skip'] += 1
@@ -1546,7 +1562,7 @@ class WarpImporter:
                     continue
                 # Validate item type matches slot category
                 if not self._item_valid_for_slot(name, slot_name):
-                    _slog.info(f'  [{slot_name}][{idx}] WRONG-TYPE — {name!r} invalid for slot '
+                    _slog.warning(f'  [{slot_name}][{idx}] WRONG-TYPE — {name!r} invalid for slot '
                                f'(keep_bbox={KEEP_LOW_CONF_GRID_BBOXES})')
                     _stat_skip_type += 1
                     _stat_per_slot.setdefault(slot_name, {'ok': 0, 'skip': 0})['skip'] += 1
@@ -1563,7 +1579,7 @@ class WarpImporter:
                     continue
                 # Experimental slot: only Experimental Weapon items allowed
                 if slot_def['exp'] and not self._is_experimental(name):
-                    _slog.info(f'  [{slot_name}][{idx}] NOT-EXPERIMENTAL — {name!r} '
+                    _slog.warning(f'  [{slot_name}][{idx}] NOT-EXPERIMENTAL — {name!r} '
                                f'(keep_bbox={KEEP_LOW_CONF_GRID_BBOXES})')
                     if KEEP_LOW_CONF_GRID_BBOXES:
                         result.items.append(RecognisedItem(
