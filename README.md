@@ -5,7 +5,7 @@ standalone Python package.
 
 ## What is this?
 
-**STO-WARP** combines three tools in one package:
+**STO-WARP** combines two tools in one package:
 
 **WARP** *(Weaponry & Armament Recognition Platform)* — reads your in-game screenshots and automatically fills in your SETS build. Detects equipment, traits, bridge officers, and ship information using computer vision and machine learning.
 
@@ -18,21 +18,21 @@ standalone Python package.
 - **WARP CORE** — Qt trainer UI for reviewing recognition output and
   fine-tuning the EfficientNet / MobileNetV3 models that drive WARP.
 
-## Install (recommended: pipx)
+## Install
 
+The recommended way to install `sto-warp` is via our universal installation scripts, which will automatically configure an isolated environment using `pipx`.
+
+**Linux / macOS:**
 ```bash
-pipx install sto-warp
-sto-warp check        # verify install
-sto-warp              # launch WARP CORE GUI (once trainer is wired)
+curl -sSL https://raw.githubusercontent.com/raman78/sto-warp/main/install.sh | bash
 ```
 
-`pipx` keeps sto-warp and its heavy dependencies (PyTorch, EasyOCR, Qt)
-in an isolated venv — uninstall cleanly with `pipx uninstall sto-warp`.
+**Windows (PowerShell):**
+```powershell
+Invoke-WebRequest -Uri "https://raw.githubusercontent.com/raman78/sto-warp/main/install.ps1" -OutFile "install.ps1"; .\install.ps1; Remove-Item "install.ps1"
+```
 
-Plain `pip install sto-warp` inside your own venv works too.
-
-Native packages are planned for Arch (AUR), Debian/Ubuntu (`.deb`),
-Fedora (COPR), and Windows (MSI/EXE) — see `INSTALLATION.md`.
+For manual installation methods and more details, see `INSTALLATION.md`.
 
 ## Data and models
 
