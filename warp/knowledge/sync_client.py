@@ -258,11 +258,23 @@ class WARPSyncClient:
             last_err = None
             result = None
             for _attempt in range(3):
+                # If another thread tripped the circuit breaker while we were sleeping, abort early
+                if _attempt > 0 and time.time() < self._backend_unavailable_until:
+                    raise Exception('Circuit breaker tripped by another thread')
+                
                 try:
                     result = _post()
                     break
                 except _ue.HTTPError as e:
                     last_err = e
+                    if 400 <= e.code < 500 and e.code != 429:
+                        # Client error (e.g. 400 Bad Request). No point in retrying.
+                        # Do not trip the global circuit breaker for client validation errors.
+                        log.warning(f'WARPSync: contribution rejected by backend (HTTP {e.code})')
+                        if on_done:
+                            on_done(False)
+                        return
+                    
                     if e.code == 503:
                         wait = 20
                     else:
@@ -288,7 +300,7 @@ class WARPSyncClient:
                 on_done(success)
 
         except Exception as e:
-            # Activate circuit breaker on any network/HTTP error so subsequent
+            # Activate circuit breaker on any network/server error so subsequent
             # contributions are skipped silently instead of flooding the log.
             self._backend_unavailable_until = time.time() + self._BACKOFF_SECONDS
             log.warning(f'WARPSync: contribution failed ({e}) — backing off '
