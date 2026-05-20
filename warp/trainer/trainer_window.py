@@ -1439,6 +1439,10 @@ class WarpCoreWindow(QMainWindow):
         path = self._screenshots[self._current_idx]
         stype = self._screen_types.get(path.name, 'UNKNOWN')
 
+        # Clear detection logs from the UI before starting a new run
+        import warp.debug
+        warp.debug.clear_logs('detection')
+
         # Seed the icon matcher with all confirmed crops from this image
         # so Auto-Detect benefits from what the user has already confirmed
         self._seed_matcher_from_confirmed(path)

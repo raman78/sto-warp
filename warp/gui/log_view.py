@@ -158,6 +158,9 @@ class LogViewWidget(QWidget):
     def _on_new_line(self, _channel: str, _level: str, line: str):
         if self._mode != 'CURRENT':
             return
+        if _level == 'CLEAR':
+            self.clear_live()
+            return
         # appendPlainText calls ensureCursorVisible() under the hood, which
         # snaps the horizontal scrollbar to the end of the inserted line.
         # Save the user's horizontal position before, restore after — so

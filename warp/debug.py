@@ -112,6 +112,16 @@ def _write(channel: str, level: str, msg: str) -> None:
                 pass
 
 
+def clear_logs(channel: str = 'detection') -> None:
+    """Emit a special CLEAR signal to UI log viewers for the given channel."""
+    if _subscribers:
+        for cb in list(_subscribers):
+            try:
+                cb(channel, 'CLEAR', '')
+            except Exception:
+                pass
+
+
 class _Log:
     """Channel-bound logger facade. `log.info(...)` writes to one file."""
 
