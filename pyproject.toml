@@ -1,5 +1,5 @@
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
 
 [project]
@@ -61,8 +61,14 @@ issues = "https://github.com/raman78/sto-warp/issues"
 sto-warp = "warp.cli:main"
 
 [tool.hatch.version]
-path = "warp/__init__.py"
-pattern = "__version__ = '(?P<version>.*)'"
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "warp/_version.py"
+
+[tool.hatch.version.raw-options]
+# Tags look like 'v0.2.0'; strip the leading 'v' for PEP 440 compliance.
+local_scheme = "no-local-version"
 
 [tool.hatch.build.targets.wheel]
 packages = ["warp"]
