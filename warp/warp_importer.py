@@ -525,6 +525,55 @@ def _parse_tier_num(tier_str: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+def _apply_ship_and_tier_bonuses(
+    profile: dict[str, int],
+    ship_entry: dict | None,
+    ship_tier: str,
+) -> None:
+    """In-place: apply ship-type and tier-driven slot bonuses.
+
+    Mirrors SETS `get_variable_slot_counts`:
+      • Miracle Worker ('Innovation Effects' in abilities) → +1 Universal Console
+      • Federation Intel Holoship → +1 Universal Console
+      • T6-X   → +1 Universal, +1 Device, +1 Starship Trait
+      • T6-X2  → +2 to each of the above
+      • T5-U/T5-X → +1 to the console type named in `t5uconsole`
+
+    Pass ship_entry=None for keyword-fallback or no-ship paths (e.g.
+    SPACE_TRAITS) — only tier-driven bonuses apply then.
+    """
+    # Ship-type universal bonuses (need ship_list.json entry)
+    if ship_entry is not None:
+        abilities = ship_entry.get('abilities') or []
+        if 'Innovation Effects' in abilities:
+            profile['Universal Consoles'] = profile.get('Universal Consoles', 0) + 1
+        elif ship_entry.get('name') == 'Federation Intel Holoship':
+            profile['Universal Consoles'] = profile.get('Universal Consoles', 0) + 1
+
+    # T6-X / T6-X2 tier bonuses (cumulative)
+    if '-X2' in ship_tier:
+        x_bonus = 2
+    elif '-X' in ship_tier:
+        x_bonus = 1
+    else:
+        x_bonus = 0
+    if x_bonus:
+        profile['Universal Consoles'] = profile.get('Universal Consoles', 0) + x_bonus
+        if profile.get('Devices', 0) > 0:
+            profile['Devices'] += x_bonus
+        profile['Starship Traits'] = profile.get('Starship Traits', 5) + x_bonus
+
+    # T5-U / T5-X: t5uconsole adds +1 to one specific console type
+    if ship_entry is not None and ship_tier.startswith(('T5-U', 'T5-X')):
+        t5u = ship_entry.get('t5uconsole')
+        if t5u == 'eng':
+            profile['Engineering Consoles'] = profile.get('Engineering Consoles', 0) + 1
+        elif t5u == 'sci':
+            profile['Science Consoles'] = profile.get('Science Consoles', 0) + 1
+        elif t5u == 'tac':
+            profile['Tactical Consoles'] = profile.get('Tactical Consoles', 0) + 1
+
+
 class ShipDB:
     """
     Wraps ship_list.json from SETS cargo.
@@ -626,7 +675,7 @@ class ShipDB:
         if entry:
             log.debug(f'ShipDB exact type: {ship_type!r}')
             self.last_match, self.last_match_strategy = entry, 'exact-type'
-            return self._entry_to_profile(entry)
+            return self._entry_to_profile(entry, ship_tier)
 
         # 2. Fuzzy type match — handles OCR errors and extra/missing words
         if st and self._by_type:
@@ -641,14 +690,14 @@ class ShipDB:
                 # Unique subset match — high confidence
                 log.debug(f'ShipDB subset match: {ship_type!r} → {subset_hits[0][0]!r}')
                 self.last_match, self.last_match_strategy = subset_hits[0][1], 'word-subset'
-                return self._entry_to_profile(subset_hits[0][1])
+                return self._entry_to_profile(subset_hits[0][1], ship_tier)
             elif len(subset_hits) > 1:
                 # Multiple subset matches — pick the one with fewest extra words
                 best = min(subset_hits, key=lambda x: len(set(x[0].split()) - ocr_words))
                 log.debug(f'ShipDB subset match (best of {len(subset_hits)}): '
                           f'{ship_type!r} → {best[0]!r}')
                 self.last_match, self.last_match_strategy = best[1], 'word-subset-best'
-                return self._entry_to_profile(best[1])
+                return self._entry_to_profile(best[1], ship_tier)
 
             # 2b. Display-name match — the `type` field in ship_list.json is
             # generic ("Cruiser", "Destroyer"; 44 unique values), but the
@@ -667,14 +716,14 @@ class ShipDB:
                 log.debug(f'ShipDB display match: {ship_type!r}+{ship_tier!r} '
                           f'→ {ship.get("name")!r}')
                 self.last_match, self.last_match_strategy = ship, 'display-name'
-                return self._entry_to_profile(ship)
+                return self._entry_to_profile(ship, ship_tier)
             elif len(disp_hits) > 1:
                 # Prefer the entry with fewest extra words (closest to OCR text)
                 best = min(disp_hits, key=lambda h: len(h[0] - ocr_words))
                 log.debug(f'ShipDB display match (best of {len(disp_hits)}): '
                           f'{ship_type!r}+{ship_tier!r} → {best[2].get("name")!r}')
                 self.last_match, self.last_match_strategy = best[2], 'display-name-best'
-                return self._entry_to_profile(best[2])
+                return self._entry_to_profile(best[2], ship_tier)
 
             # 2c. Standard fuzzy match as fallback
             type_matches = get_close_matches(st, type_candidates, n=1, cutoff=0.68)
@@ -682,7 +731,7 @@ class ShipDB:
                 entry = self._by_type[type_matches[0]]
                 log.debug(f'ShipDB fuzzy type: {ship_type!r} → {type_matches[0]!r}')
                 self.last_match, self.last_match_strategy = entry, 'fuzzy-type'
-                return self._entry_to_profile(entry)
+                return self._entry_to_profile(entry, ship_tier)
 
             # 2d. Fuzzy display-string match — handles OCR typos that defeat
             # word-subset matching ('Legondary'/'Battlocruiser'/'IIl'/'IIIl').
@@ -699,15 +748,20 @@ class ShipDB:
                                       f'{ship.get("name")!r}')
                             self.last_match = ship
                             self.last_match_strategy = 'fuzzy-display'
-                            return self._entry_to_profile(ship)
+                            return self._entry_to_profile(ship, ship_tier)
 
         # 3. Keyword fallback from type string
         log.debug(f'ShipDB: type {ship_type!r} not found — using keyword fallback')
         self.last_match_strategy = 'keyword-fallback'
-        return _type_keyword_profile(ship_type)
+        return _type_keyword_profile(ship_type, ship_tier)
 
-    def _entry_to_profile(self, e: dict) -> dict[str, int]:
-        """Map ship_list.json fields to WARP slot profile."""
+    def _entry_to_profile(self, e: dict, ship_tier: str = '') -> dict[str, int]:
+        """Map ship_list.json fields to WARP slot profile, then apply
+        ship-type and tier bonuses via `_apply_ship_and_tier_bonuses`.
+
+        Note: `uniconsole` in the JSON is the NAME of a bundled universal
+        console item, not a slot count — universal slots come from ship
+        abilities + tier (see helper)."""
         def _int(v, default=0) -> int:
             try:    return int(v) if v is not None else default
             except: return default
@@ -722,7 +776,7 @@ class ShipDB:
             'Aft Weapons':          _int(e.get('aft'),          3),
             'Experimental':         1 if e.get('experimental')  else 0,
             'Devices':              _int(e.get('devices'),      4),
-            'Universal Consoles':   _int(e.get('uniconsole'), 0) + _int(e.get('t5uconsole'), 0),
+            'Universal Consoles':   0,
             'Engineering Consoles': _int(e.get('consoleseng'),  3),
             'Science Consoles':     _int(e.get('consolessci'),  3),
             'Tactical Consoles':    _int(e.get('consolestac'),  3),
@@ -730,6 +784,8 @@ class ShipDB:
         }
         # BOFF ability counts from ship seating — derived from rank × profession
         profile.update(_boff_profile_from_shipdb(e.get('boffs') or []))
+        # Ship-type (MW, Intel Holoship) + tier (X/X2/T5-U) bonuses
+        _apply_ship_and_tier_bonuses(profile, e, ship_tier)
         return profile
 
 
@@ -760,14 +816,14 @@ _GENERIC_PROFILE = dict(fore=4, aft=3, exp=0, hang=0, sec=0,
                          uni=0, eng=3, sci=3, tac=3, dev=4)
 
 
-def _type_keyword_profile(ship_type: str) -> dict[str, int]:
+def _type_keyword_profile(ship_type: str, ship_tier: str = '') -> dict[str, int]:
     s = ship_type.lower()
     kw_dict = _GENERIC_PROFILE
     for keyword, kp in _KEYWORD_PROFILES:
         if keyword in s:
             kw_dict = kp; break
 
-    return {
+    profile = {
         'Fore Weapons':         kw_dict['fore'],
         'Deflector':            1,
         'Sec-Def':              kw_dict.get('sec', 0),
@@ -783,6 +839,9 @@ def _type_keyword_profile(ship_type: str) -> dict[str, int]:
         'Tactical Consoles':    kw_dict['tac'],
         'Hangars':              kw_dict.get('hang', 0),
     }
+    # Tier bonuses only — no ship_entry available in keyword-fallback path.
+    _apply_ship_and_tier_bonuses(profile, None, ship_tier)
+    return profile
 
 
 # ── Data classes ───────────────────────────────────────────────────────────────
@@ -1167,22 +1226,17 @@ class WarpImporter:
             if max_val > profile.get(slot, 0):
                 profile[slot] = max_val
 
-        # T6-X / T6-X2 tier upgrades (cumulative per level), both paths:
-        #   T6-X  (level 1): +1 Universal Console, +1 Starship Trait, +1 Device
-        #   T6-X2 (level 2): additional +1 each → total +2 vs base T6
-        # Applied BEFORE the trainer-mode confirmed-count floor so the user's
-        # confirmed count (which already reflects the X/X2 bonus) is the final
-        # word — without this order, ShipDB(4)+override(6)+X2(+2) = 8 slots,
-        # one cell past the panel.
-        if '-X' in ship_tier:
-            _x_bonus = 2 if 'X2' in ship_tier else 1
-            if profile.get('Devices', 0) > 0:
-                profile['Devices'] += _x_bonus
-                _slog.info(f'WarpImporter: {ship_tier} — Devices +{_x_bonus} → {profile["Devices"]}')
-            profile['Universal Consoles'] = profile.get('Universal Consoles', 0) + _x_bonus
-            _slog.info(f'WarpImporter: {ship_tier} — Universal Consoles +{_x_bonus} → {profile["Universal Consoles"]}')
-            profile['Starship Traits'] = profile.get('Starship Traits', 5) + _x_bonus
-            _slog.info(f'WarpImporter: {ship_tier} — Starship Traits +{_x_bonus} → {profile["Starship Traits"]}')
+        # Ship-bound paths (ShipDB / keyword fallback) already applied ship-type
+        # and tier bonuses inside _entry_to_profile / _type_keyword_profile.
+        # For no-ship paths (SPACE_TRAITS etc.) the profile started empty and
+        # _GAME_SLOT_MAXES just seeded Starship Traits=5 above — apply the
+        # tier-X/X2 bump here so SPACE_TRAITS panels at T6-X/-X2 get +1/+2.
+        if _no_ship_profile:
+            _before_st = profile.get('Starship Traits', 0)
+            _apply_ship_and_tier_bonuses(profile, None, ship_tier)
+            if profile.get('Starship Traits', 0) != _before_st:
+                _slog.info(f'WarpImporter: {ship_tier} — Starship Traits '
+                           f'{_before_st} → {profile["Starship Traits"]}')
 
         _slog.debug(f'WarpImporter: final profile (traits/rep/boff): '
                     f'{dict((k,v) for k,v in profile.items() if "Boff" in k or "Trait" in k or "Rep" in k)}')
