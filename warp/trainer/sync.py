@@ -260,7 +260,7 @@ class SyncWorker(QThread):
             cached_label = uploaded_labels.get(sha)
             label_changed = cached_label != current_label
             if not file_already_on_hf:
-                _slog.debug(f'HF Sync: queuing [{item["slot"]}] {item["name"]} → {sha[:12]}…')
+                # _slog.debug(f'HF Sync: queuing [{item["slot"]}] {item["name"]} → {sha[:12]}…')
                 operations.append(CommitOperationAdd(
                     path_in_repo=f"{staging_crop}/{sha}.png",
                     path_or_fileobj=str(crop_path),
@@ -268,7 +268,7 @@ class SyncWorker(QThread):
                 existing_hashes.add(sha)
                 uploaded += 1
             elif label_changed:
-                _slog.debug(f'HF Sync: label correction [{item["slot"]}] {item["name"]} → {sha[:12]} (was {cached_label!r})')
+                pass # _slog.debug(f'HF Sync: label correction [{item["slot"]}] {item["name"]} → {sha[:12]} (was {cached_label!r})')
             else:
                 # File on HF AND label unchanged — nothing to do for this item.
                 skipped_unchanged += 1
