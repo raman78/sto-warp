@@ -7,9 +7,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-### Pending
-- Native packaging recipes (AUR, `.deb`, `.rpm`, Windows MSI/EXE).
-
 ## [1.0.0] — 2026-05-20
 
 First tagged release on PyPI. Establishes the standalone `sto-warp`
@@ -62,8 +59,3 @@ community-sync chain — as a self-contained pipx-installable tool.
   trips the circuit breaker on them; thundering-herd on 503 fixed.
 - Skip ML screen-type classification on already-confirmed screenshots
   in the trainer to cut needless GPU work.
-
-### Removed
-- `[Unreleased]` placeholders for items now shipped: `pyproject.toml`,
-  `sto-warp` console entry point, cargo data loader, and the
-  standalone WARP CORE trainer UI.
