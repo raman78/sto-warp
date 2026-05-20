@@ -176,13 +176,6 @@ class TrainingDataManager:
         if key not in self._annotations:
             self._annotations[key] = []
 
-        try:
-            from warp.debug import log as _log
-        except Exception:
-            _log = logger
-
-        # _log.debug(f'add_annotation: img={key} slot={slot!r} bbox={bbox} state={state} ann_id={ann.ann_id}')
-
         # 1. Update in-place if ann_id already exists (exact match — fast path).
         # ann_id = hash(bbox + slot), so step 1 fires when only name/state/ml_*
         # changed. We still call _sync_crop_index so the crop PNG gets renamed
@@ -192,7 +185,6 @@ class TrainingDataManager:
         # stale name forever.
         for i, d in enumerate(self._annotations[key]):
             if d.get('ann_id') == ann.ann_id:
-                # _log.debug(f'add_annotation: step1 hit — updating in-place (ann_id={ann.ann_id})')
                 old_name = d.get('name', '')
                 old_state = d.get('state', '')
                 self._annotations[key][i] = asdict(ann)
@@ -212,9 +204,6 @@ class TrainingDataManager:
             for i, d in enumerate(self._annotations[key]):
                 if tuple(d.get('bbox', [])) == bbox_t:
                     old_ann_id = d.get('ann_id', '')
-                    # # _log.debug(f'add_annotation: step2 hit — slot change on same bbox '
-                    # #            f'old_slot={d.get("slot")!r} -> {slot!r} '
-                    # #            f'old_ann_id={old_ann_id} -> {ann.ann_id}')
                     self._annotations[key][i] = asdict(ann)
                     self._dirty = True
                     # Cleanup crop PNG + crop_index entry tied to the OLD ann_id —
@@ -237,12 +226,8 @@ class TrainingDataManager:
                 d for d in self._annotations[key]
                 if not (d.get('slot') == slot and d.get('state') == 'confirmed')
             ]
-            removed = before - len(self._annotations[key])
-            if removed:
-                # _log.debug(f'add_annotation: step3 removed {removed} existing confirmed {slot!r}')
 
         # 4. New annotation
-        # _log.debug(f'add_annotation: step4 insert new — {slot!r} bbox={bbox}')
         self._annotations[key].append(asdict(ann))
         self._dirty = True
         try:
