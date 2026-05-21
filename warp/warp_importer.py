@@ -37,6 +37,8 @@ SCREEN_TYPE_TO_BUILD_TYPE: dict[str, str] = {
     'SPACE_EQ':        'SPACE',
     'GROUND_EQ':       'GROUND',
     'TRAITS':          'SPACE_TRAITS',
+    'SPACE_TRAITS':    'SPACE_TRAITS',
+    'GROUND_TRAITS':   'GROUND_TRAITS',
     'BOFFS':           'BOFFS',
     'SPACE_BOFFS':     'SPACE_BOFFS',
     'GROUND_BOFFS':    'GROUND_BOFFS',
@@ -1338,6 +1340,9 @@ class WarpImporter:
             elif build_type == 'SPACE' and _ocr_bt == 'GROUND_BOFFS':
                 build_type = 'GROUND_BOFFS'
                 _slog.info('WarpImporter: upgraded SPACE → GROUND_BOFFS (OCR detected ground boff screen)')
+            elif build_type == 'SPACE' and _ocr_bt == 'GROUND_TRAITS':
+                build_type = 'GROUND_TRAITS'
+                _slog.info('WarpImporter: upgraded SPACE → GROUND_TRAITS (OCR detected ground traits screen)')
             elif build_type == 'SPACE' and _ocr_bt == 'SPEC':
                 build_type = 'SPEC'
                 _slog.info('WarpImporter: upgraded SPACE → SPEC (OCR detected specialization screen)')
@@ -1361,6 +1366,9 @@ class WarpImporter:
                 elif build_type == 'SPACE' and _ml_bt == 'GROUND_BOFFS':
                     build_type = 'GROUND_BOFFS'
                     _slog.info(f'WarpImporter: upgraded SPACE → GROUND_BOFFS (ML classifier, conf={_ml_conf:.2f})')
+                elif build_type == 'SPACE' and _ml_bt == 'GROUND_TRAITS':
+                    build_type = 'GROUND_TRAITS'
+                    _slog.info(f'WarpImporter: upgraded SPACE → GROUND_TRAITS (ML classifier, conf={_ml_conf:.2f})')
                 elif build_type == 'SPACE' and _ml_bt == 'SPEC':
                     build_type = 'SPEC'
                     _slog.info(f'WarpImporter: upgraded SPACE → SPEC (ML classifier, conf={_ml_conf:.2f})')

@@ -41,9 +41,13 @@ except Exception:
     _slog = log
 
 # ── Constants ──────────────────────────────────────────────────────────────────
+# Mirrors the shipped 7-class model (warp/models/screen_classifier_labels.json).
+# Environment-specific variants (SPACE_TRAITS / GROUND_TRAITS / SPACE_BOFFS /
+# GROUND_BOFFS) are NOT model output — they are post-hoc refinements applied
+# by the trainer's folder-environment rule and the importer's OCR/ML rescue
+# ladder. See warp.trainer.trainer_window._folder_environment.
 SCREEN_TYPES = [
-    'SPACE_EQ', 'GROUND_EQ', 'TRAITS',
-    'SPACE_BOFFS', 'GROUND_BOFFS', 'BOFFS',
+    'SPACE_EQ', 'GROUND_EQ', 'TRAITS', 'BOFFS',
     'SPECIALIZATIONS', 'SPACE_MIXED', 'GROUND_MIXED',
 ]
 

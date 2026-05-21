@@ -166,6 +166,12 @@ SLOT_GROUPS: dict[str, list[str]] = {
         'Personal Space Traits', 'Starship Traits', 'Space Reputation', 'Active Space Rep',
         'Personal Ground Traits', 'Ground Reputation', 'Active Ground Rep',
     ],
+    'SPACE_TRAITS': [
+        'Personal Space Traits', 'Starship Traits', 'Space Reputation', 'Active Space Rep',
+    ],
+    'GROUND_TRAITS': [
+        'Personal Ground Traits', 'Ground Reputation', 'Active Ground Rep',
+    ],
     'BOFFS': [
         'Boff Tactical', 'Boff Engineering', 'Boff Science',
         'Boff Intelligence', 'Boff Command', 'Boff Pilot', 'Boff Miracle Worker', 'Boff Temporal',
@@ -202,6 +208,7 @@ SLOT_GROUPS: dict[str, list[str]] = {
 
 SCREEN_TYPE_LABELS: dict[str, str] = {
     'SPACE_EQ': 'Space Equipment', 'GROUND_EQ': 'Ground Equipment', 'TRAITS': 'Traits',
+    'SPACE_TRAITS': 'Space Traits', 'GROUND_TRAITS': 'Ground Traits',
     'BOFFS': 'Bridge Officers', 'SPACE_BOFFS': 'Space Bridge Officers',
     'GROUND_BOFFS': 'Ground Bridge Officers', 'SPECIALIZATIONS': 'Specializations',
     'SPACE_MIXED': 'Space Mixed (merged)', 'GROUND_MIXED': 'Ground Mixed (merged)', 'UNKNOWN': 'Unknown',
@@ -209,6 +216,7 @@ SCREEN_TYPE_LABELS: dict[str, str] = {
 
 SCREEN_TYPE_ICONS: dict[str, str] = {
     'SPACE_EQ': '🚀', 'GROUND_EQ': '🦶', 'TRAITS': '✨',
+    'SPACE_TRAITS': '✨', 'GROUND_TRAITS': '✨',
     'BOFFS': '👥', 'SPACE_BOFFS': '👥', 'GROUND_BOFFS': '👥',
     'SPECIALIZATIONS': '🎯', 'SPACE_MIXED': '🌌', 'GROUND_MIXED': '🗺️', 'UNKNOWN': '❓',
 }
@@ -217,6 +225,8 @@ SCREEN_TO_SLOT_GROUP: dict[str, str] = {
     'SPACE_EQ':       'SPACE_EQ',
     'GROUND_EQ':      'GROUND_EQ',
     'TRAITS':         'TRAITS',
+    'SPACE_TRAITS':   'SPACE_TRAITS',
+    'GROUND_TRAITS':  'GROUND_TRAITS',
     'BOFFS':          'BOFFS',
     'SPACE_BOFFS':    'SPACE_BOFFS',
     'GROUND_BOFFS':   'GROUND_BOFFS',
@@ -1484,10 +1494,49 @@ class WarpCoreWindow(QMainWindow):
         if not self._screenshots: return
         self._start_screen_type_detection('detect_screen_types_button', max_iter=10)
 
+    def _folder_environment(self) -> str:
+        """Infer SPACE / GROUND environment from screen types in the open folder.
+
+        Rules (user-defined):
+          - space signal = any image classified SPACE_EQ / SPACE_MIXED /
+            SPACE_BOFFS / SPACE_TRAITS
+          - ground signal = any image classified GROUND_EQ / GROUND_MIXED /
+            GROUND_BOFFS / GROUND_TRAITS
+          - only space → 'SPACE'; only ground → 'GROUND';
+            both → 'SPACE' (let user force); neither → 'SPACE'
+        Generic TRAITS / BOFFS / SPECIALIZATIONS labels do not contribute —
+        they're ambiguous and would create a circular signal.
+        """
+        space_sig  = {'SPACE_EQ', 'SPACE_MIXED', 'SPACE_BOFFS', 'SPACE_TRAITS'}
+        ground_sig = {'GROUND_EQ', 'GROUND_MIXED', 'GROUND_BOFFS', 'GROUND_TRAITS'}
+        has_space = any(s in space_sig  for s in self._screen_types.values())
+        has_ground = any(s in ground_sig for s in self._screen_types.values())
+        if has_ground and not has_space:
+            return 'GROUND'
+        return 'SPACE'
+
+    def _promote_generic_stype(self, path: Path, stype: str) -> str:
+        """Promote generic TRAITS / BOFFS to environment-specific variant
+        based on folder context. User-confirmed types are never overridden."""
+        if path.name in self._screen_types_manual:
+            return stype
+        env = self._folder_environment()
+        if stype == 'TRAITS':
+            return 'GROUND_TRAITS' if env == 'GROUND' else 'SPACE_TRAITS'
+        if stype == 'BOFFS':
+            return 'GROUND_BOFFS' if env == 'GROUND' else 'SPACE_BOFFS'
+        return stype
+
     def _start_recognition(self, path: Path, stype: str, preserve_confirmed: list | None = None):
         if self._recog_worker and self._recog_worker.isRunning():
             self._recog_worker.requestInterruption()
             self._recog_worker.wait(2000)
+        promoted = self._promote_generic_stype(path, stype)
+        if promoted != stype:
+            from warp.debug import log as _slog
+            _slog.info(f'_start_recognition: promoted {stype} → {promoted} '
+                       f'via folder-environment rule ({path.name})')
+            stype = promoted
         self._recognition_items = []
         self._review_list.clear()
         self._review_summary.setText('Running recognition...')
