@@ -107,30 +107,73 @@ SHIP_INFO_ROI = (0.0, 0.0, 0.34, 0.28)
 # Each dict maps lowercase OCR substring → screen type.
 # More specific (longer) strings should be listed first.
 
-# Traits screen — labels that only appear on traits/reputation tabs
-_TRAIT_KEYWORDS: dict[str, str] = {
-    'personal space traits':      'SPACE_TRAITS',
-    'starship traits':             'SPACE_TRAITS',
-    'space reputation':            'SPACE_TRAITS',
-    'active space rep':            'SPACE_TRAITS',
-    'active reputation':           'SPACE_TRAITS',
-    'personal ground traits':      'GROUND_TRAITS',
-    'ground reputation':           'GROUND_TRAITS',
-    'active ground rep':           'GROUND_TRAITS',
-    'active ground reputation':    'GROUND_TRAITS',
-}
+# Traits screen — section-header substrings split by environment.
+# Lookup is by header-count, not first-match: a screen that contains BOTH
+# space-side AND ground-side headers is classified as generic TRAITS (mixed)
+# rather than locking onto whichever side OCR happened to scan first.
+_TRAIT_SPACE_HEADERS: tuple[str, ...] = (
+    'personal space traits',
+    'starship traits',
+    'space reputation',
+    'active space rep',
+    'active reputation',     # legacy label used in older builds
+)
+_TRAIT_GROUND_HEADERS: tuple[str, ...] = (
+    'personal ground traits',
+    'ground reputation',
+    'active ground rep',
+    'active ground reputation',
+)
 
-# Bridge Officer screen — space vs ground distinguished by screen header
-_BOFF_KEYWORDS: dict[str, str] = {
-    'space stations':           'SPACE_BOFFS',   # STO header for space boff abilities
-    'standard away team':       'GROUND_BOFFS',  # STO header for ground boff abilities
-    'bridge officer abilities': 'BOFFS',
-    'bridge officer':           'BOFFS',
-    'boff abilities':           'BOFFS',
-    'tactical ability':         'BOFFS',
-    'engineering ability':      'BOFFS',
-    'science ability':          'BOFFS',
-}
+# Bridge Officer screen — STO tab headers + generic terms.
+# Same mixed-vs-pure logic as traits.
+_BOFF_SPACE_HEADERS: tuple[str, ...] = (
+    'space stations',           # STO header for space boff abilities
+)
+_BOFF_GROUND_HEADERS: tuple[str, ...] = (
+    'standard away team',       # STO header for ground boff abilities
+)
+_BOFF_GENERIC_HEADERS: tuple[str, ...] = (
+    'bridge officer abilities',
+    'bridge officer',
+    'boff abilities',
+    'tactical ability',
+    'engineering ability',
+    'science ability',
+)
+
+
+def _classify_traits(joined: str) -> str:
+    """
+    Return 'SPACE_TRAITS' / 'GROUND_TRAITS' / 'TRAITS' (mixed) or '' (no hit).
+    Counts distinct space-side vs ground-side section headers.
+    """
+    space_hits  = sum(1 for kw in _TRAIT_SPACE_HEADERS  if kw in joined)
+    ground_hits = sum(1 for kw in _TRAIT_GROUND_HEADERS if kw in joined)
+    if space_hits and ground_hits:
+        return 'TRAITS'
+    if space_hits:
+        return 'SPACE_TRAITS'
+    if ground_hits:
+        return 'GROUND_TRAITS'
+    return ''
+
+
+def _classify_boffs(joined: str) -> str:
+    """
+    Return 'SPACE_BOFFS' / 'GROUND_BOFFS' / 'BOFFS' (mixed/generic) or ''.
+    """
+    space_hit  = any(kw in joined for kw in _BOFF_SPACE_HEADERS)
+    ground_hit = any(kw in joined for kw in _BOFF_GROUND_HEADERS)
+    if space_hit and ground_hit:
+        return 'BOFFS'
+    if space_hit:
+        return 'SPACE_BOFFS'
+    if ground_hit:
+        return 'GROUND_BOFFS'
+    if any(kw in joined for kw in _BOFF_GENERIC_HEADERS):
+        return 'BOFFS'
+    return ''
 
 # Space equipment slot labels — presence of 2+ confirms SPACE_EQ
 _SPACE_EQ_LABELS: list[str] = [
@@ -217,15 +260,15 @@ def _detect_type_from_text(lines_lower: list[str]) -> str:
     """
     joined = ' '.join(lines_lower)
 
-    # 1. Trait screen — very specific multi-word phrases
-    for kw, btype in _TRAIT_KEYWORDS.items():
-        if kw in joined:
-            return btype
+    # 1. Trait screen — header-count classification (mixed vs pure).
+    trait_st = _classify_traits(joined)
+    if trait_st:
+        return trait_st
 
-    # 2. Boff screen
-    for kw, btype in _BOFF_KEYWORDS.items():
-        if kw in joined:
-            return btype
+    # 2. Boff screen — header-count classification (mixed vs pure).
+    boff_st = _classify_boffs(joined)
+    if boff_st:
+        return boff_st
 
     # 3. Specialization screen — header keywords
     for kw in _SPEC_HEADER_KEYWORDS:
@@ -385,7 +428,31 @@ class TextExtractor:
             _slog.info(f'TextExtractor: partial scan → {detected!r} '
                        f'({len(partial_lines)} tokens)')
 
-            if not detected:
+            _TRAIT_BOFF_VARIANTS = {
+                'TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS',
+                'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
+            }
+            if detected in _TRAIT_BOFF_VARIANTS:
+                # Trait/boff classification must see BOTH sides of a mixed
+                # screenshot before deciding pure-vs-mixed. The partial scan
+                # only covers top-right + bottom strips, so a Personal Ground
+                # Traits section in the upper-left can be invisible to it and
+                # the result wrongly narrows to SPACE_TRAITS. Re-run on the
+                # full image and let _detect_type_from_text count headers per
+                # side.
+                _slog.info(f'TextExtractor: partial {detected!r} — '
+                           f'rescanning full image to count trait/boff sides')
+                full_lines = _ocr_region(img)
+                refined = _detect_type_from_text(full_lines)
+                if refined and refined != detected:
+                    _slog.info(f'TextExtractor: {detected!r} refined to '
+                               f'{refined!r} via full-image header count')
+                    detected = refined
+                elif refined:
+                    detected = refined
+                all_lines = full_lines
+                result['scan_scope'] = 'full'
+            elif not detected:
                 # Stage 1b: full image scan — needed for MIXED screens
                 _slog.info('TextExtractor: partial scan inconclusive — scanning full image')
                 full_lines = _ocr_region(img)
