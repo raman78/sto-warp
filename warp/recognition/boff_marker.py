@@ -187,10 +187,16 @@ def detect_markers(img: np.ndarray, icon_w: int, icon_h: int):
     min_w = max(abs_min_w, int(icon_w * 0.45))
     # Empirical max marker_w in GT baseline = 43 px; UI scale is user-set
     # and not proportional to resolution, so cap must accommodate the full
-    # observed range regardless of icon_w estimate.
-    max_w = min(abs_max_w, max(int(icon_w * 1.6), 44))
+    # observed range regardless of icon_w estimate. On cropped-panel inputs
+    # (image IS the panel, not the whole screen) markers occupy a larger
+    # fraction of image height (~7%) than on full-screen GT (~4%), so add
+    # an image-relative floor: 8.5% of image height covers up to 57-px
+    # markers on a 670-px panel crop.
+    h_im = img.shape[0]
+    img_rel_max = int(h_im * 0.085)
+    max_w = min(abs_max_w, max(int(icon_w * 1.6), 44, img_rel_max))
     min_h = max(abs_min_h, int(icon_h * 0.45))
-    max_h = min(abs_max_h, max(int(icon_h * 1.35), 44))
+    max_h = min(abs_max_h, max(int(icon_h * 1.35), 44, img_rel_max))
     ar_min, ar_max = 0.30, 1.8
     fill_min = 0.70
 

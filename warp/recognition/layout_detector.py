@@ -107,6 +107,37 @@ _SCAN_CONF_MIN  = 0.45   # min ML confidence to keep a sliding-window detection
 _SCAN_NMS_IOU   = 0.50   # IoU threshold for greedy NMS
 _SCAN_ROW_GAP   = 0.50   # fraction of icon_est: max Y gap within a row
 
+# Sanity caps for FullScan output. FullScan is a fallback for cases where the
+# dedicated panel detectors (boff_marker, trait_grid, equipment row scan)
+# failed. When it produces output well beyond any realistic STO panel
+# capacity, that's a strong sign the input is not a recognisable game panel
+# (e.g. a cropped UI fragment, a non-game image, or a panel the dedicated
+# detectors should have handled). Better to bail than to ship hundreds of
+# spurious crops to the icon matcher.
+#
+# Per-slot cap: 25 covers the largest realistic slot (BOFFS max=20 per
+# profession category) with margin. Personal Traits cap at 10, Devices at 6.
+# Per-build totals: derived from SLOT_ORDER `max` sums + boff_marker
+# geometric cap (6 seats × 4 abilities = 24 for BOFF panels).
+_FULLSCAN_MAX_PER_SLOT = 25
+_FULLSCAN_MAX_TOTAL: dict[str, int] = {
+    'SPACE':         44,
+    'SPACE_EQ':      44,
+    'GROUND':        15,
+    'GROUND_EQ':     15,
+    'SPACE_TRAITS':  27,
+    'GROUND_TRAITS': 20,
+    'TRAITS':        27,
+    'BOFFS':         24,
+    'SPACE_BOFFS':   24,
+    'GROUND_BOFFS':  24,
+    'SPEC':           2,
+    'SPECIALIZATIONS': 2,
+    'SPACE_MIXED':   97,
+    'GROUND_MIXED':  61,
+}
+_FULLSCAN_DEFAULT_TOTAL = 100
+
 # Equipment item type → slot name (avoids circular import from warp_importer)
 _EQ_TYPE_TO_SLOT: dict[str, str] = {
     'Ship Fore Weapon': 'Fore Weapons', 'Ship Weapon': 'Fore Weapons',
@@ -2376,6 +2407,28 @@ class LayoutDetector:
 
             bboxes = [(it[0], it[1], it[2], it[3]) for it in sorted(row, key=lambda it: it[0])]
             result.setdefault(best_slot, []).extend(bboxes)
+
+        # Sanity guard — drop slot groups exceeding the realistic per-slot cap,
+        # then bail entirely if the (post-drop) total still exceeds the
+        # per-build-type cap. Either signal means FullScan latched onto noise
+        # rather than real icons.
+        dropped = [(s, len(b)) for s, b in result.items()
+                   if len(b) > _FULLSCAN_MAX_PER_SLOT]
+        if dropped:
+            for s, _ in dropped:
+                del result[s]
+            _slog.warning(
+                f'LayoutDetector FullScan: dropped slot-group(s) over '
+                f'{_FULLSCAN_MAX_PER_SLOT}-bbox cap: {dropped} '
+                f'(likely false positives — dedicated detector should have '
+                f'handled this panel)')
+        total_cap = _FULLSCAN_MAX_TOTAL.get(build_type, _FULLSCAN_DEFAULT_TOTAL)
+        total = sum(len(v) for v in result.values())
+        if total > total_cap:
+            _slog.warning(
+                f'LayoutDetector FullScan: {total} bboxes exceeds {build_type} '
+                f'cap {total_cap} — discarding all FullScan output')
+            return {}
 
         _slog.info(f'LayoutDetector FullScan: {len(result)} slots → {list(result.keys())}')
         return result
