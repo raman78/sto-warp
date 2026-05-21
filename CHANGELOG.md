@@ -5,6 +5,43 @@ All notable changes to **sto-warp** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.3] — 2026-05-21
+
+Targeted bug fixes on top of 1.0.2 — review-panel data integrity in
+the trainer plus a new `Clear All BBoxes` action.
+
+### Added
+- `Clear All BBoxes` button alongside `+ Add BBox` / `- Remove BBox`
+  in WARP CORE. Confirmation dialog offers three paths: **Yes**
+  (remove everything, confirmed bboxes are also wiped from
+  `annotations.json` via `_data_mgr.remove_annotation` + `save()`),
+  **Spare All Confirmed** (only available when both pending and
+  confirmed bboxes exist on the image), or **Cancel** (default).
+  Logs the outcome to `warp_detection_core.log`.
+
+### Fixed
+- WARP CORE: clicking a Ship Tier (or Ship Type) row in the review
+  list now actually populates the matching combo in the **Annotate
+  Selected Icon** panel. `_on_review_row_changed` only wrote into
+  `_name_edit`, which is hidden for NON_ICON_SLOTS — the tier/type
+  combos stayed on whatever value they had last (typically T1 or the
+  first ship in the dropdown), so the panel disagreed with the
+  highlighted row. Now the NON_ICON_SLOT branch routes the row's
+  `name` into `_tier_combo` / `_ship_type_combo` directly.
+- WARP CORE: stale confirmed annotation no longer silently shadows a
+  freshly-detected value for the same bbox+slot. `_populate_review_panel`
+  used `ann_id = hash(bbox + slot)` (no `name`), so re-running
+  Auto-Detect Slots and getting `Ship Tier`=T6-X2 was overwritten by
+  an older confirmed T1 on disk. Now, when the fresh name disagrees
+  with the saved one, the fresh value wins and the row is demoted to
+  `pending` so the user re-confirms — with an `info` log line.
+- WARP CORE: confirming Ship Type / Ship Tier with an empty combo no
+  longer silently blanks the row. `_on_accept` falls back to the
+  row's `name` / `orig_name` when the editor widget is empty,
+  preventing the "after Confirm the Ship Type disappears from the
+  bbox" footgun (OCR timing or an empty `_on_item_selected` payload
+  used to cause this).
+
 ## [1.0.2] — 2026-05-21
 
 Progress-bar unification across WARP and WARP CORE, plus a small

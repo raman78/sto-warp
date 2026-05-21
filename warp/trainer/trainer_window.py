@@ -946,8 +946,16 @@ class WarpCoreWindow(QMainWindow):
         self._btn_remove_item = QPushButton('- Remove BBox')
         self._btn_remove_item.setStyleSheet(danger_btn_style())
         self._btn_remove_item.clicked.connect(self._on_remove_item)
+        self._btn_clear_all_bboxes = QPushButton('Clear All BBoxes')
+        self._btn_clear_all_bboxes.setStyleSheet(danger_btn_style())
+        self._btn_clear_all_bboxes.setToolTip(
+            'Remove every bbox on the current screenshot. A confirmation dialog '
+            'offers the option to spare bboxes already marked confirmed.'
+        )
+        self._btn_clear_all_bboxes.clicked.connect(self._on_clear_all_bboxes)
         mgmt.addWidget(self._btn_add_bbox)
         mgmt.addWidget(self._btn_remove_item)
+        mgmt.addWidget(self._btn_clear_all_bboxes)
         pl.addLayout(mgmt)
         self._manual_mode_lbl = QLabel('')
         self._manual_mode_lbl.setStyleSheet(f'color:{C_WARNING};font-size:10px;background:{MBG};border:1px solid {LBG};border-radius:3px;padding:3px;')
@@ -1621,7 +1629,29 @@ class WarpCoreWindow(QMainWindow):
             if bbox:
                 aid = _Ann(bbox=bbox, slot=ri.get('slot',''), name=ri.get('name','')).ann_id
                 if aid in confirmed_by_id:
-                    ri = dict(confirmed_by_id[aid])
+                    confirmed = confirmed_by_id[aid]
+                    fresh_name = (ri.get('name') or '').strip()
+                    saved_name = (confirmed.get('name') or '').strip()
+                    # If fresh recognition disagrees with what's stored on
+                    # disk for the same bbox+slot, prefer the fresh value
+                    # and demote to pending so the user re-confirms. The
+                    # previous behaviour silently kept the disk name —
+                    # which let stale Ship Tier annotations (e.g. T1)
+                    # shadow a freshly-detected T6-X2 because ann_id is
+                    # hash(bbox+slot) and ignores name.
+                    if fresh_name and saved_name and fresh_name != saved_name:
+                        log.info(
+                            f'populate: fresh recognition disagrees with '
+                            f'confirmed annotation — slot={ri.get("slot")!r} '
+                            f'bbox={bbox} disk={saved_name!r} fresh={fresh_name!r} '
+                            f'→ using fresh, state=pending'
+                        )
+                        ri = dict(ri)
+                        ri['state'] = 'pending'
+                        ri['auto_confirmed'] = False
+                        ri['ann_id'] = confirmed.get('ann_id', aid)
+                    else:
+                        ri = dict(confirmed)
                 seen_ids.add(aid)
             merged.append(ri)
         for aid, ci in confirmed_by_id.items():
@@ -1750,12 +1780,37 @@ class WarpCoreWindow(QMainWindow):
                 # currentIndexChanged if the numerical index didn't change (e.g. after
                 # _refresh_slot_combo rebuilt the combo), leaving a stale label/state.
                 self._configure_name_field(combo_slot)
-                # Set name field directly (slot already set above, skip _on_slot_changed clear)
-                self._name_edit.blockSignals(True)
-                self._name_edit.setText(ri['name'])
-                self._name_edit.blockSignals(False)
-                if hasattr(self, '_completer'):
-                    self._completer.setCompletionPrefix(ri['name'])
+                # Sync the right input widget for the row's slot. NON_ICON_SLOTS
+                # (Ship Tier / Ship Type) use dedicated combos that are visible
+                # instead of _name_edit — without this branch the combos kept
+                # whatever was in them last (typically T1 / first ship type),
+                # which made the Annotate panel disagree with the review row.
+                row_name = ri.get('name', '') or ''
+                if slot == 'Ship Tier':
+                    idx_t = self._tier_combo.findText(row_name)
+                    self._tier_combo.blockSignals(True)
+                    if idx_t >= 0:
+                        self._tier_combo.setCurrentIndex(idx_t)
+                    else:
+                        self._tier_combo.setCurrentIndex(-1)
+                    self._tier_combo.blockSignals(False)
+                elif slot == 'Ship Type':
+                    if self._ship_type_combo.count() == 0:
+                        self._populate_ship_type_combo()
+                    self._ship_type_combo.blockSignals(True)
+                    idx_s = self._ship_type_combo.findText(row_name)
+                    if idx_s >= 0:
+                        self._ship_type_combo.setCurrentIndex(idx_s)
+                    else:
+                        self._ship_type_combo.lineEdit().setText(row_name)
+                    self._ship_type_combo.blockSignals(False)
+                else:
+                    # Icon slots + Ship Name: text input is _name_edit.
+                    self._name_edit.blockSignals(True)
+                    self._name_edit.setText(row_name)
+                    self._name_edit.blockSignals(False)
+                    if hasattr(self, '_completer'):
+                        self._completer.setCompletionPrefix(row_name)
                 if ri.get('bbox'):
                     self._ann_widget.set_highlighted_row(row)
                 else:
@@ -1891,6 +1946,94 @@ class WarpCoreWindow(QMainWindow):
         if self._current_idx >= 0:
             _stype = self._screen_types.get(self._screenshots[self._current_idx].name, 'UNKNOWN')
             self._refresh_slot_combo(_stype)
+
+    def _on_clear_all_bboxes(self):
+        """Remove every bbox on the current screenshot.
+
+        Three-way dialog: clear all, clear only pending (spare confirmed),
+        or cancel. Confirmed bboxes that get cleared are also wiped from
+        the on-disk annotations file via `_data_mgr.remove_annotation`,
+        same as the single-item Remove flow."""
+        if self._current_idx < 0 or not self._recognition_items:
+            return
+        path = self._screenshots[self._current_idx]
+        total = len(self._recognition_items)
+        confirmed_count = sum(
+            1 for ri in self._recognition_items if ri.get('state') == 'confirmed'
+        )
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle('Clear all bboxes')
+        if confirmed_count:
+            msg = (
+                f'Remove all {total} bbox(es) from "{path.name}"?\n\n'
+                f'{confirmed_count} are confirmed — they will also be '
+                f'deleted from the saved annotations on disk.'
+            )
+        else:
+            msg = (
+                f'Remove all {total} bbox(es) from "{path.name}"?\n\n'
+                f'None of them are confirmed yet.'
+            )
+        box.setText(msg)
+        btn_yes = box.addButton('Yes', QMessageBox.ButtonRole.DestructiveRole)
+        btn_spare = None
+        if confirmed_count and confirmed_count < total:
+            btn_spare = box.addButton('Spare All Confirmed',
+                                      QMessageBox.ButtonRole.ActionRole)
+        btn_no = box.addButton('Cancel', QMessageBox.ButtonRole.RejectRole)
+        box.setDefaultButton(btn_no)
+        box.exec()
+        clicked = box.clickedButton()
+        if clicked is btn_no or clicked is None:
+            return
+
+        spare_confirmed = (clicked is btn_spare)
+        removed = 0
+        kept: list[dict] = []
+        for ri in self._recognition_items:
+            if spare_confirmed and ri.get('state') == 'confirmed':
+                kept.append(ri)
+                continue
+            if ri.get('state') == 'confirmed' and ri.get('bbox'):
+                for ann in self._data_mgr.get_annotations(path):
+                    if ann.bbox == ri['bbox']:
+                        self._data_mgr.remove_annotation(path, ann)
+                        break
+            removed += 1
+        if removed:
+            self._data_mgr.save()
+        self._recognition_items = kept
+
+        log.info(
+            f'clear_all_bboxes: image={path.name} removed={removed} '
+            f'kept={len(kept)} spare_confirmed={spare_confirmed}'
+        )
+
+        self._review_list.clear()
+        for ri in self._recognition_items:
+            self._add_review_row(
+                ri.get('name', ''), ri.get('slot', ''),
+                ri.get('conf', 0.0),
+                confirmed=(ri.get('state') == 'confirmed'),
+                cross_check_failed=ri.get('cross_check_failed', False),
+                auto_confirmed=ri.get('auto_confirmed', False),
+            )
+        self._exit_manual_bbox_mode()
+        self._recognition_cache[path.name] = list(self._recognition_items)
+        self._ann_widget.refresh_annotations(path)
+        self._ann_widget.set_review_items(self._recognition_items)
+        self._ann_widget.clear_highlight()
+        self._ann_widget.update()
+        self._set_review_buttons_enabled(False)
+        self._update_progress()
+        _stype = self._screen_types.get(path.name, 'UNKNOWN')
+        self._refresh_slot_combo(_stype)
+        self.statusBar().showMessage(
+            f'Cleared {removed} bbox(es) from {path.name}'
+            + (f' — kept {len(kept)} confirmed.' if spare_confirmed and kept else '.')
+        )
 
     def _enter_manual_bbox_mode(self):
         pass  # Resize/move disabled — reserved for future implementation
@@ -2781,6 +2924,34 @@ class WarpCoreWindow(QMainWindow):
             name = self._ship_type_combo.currentText().strip()
         else:
             name = self._name_edit.text().strip()
+        # NON_ICON_SLOTS guard: if the user clicks Accept while the Ship
+        # Type / Tier editor is empty (combo was blanked because OCR
+        # hadn't run yet, or _on_item_selected fed it an empty `name`),
+        # don't silently wipe whatever the row already had — fall back
+        # to the row's own `name` / `orig_name`. Stops the "after Confirm
+        # the Ship Type disappears from the bbox" footgun. The user can
+        # still clear it deliberately by deleting the text and re-picking.
+        if slot in ('Ship Type', 'Ship Tier') and not name:
+            _row = self._review_list.currentRow()
+            if 0 <= _row < len(self._recognition_items):
+                _ri = self._recognition_items[_row]
+                fallback = (_ri.get('name') or _ri.get('orig_name') or '').strip()
+                if fallback:
+                    log.info(
+                        f'accept: {slot} editor was empty — keeping prior '
+                        f'value {fallback!r} from recognition row'
+                    )
+                    name = fallback
+                    if slot == 'Ship Tier':
+                        idx = self._tier_combo.findText(name)
+                        if idx >= 0:
+                            self._tier_combo.setCurrentIndex(idx)
+                    else:
+                        idx = self._ship_type_combo.findText(name)
+                        if idx >= 0:
+                            self._ship_type_combo.setCurrentIndex(idx)
+                        else:
+                            self._ship_type_combo.lineEdit().setText(name)
         # Strict name validation for icon slots: only allow exact matches
         # against the slot's candidate list (or empty = Unknown). NON_ICON_SLOTS
         # have their own widgets/use cases (Ship Name = free text, Ship Type/Tier
