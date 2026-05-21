@@ -95,12 +95,18 @@ class LauncherWindow(QMainWindow):
         if not _core_icon.isNull():
             self._tabs.setTabIcon(core_idx, _core_icon)
 
-        self._log_view = LogViewWidget(channel='detection')
-        self._tabs.addTab(self._log_view, 'Detection logs')
-        # Wipe the live log every time WARP starts a fresh run — keeps
-        # noise from earlier runs out of the new run's summary.
-        self._warp_win.detection_started.connect(self._log_view.clear_live)
+        # Main-thread detection-log routing follows the active tab so any
+        # synchronous `log.info(...)` from a UI callback lands in the
+        # tool the user is currently looking at. Worker threads override
+        # this per-thread via `use_detection_channel`, so concurrent
+        # background runs in the other tool still keep their own scope.
+        self._warp_idx = warp_idx
+        self._core_idx = core_idx
+        self._tabs.currentChanged.connect(self._on_main_tab_changed)
+        self._on_main_tab_changed(self._tabs.currentIndex())
 
+        # Detection logs live in each tool's own window (WARP / WARP CORE)
+        # now — the launcher only hosts cross-tool concerns.
         self._syslog_view = LogViewWidget(channel='system')
         self._tabs.addTab(self._syslog_view, 'System logs')
 
@@ -143,6 +149,13 @@ class LauncherWindow(QMainWindow):
         except Exception as e:
             log.debug(f'Launcher: desktop install skipped: {e}')
 
+    def _on_main_tab_changed(self, idx: int):
+        from warp.debug import set_main_detection_channel
+        if idx == self._core_idx:
+            set_main_detection_channel('detection_core')
+        else:
+            set_main_detection_channel('detection')
+
     def _on_refresh_clicked(self):
         self._coord.request_refresh(force=True)
 
@@ -183,6 +196,12 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(argv or sys.argv)
     QApplication.setOrganizationName('sto-warp')
     QApplication.setApplicationName('sto-warp')
+    # Apply the active theme (warp.themes.get_active) before any window
+    # is built — Qt cascades the QApplication-level palette + stylesheet
+    # to every subsequently constructed widget, so WARP and WARP CORE
+    # share the same look without each having to call apply_dark_style.
+    from warp.style import apply_dark_style
+    apply_dark_style(app)
     win = LauncherWindow()
     win.show()
     return app.exec()

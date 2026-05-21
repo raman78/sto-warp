@@ -755,6 +755,99 @@ class ShipDB:
         self.last_match_strategy = 'keyword-fallback'
         return _type_keyword_profile(ship_type, ship_tier)
 
+    def find_class_by_candidates(
+        self, candidates: list[str], cutoff: float = 0.85,
+    ) -> dict | None:
+        """Best-effort ship lookup from a list of raw OCR tokens.
+
+        Used by `WarpImporter._process_image` when `TextExtractor` could
+        not find a name-prefix or tier anchor (so `ship_type` came out
+        empty), but the OCR token cloud may still contain the actual
+        class name. Each token is tried in order against:
+          1. exact type-key match,
+          2. exact display-name match,
+          3. fuzzy display-name match at `cutoff` (default 0.85 — tight
+             enough to avoid false matches against the 783-entry DB).
+        Returns the first matching ship_list.json entry or None.
+        """
+        hit = self.find_class_by_candidates_ex(candidates, cutoff)
+        return hit[0] if hit else None
+
+    def find_class_by_candidates_ex(
+        self, candidates: list[str], cutoff: float = 0.85,
+    ) -> tuple[dict, str] | None:
+        """Like `find_class_by_candidates` but also returns the winning
+        token (verbatim, from the input list) so callers can recover the
+        OCR bbox via parallel-index lookup."""
+        if not candidates or not self._ships:
+            return None
+        ranked = [c for c in candidates if c and len(c.strip()) >= 5]
+        # Longer tokens first — more discriminative against the DB.
+        ranked.sort(key=lambda c: len(c.strip()), reverse=True)
+        disp_strings = [s for s, _ in self._display_strings]
+        for orig in ranked:
+            low = orig.strip().lower()
+            entry = self._by_type.get(low)
+            if entry:
+                return entry, orig
+            for s, ship in self._display_strings:
+                if s == low:
+                    return ship, orig
+            m = get_close_matches(low, disp_strings, n=1, cutoff=cutoff)
+            if m:
+                for s, ship in self._display_strings:
+                    if s == m[0]:
+                        return ship, orig
+        return None
+
+    def resolve(self, ship_name: str, ship_type: str,
+                ship_tier: str = '',
+                anchorless_candidates: list[str] | None = None,
+                ) -> 'ShipResolution':
+        """Single entry point for ship identification + slot profile.
+
+        Runs `get_profile` (the 4-strategy lookup), then promotes the
+        canonical ship class string from ship_list.json over OCR's raw
+        ship_type whenever a real DB match was found. The returned
+        `ShipResolution` is what downstream code should consult — its
+        `name`/`type`/`tier` fields are the values to put into
+        `ImportResult` and any user-visible preview.
+
+        When `ship_type` is empty (TextExtractor could not find an
+        anchor) and `anchorless_candidates` are supplied, runs
+        `find_class_by_candidates` as a last-resort rescue: on a hit
+        `ship_type` is promoted to the canonical class string and the
+        lookup re-runs, with strategy reported as `anchorless-rescue`.
+        """
+        rescued = False
+        rescue_token = ''
+        if not ship_type.strip() and anchorless_candidates:
+            hit = self.find_class_by_candidates_ex(anchorless_candidates)
+            if hit:
+                entry, rescue_token = hit
+                ship_type = str(entry.get('name') or '').strip()
+                rescued = True
+        profile = self.get_profile(ship_name, ship_type, ship_tier)
+        strategy = self.last_match_strategy or 'no-match'
+        matched = (isinstance(self.last_match, dict)
+                   and strategy != 'keyword-fallback')
+        if rescued and matched:
+            strategy = 'anchorless-rescue'
+        if matched:
+            # `name` in ship_list.json is the canonical full class string
+            # ('Vo'Quv Carrier'); `type` is the generic word ('Carrier').
+            # OCR reads the full class string, so we replace ship_type with
+            # the canonical `name` to defeat OCR typos downstream.
+            canon_type = str(self.last_match.get('name') or '').strip() or ship_type
+        else:
+            canon_type = ship_type
+        return ShipResolution(
+            name=ship_name, type=canon_type, tier=ship_tier,
+            profile=profile, strategy=strategy, matched=matched,
+            ocr_name=ship_name, ocr_type=ship_type,
+            rescue_token=rescue_token if rescued and matched else '',
+        )
+
     def _entry_to_profile(self, e: dict, ship_tier: str = '') -> dict[str, int]:
         """Map ship_list.json fields to WARP slot profile, then apply
         ship-type and tier bonuses via `_apply_ship_and_tier_bonuses`.
@@ -878,6 +971,96 @@ class ImportResult:
     # including those that yielded zero recognised items — along with the
     # screen-type the autodetector settled on for each one.
     per_file:     dict = field(default_factory=dict)
+
+
+@dataclass
+class ShipResolution:
+    """Canonical ship identification + slot profile from ShipDB.
+
+    Returned by `ShipDB.resolve`: holds the values that downstream code
+    should use. When the lookup found a real ship_list.json entry
+    (strategy ≠ 'keyword-fallback') the OCR'd `ship_type` is replaced
+    with the canonical class string from the DB, shielding consumers
+    (preview, build writer, logs) from OCR typos. The raw OCR values
+    are kept under `ocr_*` for diagnostics.
+    """
+    name:     str                          # OCR ship_name, untouched
+    type:     str                          # canonical class (DB) or OCR fallback
+    tier:     str                          # echoed from OCR (DB doesn't override tier)
+    profile:  dict[str, int]               # slot counts after bonuses
+    strategy: str                          # ShipDB.last_match_strategy
+    matched:  bool                         # True iff strategy ≠ 'keyword-fallback'
+    ocr_name: str                          # raw OCR ship_name (diagnostics)
+    ocr_type: str                          # raw OCR ship_type (diagnostics)
+    # The candidate string that won the anchorless-rescue lookup, if any.
+    # Lets callers map back to the OCR token's bbox for preview overlay.
+    rescue_token: str = ''
+
+
+# Canonical slot order for the detection-log table. Slots present in the
+# resolved profile with count > 0 are listed in this order; anything left
+# over (defensive — should not happen) is appended at the end.
+_SLOT_LOG_ORDER: tuple[str, ...] = (
+    'Fore Weapons', 'Aft Weapons', 'Experimental',
+    'Deflector', 'Sec-Def', 'Engines', 'Warp Core', 'Shield',
+    'Devices', 'Hangars',
+    'Engineering Consoles', 'Science Consoles', 'Tactical Consoles',
+    'Universal Consoles',
+    'Personal Space Traits', 'Personal Ground Traits', 'Starship Traits',
+    'Space Reputation', 'Ground Reputation',
+    'Active Space Rep', 'Active Ground Rep',
+    'Boff Tactical', 'Boff Engineering', 'Boff Science',
+    'Boff Command', 'Boff Intelligence', 'Boff Pilot',
+    'Boff Miracle Worker', 'Boff Temporal',
+)
+
+
+def _log_ship_resolution(
+    resolution: ShipResolution | None,
+    profile: dict[str, int],
+    build_type: str,
+    log_fn,
+) -> None:
+    """Emit a human-readable header + slot table describing the final
+    ship resolution and slot counts after all bonuses have been applied.
+    Drives the "what did the importer actually decide?" section of the
+    detection log.
+    """
+    sep = '─' * 60
+    log_fn(sep)
+    if resolution is not None:
+        tag = 'DB match' if resolution.matched else 'fallback'
+        log_fn(f'  Ship  : {resolution.name or "—"}')
+        log_fn(f'  Class : {resolution.type or "—"}')
+        log_fn(f'  Tier  : {resolution.tier or "—"}')
+        log_fn(f'  Match : {resolution.strategy} ({tag})')
+        if resolution.matched and resolution.ocr_type and \
+                resolution.ocr_type.strip().lower() != resolution.type.strip().lower():
+            log_fn(f'  OCR   : type={resolution.ocr_type!r} → corrected to {resolution.type!r}')
+    else:
+        log_fn(f'  Build : {build_type}  (no ship-bound profile)')
+    log_fn(sep)
+
+    rows: list[tuple[str, int]] = []
+    seen: set[str] = set()
+    for slot in _SLOT_LOG_ORDER:
+        v = profile.get(slot, 0)
+        if v > 0:
+            rows.append((slot, v))
+            seen.add(slot)
+    for slot, v in profile.items():
+        if v > 0 and slot not in seen:
+            rows.append((slot, v))
+
+    if rows:
+        name_w = max(len(s) for s, _ in rows)
+        log_fn(f'  {"Slot".ljust(name_w)}   Count')
+        log_fn(f'  {"-" * name_w}   -----')
+        for slot, count in rows:
+            log_fn(f'  {slot.ljust(name_w)}   {count:>5}')
+    else:
+        log_fn('  (no slots populated)')
+    log_fn(sep)
 
 
 # ── WarpImporter ───────────────────────────────────────────────────────────────
@@ -1198,26 +1381,41 @@ class WarpImporter:
                    f'ocr_build={_ocr_bt!r} → using build_type={build_type!r}'
                    f'{" (trainer override)" if _is_trainer_call else ""}')
 
-        # Step 2 — get exact slot profile from ship_list.json
-        # Skip for GROUND/GROUND_MIXED — ShipDB contains space ship data only
+        # Step 2 — resolve ship → canonical fields + slot profile via ShipDB.
+        # Skip for GROUND/GROUND_MIXED — ShipDB contains space ship data only.
         _is_ground = build_type in ('GROUND', 'GROUND_MIXED')
         _no_ship_profile = _is_ground or build_type in ('SPEC', 'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
                                                          'SPACE_TRAITS', 'GROUND_TRAITS')
         ship_tier = text_info.get('ship_tier', '')
+        resolution: ShipResolution | None = None
         if _no_ship_profile:
             profile = {}
             _slog.info(f'WarpImporter: {build_type} build — skipping ShipDB lookup')
         else:
-            _db = self._get_shipdb()
-            profile = _db.get_profile(ship_name, ship_type, ship_tier)
-            _m = _db.last_match
-            _strategy = _db.last_match_strategy or 'no-match'
-            _matched_name = _m.get('name', '?') if isinstance(_m, dict) else '—'
-            _matched_type = _m.get('type', '?') if isinstance(_m, dict) else '—'
-            _slog.info(
-                f'WarpImporter: ShipDB lookup name={ship_name!r} type={ship_type!r} tier={ship_tier!r} '
-                f'→ matched [{_strategy}] name={_matched_name!r} type={_matched_type!r}')
-            _slog.info(f'WarpImporter: ShipDB profile: {dict((k,v) for k,v in profile.items() if v)}')
+            resolution = self._get_shipdb().resolve(
+                ship_name, ship_type, ship_tier,
+                anchorless_candidates=text_info.get('anchorless_candidates') or None,
+            )
+            profile = resolution.profile
+            # Canonical class string from ship_list.json wins over OCR when a
+            # real DB match was found — defeats OCR typos in preview / writer.
+            if resolution.matched:
+                ship_type = resolution.type
+            # Anchorless-rescue: propagate the winning OCR token's bbox into
+            # text_info so the preview overlay draws it like a normal anchor
+            # hit. Bbox list is parallel to anchorless_candidates from
+            # TextExtractor; match by candidate string.
+            if (resolution.strategy == 'anchorless-rescue'
+                    and resolution.rescue_token
+                    and not text_info.get('ship_type_bbox')):
+                cands = text_info.get('anchorless_candidates') or []
+                bboxes = text_info.get('anchorless_candidate_bboxes') or []
+                try:
+                    idx = cands.index(resolution.rescue_token)
+                except ValueError:
+                    idx = -1
+                if 0 <= idx < len(bboxes):
+                    text_info['ship_type_bbox'] = bboxes[idx]
 
         # Game caps for Traits / Rep / Active Rep / BOFF fallbacks (both paths).
         # BOFF counts from _boff_profile_from_shipdb already set above; these
@@ -1226,21 +1424,16 @@ class WarpImporter:
             if max_val > profile.get(slot, 0):
                 profile[slot] = max_val
 
-        # Ship-bound paths (ShipDB / keyword fallback) already applied ship-type
-        # and tier bonuses inside _entry_to_profile / _type_keyword_profile.
-        # For no-ship paths (SPACE_TRAITS etc.) the profile started empty and
-        # _GAME_SLOT_MAXES just seeded Starship Traits=5 above — apply the
-        # tier-X/X2 bump here so SPACE_TRAITS panels at T6-X/-X2 get +1/+2.
+        # Ship-bound paths already applied ship-type and tier bonuses inside
+        # `_entry_to_profile` / `_type_keyword_profile`. For no-ship paths
+        # (SPACE_TRAITS etc.) the profile started empty and _GAME_SLOT_MAXES
+        # just seeded Starship Traits=5 above — apply the tier-X/X2 bump here
+        # so SPACE_TRAITS panels at T6-X/-X2 get +1/+2.
         if _no_ship_profile:
-            _before_st = profile.get('Starship Traits', 0)
             _apply_ship_and_tier_bonuses(profile, None, ship_tier)
-            if profile.get('Starship Traits', 0) != _before_st:
-                _slog.info(f'WarpImporter: {ship_tier} — Starship Traits '
-                           f'{_before_st} → {profile["Starship Traits"]}')
 
-        _slog.debug(f'WarpImporter: final profile (traits/rep/boff): '
-                    f'{dict((k,v) for k,v in profile.items() if "Boff" in k or "Trait" in k or "Rep" in k)}')
-
+        # Final, human-readable summary of what the importer decided.
+        _log_ship_resolution(resolution, profile, build_type, _slog.info)
 
         result = ImportResult(
             build_type   = build_type,

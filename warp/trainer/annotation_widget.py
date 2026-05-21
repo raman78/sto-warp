@@ -738,6 +738,15 @@ class AnnotationWidget(QWidget):
                 self.adjustSize()
                 self.update()
             return False
+        # Window deactivation (Alt+Tab, focus to another app) — release any
+        # modifier-override cursor. Otherwise the KeyRelease for Alt fires
+        # on the *next* window and our isActiveWindow() gate below skips
+        # it, leaving the crosshair stuck system-wide until the user comes
+        # back to the canvas and presses Alt again.
+        if etype == QEvent.Type.WindowDeactivate:
+            if self._mod_cursor_active and not self._drawing:
+                self._clear_mod_cursor()
+            return False
         if etype in (QEvent.Type.MouseMove, QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
             # Only react when WARP CORE window is active
             _top = self.window()

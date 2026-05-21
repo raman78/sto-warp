@@ -15,6 +15,7 @@ filter on the channel they belong to.
 """
 from __future__ import annotations
 
+import contextlib
 import os
 import sys
 import threading
@@ -23,7 +24,16 @@ from pathlib import Path
 from typing import Callable
 
 
-CHANNELS = ('detection', 'system')
+# 'detection'      — WARP recognition pipeline (default)
+# 'detection_core' — WARP CORE trainer detection / classification
+# 'system'         — sync, model updates, infrastructure
+#
+# WARP and WARP CORE share the same underlying recognition code, but each
+# tool's GUI shows its own Detection Logs tab. To keep the two tabs from
+# polluting each other we route writes from `log.*` through a thread-local
+# channel override (`use_detection_channel`) so each tool's worker thread
+# writes to its own file/subscription stream.
+CHANNELS = ('detection', 'detection_core', 'system')
 
 
 def _default_log_dir() -> Path:
@@ -90,6 +100,50 @@ def log_paths(channel: str = 'detection') -> tuple[Path, Path]:
     return _paths.get(channel, _paths['detection'])
 
 
+# ── Thread-local detection-channel routing ────────────────────────────────
+# `log` (channel='detection') resolves the active channel on every write
+# via this thread-local, so a worker thread can opt into 'detection_core'
+# without every call site needing to know about it. Main-thread default
+# can be set via `set_main_detection_channel` (e.g. tied to the active
+# launcher tab).
+
+_thread_local = threading.local()
+_main_default = 'detection'
+
+
+def set_main_detection_channel(name: str) -> None:
+    """Sticky channel for any thread that hasn't pushed its own override.
+    Intended for the launcher: switch when the user moves between tabs."""
+    global _main_default
+    if name not in CHANNELS:
+        raise ValueError(f'unknown channel {name!r}')
+    _main_default = name
+
+
+def _resolve_detection_channel() -> str:
+    return getattr(_thread_local, 'detection_channel', _main_default)
+
+
+@contextlib.contextmanager
+def use_detection_channel(name: str):
+    """Route `log.*` writes on the current thread to `name` until exit.
+    No-op for non-detection loggers (syslog is unaffected)."""
+    if name not in CHANNELS:
+        raise ValueError(f'unknown channel {name!r}')
+    prev = getattr(_thread_local, 'detection_channel', None)
+    _thread_local.detection_channel = name
+    try:
+        yield
+    finally:
+        if prev is None:
+            try:
+                del _thread_local.detection_channel
+            except AttributeError:
+                pass
+        else:
+            _thread_local.detection_channel = prev
+
+
 def _write(channel: str, level: str, msg: str) -> None:
     ts  = datetime.now().strftime('%H:%M:%S.%f')[:-3]
     line = f'{ts}  [{level}]  {msg}'
@@ -123,15 +177,24 @@ def clear_logs(channel: str = 'detection') -> None:
 
 
 class _Log:
-    """Channel-bound logger facade. `log.info(...)` writes to one file."""
+    """Channel-bound logger facade. `log.info(...)` writes to one file.
+
+    Special case: when constructed with channel='detection', writes go
+    to whichever detection channel the thread (or launcher tab) has
+    selected — see `use_detection_channel` and
+    `set_main_detection_channel`. All other channels are static."""
 
     def __init__(self, channel: str):
         self._ch = channel
+        self._dynamic = (channel == 'detection')
 
-    def info(self, msg):    _write(self._ch, 'INFO ', str(msg))
-    def debug(self, msg):   _write(self._ch, 'DEBUG', str(msg))
-    def warning(self, msg): _write(self._ch, 'WARN ', str(msg))
-    def error(self, msg):   _write(self._ch, 'ERROR', str(msg))
+    def _resolve(self) -> str:
+        return _resolve_detection_channel() if self._dynamic else self._ch
+
+    def info(self, msg):    _write(self._resolve(), 'INFO ', str(msg))
+    def debug(self, msg):   _write(self._resolve(), 'DEBUG', str(msg))
+    def warning(self, msg): _write(self._resolve(), 'WARN ', str(msg))
+    def error(self, msg):   _write(self._resolve(), 'ERROR', str(msg))
 
 
 # Default channel: detection. Use `from warp.debug import log`.

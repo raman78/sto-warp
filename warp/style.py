@@ -1,28 +1,36 @@
 # warp/style.py
-# SETS-matching dark theme for WARP and WARP CORE windows.
-# Colors are taken directly from main.py Launcher.theme['defaults'].
+# Theme-aware QSS / button helpers for WARP and WARP CORE windows.
+# Color values are NOT defined here — they come from `warp.themes` so a
+# new palette can be added by editing one file and (optionally) setting
+# the `WARP_THEME` env var. The chrome and semantic-color names below are
+# re-exported as module attributes for backwards compat with callers that
+# do `from warp.style import BG, FG, ACCENT, …`.
 
 from PySide6.QtGui import QPalette, QColor
 from PySide6.QtWidgets import QWidget
 
-# ── Color constants (match SETS main.py theme['defaults']) ───────────────────
-BG     = '#1a1a1a'   # background
-MBG    = '#242424'   # medium background
-LBG    = '#404040'   # light background
-ACCENT = '#c59129'   # SETS gold accent
-FG     = '#eeeeee'   # foreground text
-MFG    = '#bbbbbb'   # secondary text / hints
-BC     = '#888888'   # border color
+from warp.themes import get_active as _get_theme
 
-# Semantic colors — used for review list item states and status labels.
-# These intentionally differ from the UI chrome so users can read status at a glance.
-C_CONFIRMED  = '#7effc8'   # green  — confirmed annotation / annotated file
-C_ERROR      = '#ff5555'   # red    — unmatched / error
-C_CONF_HIGH  = '#ffaaaa'   # soft red — high-confidence pending
-C_CONF_MED   = '#ff8888'   # medium red — medium-confidence pending
-C_WARNING    = '#e8c060'   # amber  — warnings / attention labels
-C_SUCCESS    = '#7effc8'   # green  — training complete
-C_FAILURE    = '#ff7e7e'   # red    — training failed
+_T = _get_theme()
+
+# ── Chrome ───────────────────────────────────────────────────────────────────
+BG     = _T.BG
+MBG    = _T.MBG
+LBG    = _T.LBG
+ACCENT = _T.ACCENT
+FG     = _T.FG
+MFG    = _T.MFG
+BC     = _T.BC
+TAB_SEL_BG = _T.TAB_SEL_BG
+
+# ── Semantic state colors ────────────────────────────────────────────────────
+C_CONFIRMED  = _T.C_CONFIRMED
+C_ERROR      = _T.C_ERROR
+C_CONF_HIGH  = _T.C_CONF_HIGH
+C_CONF_MED   = _T.C_CONF_MED
+C_WARNING    = _T.C_WARNING
+C_SUCCESS    = _T.C_SUCCESS
+C_FAILURE    = _T.C_FAILURE
 
 # ── Button style helpers ─────────────────────────────────────────────────────
 
@@ -38,13 +46,15 @@ def primary_btn_style() -> str:
     )
 
 def secondary_btn_style(checked_border: bool = False) -> str:
-    """Regular button — transparent background, gold border (matches SETS button)."""
-    checked = f'QPushButton:checked{{background:{MBG};border:2px solid {ACCENT};}}' if checked_border else ''
+    """Regular button — transparent background, neutral gray border.
+    Hover lifts to the accent color so the button still feels interactive
+    without shouting gold on every toolbar entry."""
+    checked = f'QPushButton:checked{{background:{MBG};border:1px solid {ACCENT};}}' if checked_border else ''
     return (
         f'QPushButton {{'
         f'background:transparent;color:{FG};'
-        f'border:1px solid {ACCENT};border-radius:3px;padding:4px 10px;}}'
-        f'QPushButton:hover{{border-color:{BC};}}'
+        f'border:1px solid {BC};border-radius:3px;padding:4px 10px;}}'
+        f'QPushButton:hover{{border-color:{ACCENT};}}'
         f'QPushButton:disabled{{color:{BC};border-color:{LBG};}}'
         + checked
     )
@@ -106,23 +116,23 @@ QLabel {{
     background-color: transparent;
     color: {FG};
 }}
-QPushButton {{
+QPushButton, QToolButton {{
     background-color: transparent;
     color: {FG};
-    border: 1px solid {ACCENT};
+    border: 1px solid {BC};
     border-radius: 3px;
     padding: 4px 10px;
 }}
-QPushButton:hover {{
-    border-color: {BC};
+QPushButton:hover, QToolButton:hover {{
+    border-color: {ACCENT};
 }}
-QPushButton:disabled {{
+QPushButton:disabled, QToolButton:disabled {{
     color: {BC};
     border-color: {LBG};
 }}
-QPushButton:checked {{
+QPushButton:checked, QToolButton:checked {{
     background-color: {MBG};
-    border: 2px solid {ACCENT};
+    border: 1px solid {ACCENT};
 }}
 QListWidget {{
     background-color: {MBG};
@@ -166,6 +176,11 @@ QComboBox {{
     border-radius: 2px;
     padding: 2px 5px;
 }}
+QComboBox:disabled {{
+    background-color: {MBG};
+    color: {BC};
+    border-color: {LBG};
+}}
 QComboBox QAbstractItemView {{
     background-color: {MBG};
     color: {FG};
@@ -175,6 +190,9 @@ QComboBox QAbstractItemView {{
 }}
 QComboBox::drop-down {{
     border-style: none;
+}}
+QComboBox::drop-down:disabled {{
+    background-color: {MBG};
 }}
 QRadioButton {{
     color: {FG};
@@ -267,6 +285,31 @@ QProgressBar::chunk {{
 QSplitter::handle {{
     background-color: {LBG};
 }}
+QTabWidget::pane {{
+    border: 1px solid {BC};
+    border-radius: 2px;
+    top: -1px;
+}}
+QTabBar::tab {{
+    background-color: {MBG};
+    color: {MFG};
+    border: 1px solid {BC};
+    border-bottom: none;
+    border-top-left-radius: 3px;
+    border-top-right-radius: 3px;
+    padding: 4px 12px;
+    margin-right: 2px;
+}}
+QTabBar::tab:hover {{
+    color: {FG};
+}}
+QTabBar::tab:selected {{
+    background-color: {TAB_SEL_BG};
+    color: {FG};
+}}
+QTabBar::tab:disabled {{
+    color: {BC};
+}}
 QStatusBar {{
     background-color: {MBG};
     color: {MFG};
@@ -311,8 +354,15 @@ QToolTip {{
 """
 
 
-def apply_dark_style(widget: QWidget) -> None:
-    """Apply the SETS-matching dark theme to a widget and all its children."""
+def apply_dark_style(target) -> None:
+    """Apply the active theme's palette + QSS.
+
+    `target` may be a QWidget (just that widget + its children) or a
+    QApplication (every widget that gets constructed afterwards). Both
+    classes expose `setPalette` / `setStyleSheet`, so the call works
+    via duck typing — call once on QApplication at startup to skin the
+    whole app, or per-window if you need to skin a popup that lives
+    outside the app's stylesheet."""
     palette = QPalette()
     palette.setColor(QPalette.ColorRole.Window,          QColor(BG))
     palette.setColor(QPalette.ColorRole.WindowText,      QColor(FG))
@@ -327,5 +377,5 @@ def apply_dark_style(widget: QWidget) -> None:
     palette.setColor(QPalette.ColorRole.ToolTipBase,     QColor(MBG))
     palette.setColor(QPalette.ColorRole.ToolTipText,     QColor(FG))
     palette.setColor(QPalette.ColorRole.PlaceholderText, QColor(MFG))
-    widget.setPalette(palette)
-    widget.setStyleSheet(WARP_QSS)
+    target.setPalette(palette)
+    target.setStyleSheet(WARP_QSS)

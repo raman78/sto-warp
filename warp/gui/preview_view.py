@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from warp.style import BG as _THEME_BG
 from warp.warp_importer import ImportResult, RecognisedItem
 
 
@@ -101,7 +102,7 @@ class _ImageCanvas(QWidget):
 
     def paintEvent(self, _e):
         p = QPainter(self)
-        p.fillRect(self.rect(), QColor(30, 30, 30))
+        p.fillRect(self.rect(), QColor(_THEME_BG))
         if self._pixmap is None:
             p.setPen(QColor(160, 160, 160))
             p.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter,
@@ -143,6 +144,11 @@ class _ImageCanvas(QWidget):
         f = QFont('Monospace')
         f.setPointSize(8)
         p.setFont(f)
+
+        # Per-bbox: rectangle + confidence number only. Slot name is
+        # rendered once per slot group as a row label below — the old
+        # per-bbox name labels overlapped each other and were illegible.
+        groups: dict[str, dict] = {}
         for it in self._items:
             if not it.bbox or len(it.bbox) < 4:
                 continue
@@ -155,13 +161,48 @@ class _ImageCanvas(QWidget):
             p.setPen(QPen(color, 2))
             p.setBrush(Qt.BrushStyle.NoBrush)
             p.drawRect(rx, ry, rw, rh)
-            label = it.slot or ''
             if it.confidence is not None:
-                label = f'{label}  {it.confidence:.2f}'
-            p.setPen(QPen(QColor(0, 0, 0, 200), 3))
-            p.drawText(rx + 2, max(ry - 2, 10), label)
-            p.setPen(color)
-            p.drawText(rx + 2, max(ry - 2, 10), label)
+                conf_txt = f'{it.confidence:.2f}'
+                p.setPen(QPen(QColor(0, 0, 0, 200), 3))
+                p.drawText(rx + 2, max(ry - 2, 10), conf_txt)
+                p.setPen(color)
+                p.drawText(rx + 2, max(ry - 2, 10), conf_txt)
+            slot = it.slot or ''
+            g = groups.setdefault(slot, {
+                'color': color, 'x0': rx, 'y0': ry,
+                'x1': rx + rw, 'y1': ry + rh,
+            })
+            g['x0'] = min(g['x0'], rx)
+            g['y0'] = min(g['y0'], ry)
+            g['x1'] = max(g['x1'], rx + rw)
+            g['y1'] = max(g['y1'], ry + rh)
+
+        # One row label per slot family. Placement:
+        #   BOFF  — centered above the row's bboxes (above the conf nums)
+        #   trait — to the RIGHT of the rightmost bbox, vertically centered
+        #   EQ    — to the LEFT of the leftmost bbox, vertically centered
+        gf = QFont('Monospace')
+        gf.setPointSize(10)
+        gf.setBold(True)
+        p.setFont(gf)
+        fm = p.fontMetrics()
+        for slot, g in groups.items():
+            s = slot.lower()
+            tw = fm.horizontalAdvance(slot)
+            th = fm.height()
+            if s.startswith('boff'):
+                lx = (g['x0'] + g['x1']) // 2 - tw // 2
+                ly = max(g['y0'] - 18, th)
+            elif 'trait' in s or 'reputation' in s or 'rep' == s.split()[-1]:
+                lx = g['x1'] + 8
+                ly = (g['y0'] + g['y1']) // 2 + th // 3
+            else:
+                lx = max(g['x0'] - tw - 8, 2)
+                ly = (g['y0'] + g['y1']) // 2 + th // 3
+            p.setPen(QPen(QColor(0, 0, 0, 220), 4))
+            p.drawText(lx, ly, slot)
+            p.setPen(g['color'])
+            p.drawText(lx, ly, slot)
 
 
 class PreviewView(QWidget):

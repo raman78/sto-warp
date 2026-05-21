@@ -20,13 +20,16 @@ import tempfile
 from pathlib import Path
 
 from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal
+from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QHeaderView, QLabel,
     QMainWindow, QMessageBox, QProgressBar, QPushButton, QTabWidget, QToolBar,
     QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout,
 )
 
+from warp.gui.log_view import LogViewWidget
 from warp.gui.preview_view import PreviewView
+from warp.style import LBG, primary_btn_style, secondary_btn_style
 
 from warp.debug import log
 from warp.warp_importer import (
@@ -85,20 +88,24 @@ class RecognitionWorker(QObject):
         self._build_type = build_type
 
     def run(self):
-        try:
-            importer = WarpImporter(
-                build_type=self._build_type,
-                progress_callback=lambda pct, label: self.stage.emit(pct, label),
-            )
-            result = importer.process_folder(
-                self._folder,
-                progress_cb=lambda done, total, name: self.progress.emit(done, total, name),
-            )
-        except Exception as e:
-            log.exception('RecognitionWorker failed')
-            self.failed.emit(f'{type(e).__name__}: {e}')
-            return
-        self.finished.emit(result)
+        from warp.debug import use_detection_channel
+        # Pin this worker's detection writes to the WARP-side channel so
+        # WARP CORE's Detection Logs tab stays clean.
+        with use_detection_channel('detection'):
+            try:
+                importer = WarpImporter(
+                    build_type=self._build_type,
+                    progress_callback=lambda pct, label: self.stage.emit(pct, label),
+                )
+                result = importer.process_folder(
+                    self._folder,
+                    progress_cb=lambda done, total, name: self.progress.emit(done, total, name),
+                )
+            except Exception as e:
+                log.exception('RecognitionWorker failed')
+                self.failed.emit(f'{type(e).__name__}: {e}')
+                return
+            self.finished.emit(result)
 
 
 class WarpWindow(QMainWindow):
@@ -129,10 +136,12 @@ class WarpWindow(QMainWindow):
         self.addToolBar(tb)
 
         self._open_files_btn = QPushButton('Open Screenshot…', self)
+        self._open_files_btn.setStyleSheet(secondary_btn_style())
         self._open_files_btn.clicked.connect(self._on_open_files)
         tb.addWidget(self._open_files_btn)
 
         self._open_folder_btn = QPushButton('Open Folder…', self)
+        self._open_folder_btn.setStyleSheet(secondary_btn_style())
         self._open_folder_btn.clicked.connect(self._on_open_folder)
         tb.addWidget(self._open_folder_btn)
 
@@ -166,6 +175,7 @@ class WarpWindow(QMainWindow):
 
         tb.addSeparator()
         self._export_sets_btn = QPushButton('Export to SETS JSON…', self)
+        self._export_sets_btn.setStyleSheet(primary_btn_style())
         self._export_sets_btn.setToolTip(
             'SETS v3.0.0-compatible build JSON — loadable via SETS '
             'File → Load Build.'
@@ -199,7 +209,7 @@ class WarpWindow(QMainWindow):
         self._tree.setHeaderLabels(['Slot', 'Idx', 'Item', 'Conf', 'Source'])
         self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
         self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self._tree.setAlternatingRowColors(True)
+        self._tree.setAlternatingRowColors(False)
         self._tree.setRootIsDecorated(True)
         self._tree.setUniformRowHeights(True)
         self._tree.setColumnWidth(0, 220)
@@ -209,6 +219,15 @@ class WarpWindow(QMainWindow):
 
         self._preview = PreviewView(self._tabs)
         self._tabs.addTab(self._preview, 'Preview')
+
+        # Detection logs are scoped to WARP's own runs — live-tails the
+        # 'detection' channel and gets wiped at the start of every new run
+        # (`detection_started` → clear_live) so the buffer reflects just
+        # the current detection rather than accumulating across runs.
+        self._log_view = LogViewWidget(channel='detection', parent=self._tabs)
+        self._log_view.set_default_save_name_cb(self._suggest_log_save_stem)
+        self._tabs.addTab(self._log_view, 'Detection Logs')
+        self.detection_started.connect(self._log_view.clear_live)
 
         layout.addWidget(self._tabs, stretch=1)
 
@@ -391,12 +410,30 @@ class WarpWindow(QMainWindow):
                 ordered_slots.append(s)
                 seen.add(s)
 
+        # Parent (slot) rows get a lighter background so the eye can find
+        # the section breaks at a glance; child rows stay on the default
+        # tree background. Alternating row colors are off — they made the
+        # multi-row equipment slots noisy.
+        parent_brush = QBrush(QColor(LBG))
         for slot in ordered_slots:
             entries = sorted(by_slot[slot], key=lambda it: (it.slot_index, it.name))
             parent = QTreeWidgetItem(self._tree)
             parent.setText(0, slot)
             parent.setText(1, str(len(entries)))
+            # Single-entry slots (Ship Name / Type / Tier, or any slot
+            # that only matched one item) — surface the value on the
+            # parent row directly so it's visible even when collapsed,
+            # mirroring the ship banner above the tree.
+            if len(entries) == 1:
+                parent.setText(2, entries[0].name or '—')
+                parent.setText(3, f'{entries[0].confidence:.2f}')
             parent.setFirstColumnSpanned(False)
+            for col in range(self._tree.columnCount()):
+                parent.setBackground(col, parent_brush)
+            f = parent.font(0)
+            f.setBold(True)
+            for col in range(self._tree.columnCount()):
+                parent.setFont(col, f)
             for it in entries:
                 child = QTreeWidgetItem(parent)
                 child.setText(0, '')
@@ -405,6 +442,32 @@ class WarpWindow(QMainWindow):
                 child.setText(3, f'{it.confidence:.2f}')
                 child.setText(4, Path(it.source_file).name if it.source_file else '')
             parent.setExpanded(True)
+
+    def _suggest_log_save_stem(self) -> str:
+        """Default 'Save As' name for the Detection Logs tab.
+
+        Uses the currently-selected file in the Preview tab plus its
+        detected build family (SPACE / GROUND) when known, suffixed with
+        the date — e.g. `Screenshot_2024-01-15_120000_12345_space_20260521`.
+        Falls back to a plain timestamped stem when nothing is loaded.
+        """
+        import datetime
+        date = datetime.datetime.now().strftime('%Y%m%d')
+        try:
+            row = self._preview._list.currentRow()
+            if 0 <= row < len(self._preview._keys):
+                src = self._preview._keys[row]
+                stem = Path(src).stem
+                bt = (self._preview._bt_by_file.get(src) or '').upper()
+                fam = ''
+                if bt.startswith('SPACE'):
+                    fam = '_space'
+                elif bt.startswith('GROUND'):
+                    fam = '_ground'
+                return f'{stem}{fam}_{date}'
+        except Exception:
+            pass
+        return f'detection_{date}'
 
     # ── Export ──────────────────────────────────────────────────────
 

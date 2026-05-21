@@ -354,6 +354,12 @@ class TextExtractor:
             'ship_tier_bbox': None,
             'build_type': '',
             'scan_scope': 'partial',  # 'partial' or 'full' — set below
+            # Plausible class-name-shaped OCR tokens populated only when the
+            # anchor heuristic failed. WarpImporter feeds these into
+            # `ShipDB.find_class_by_candidates` to recover ship_type when
+            # OCR could not produce a U.S.S./I.K.S. prefix or a tier badge.
+            'anchorless_candidates': [],
+            'anchorless_candidate_bboxes': [],
         }
         try:
             h, w = img.shape[:2]
@@ -770,7 +776,30 @@ class TextExtractor:
                 # topmost dark token is a tab label ('Commando', 'Space
                 # Stations', …) and polluting ship_name breaks multi-screen
                 # aggregation in WarpImporter.process_folder.
-                _slog.info(f'TextExtractor: no anchor, ship info unset')
+                # Instead, surface plausible class-name-shaped tokens so
+                # WarpImporter can fall back to a ShipDB fuzzy lookup
+                # (recovers e.g. 'Vo'Quv Carrier' when the I.K.S. prefix
+                # was mangled to 'LKS_' and missed both anchor detectors).
+                cand_toks: list[dict] = []
+                for tok in tokens:
+                    t = tok['text'].strip()
+                    if len(t) < 5 or tok['conf'] < 0.50:
+                        continue
+                    if _is_blacklisted(t) or _SECTION_HEADER_RE.search(t) \
+                            or _registry_token(t):
+                        continue
+                    if not any(ch.isalpha() for ch in t):
+                        continue
+                    cand_toks.append(tok)
+                if cand_toks:
+                    cand_toks.sort(key=lambda t: t['conf'], reverse=True)
+                    result['anchorless_candidates'] = [
+                        t['text'].strip() for t in cand_toks]
+                    result['anchorless_candidate_bboxes'] = [
+                        (t['x'], t['y'], t['w'], t['h']) for t in cand_toks]
+                _slog.info(f'TextExtractor: no anchor, ship info unset '
+                           f'(emitted {len(result["anchorless_candidates"])} '
+                           f'fallback candidates)')
 
             # ── Infer build type if not already detected ──────────────────────
             if not result['build_type']:

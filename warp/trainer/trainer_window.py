@@ -16,7 +16,7 @@ from PySide6.QtWidgets import (
     QProgressBar, QToolBar, QStatusBar, QMessageBox,
     QInputDialog, QSizePolicy, QFrame, QScrollArea,
     QAbstractItemView, QCompleter, QMenu, QPlainTextEdit,
-    QCheckBox, QDoubleSpinBox, QStyledItemDelegate
+    QCheckBox, QDoubleSpinBox, QStyledItemDelegate, QTabWidget,
 )
 from PySide6.QtCore import Qt, QSettings, QThread, Signal, QSortFilterProxyModel, QSize, QTimer
 from PySide6.QtGui import QFont, QAction, QColor, QIcon, QStandardItemModel, QStandardItem, QKeySequence, QShortcut, QBrush, QPalette
@@ -265,7 +265,11 @@ class ScreenTypeDetectorWorker(QThread):
         return Path('.')
 
     def run(self):
-        from warp.debug import log as _slog
+        from warp.debug import log as _slog, use_detection_channel
+        with use_detection_channel('detection_core'):
+            self._run_inner(_slog)
+
+    def _run_inner(self, _slog):
         results: dict[str, tuple] = {}   # filename → (stype, conf)
         total = len(self._paths)
         classifier = None
@@ -427,17 +431,18 @@ class OCRWorker(QThread):
         # Delegates to TextExtractor.refine_single_crop — single shared mechanism
         # with WARP's autodetection path (warp_importer.WarpImporter._process_image
         # calls refine_ship_info, which uses the same refine_single_crop).
-        from warp.debug import log as _slog
-        try:
-            from warp.recognition.text_extractor import TextExtractor
-            extractor = TextExtractor()
-            text, conf, ocr_raw = extractor.refine_single_crop(
-                self.crop_bgr, self.slot, self.valid_tiers, self.valid_types)
-            _slog.info(f"ocr_worker slot={self.slot!r} raw={ocr_raw!r} → final={text!r} conf={conf:.2f}")
-            self.finished.emit(self.row, text, conf, self.crop_bgr, ocr_raw)
-        except Exception as e:
-            _slog.warning(f'OCRWorker failed: {e}')
-            self.finished.emit(self.row, '', 0.0, self.crop_bgr, '')
+        from warp.debug import log as _slog, use_detection_channel
+        with use_detection_channel('detection_core'):
+            try:
+                from warp.recognition.text_extractor import TextExtractor
+                extractor = TextExtractor()
+                text, conf, ocr_raw = extractor.refine_single_crop(
+                    self.crop_bgr, self.slot, self.valid_tiers, self.valid_types)
+                _slog.info(f"ocr_worker slot={self.slot!r} raw={ocr_raw!r} → final={text!r} conf={conf:.2f}")
+                self.finished.emit(self.row, text, conf, self.crop_bgr, ocr_raw)
+            except Exception as e:
+                _slog.warning(f'OCRWorker failed: {e}')
+                self.finished.emit(self.row, '', 0.0, self.crop_bgr, '')
 
 
 class MatchWorker(QThread):
@@ -452,25 +457,27 @@ class MatchWorker(QThread):
         self._sets = sets_app
 
     def run(self):
-        name, conf, thumb = '', 0.0, None
-        try:
-            from warp.recognition.icon_matcher import SETSIconMatcher
-            from warp.debug import log as _slog
-            # Seed confirmed crops as session examples (guarded — runs at most once)
-            matcher = SETSIconMatcher(self._sets)
-            SETSIconMatcher.seed_from_training_data(userdata.training_data_dir())
-            SETSIconMatcher.seed_from_community_crops()
-            name, conf, thumb, _ = matcher.match(
-                self._crop, candidate_names=self._candidates)
-            _slog.info(f'match_worker → name={name!r} conf={conf:.2f} '
-                       f'(pool={len(self._candidates) if self._candidates else "all"})')
-            if conf < 0.40:
-                _slog.info(f'match_worker: conf {conf:.2f} < 0.40 — treating as unmatched')
-                name, conf, thumb = '', 0.0, None
-        except Exception as e:
-            from warp.debug import log as _slog
-            _slog.warning(f'MatchWorker failed: {e}')
-        self.finished.emit(name, conf, thumb, self._crop, self._bbox)
+        from warp.debug import use_detection_channel
+        with use_detection_channel('detection_core'):
+            name, conf, thumb = '', 0.0, None
+            try:
+                from warp.recognition.icon_matcher import SETSIconMatcher
+                from warp.debug import log as _slog
+                # Seed confirmed crops as session examples (guarded — runs at most once)
+                matcher = SETSIconMatcher(self._sets)
+                SETSIconMatcher.seed_from_training_data(userdata.training_data_dir())
+                SETSIconMatcher.seed_from_community_crops()
+                name, conf, thumb, _ = matcher.match(
+                    self._crop, candidate_names=self._candidates)
+                _slog.info(f'match_worker → name={name!r} conf={conf:.2f} '
+                           f'(pool={len(self._candidates) if self._candidates else "all"})')
+                if conf < 0.40:
+                    _slog.info(f'match_worker: conf {conf:.2f} < 0.40 — treating as unmatched')
+                    name, conf, thumb = '', 0.0, None
+            except Exception as e:
+                from warp.debug import log as _slog
+                _slog.warning(f'MatchWorker failed: {e}')
+            self.finished.emit(name, conf, thumb, self._crop, self._bbox)
 
 
 class RecognitionWorker(QThread):
@@ -484,6 +491,11 @@ class RecognitionWorker(QThread):
         # EQ panel geometry captured during detection; consumed by _on_recognition_done
         self.eq_geom = None
     def run(self):
+        from warp.debug import use_detection_channel
+        with use_detection_channel('detection_core'):
+            self._run_inner()
+
+    def _run_inner(self):
         import cv2
         from warp.debug import log as _slog
         from warp.warp_importer import WarpImporter
@@ -777,8 +789,8 @@ class WarpCoreWindow(QMainWindow):
         root = QHBoxLayout(c)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+
         sp = QSplitter(Qt.Orientation.Horizontal)
-        root.addWidget(sp)
         sp.addWidget(self._make_left_panel())
         sp.addWidget(self._make_center_panel())
         sp.addWidget(self._make_right_panel())
@@ -787,6 +799,22 @@ class WarpCoreWindow(QMainWindow):
         sp.setStretchFactor(1, 1)
         sp.setStretchFactor(2, 0)
         sp.setSizes([220, 700, 400])
+
+        # Top-level tabs: the entire annotation workspace (list + canvas +
+        # side panel) lives under "Screenshot"; Detection Logs is its
+        # sibling so toggling between annotation and diagnostics swaps
+        # the whole view, matching WARP's Results/Preview/Detection Logs
+        # layout.
+        from warp.gui.log_view import LogViewWidget
+        self._top_tabs = QTabWidget()
+        self._top_tabs.addTab(sp, 'Screenshot')
+        # WARP CORE tails its own channel ('detection_core') so its logs
+        # stay isolated from WARP's pane. Workers in this module wrap
+        # their writes via `use_detection_channel('detection_core')`.
+        self._log_view = LogViewWidget(channel='detection_core')
+        self._log_view.set_default_save_name_cb(self._suggest_log_save_stem)
+        self._top_tabs.addTab(self._log_view, 'Detection Logs')
+        root.addWidget(self._top_tabs)
 
     def _make_left_panel(self) -> QWidget:
         left = QWidget()
@@ -1285,6 +1313,30 @@ class WarpCoreWindow(QMainWindow):
             self._data_mgr.remove_screen_type(path, stype)
         self._update_file_item_check(row)
 
+    def _suggest_log_save_stem(self) -> str:
+        """Default 'Save As' name for the Detection Logs tab.
+
+        Uses the currently-loaded screenshot's stem plus its classifier
+        verdict (SPACE / GROUND, if recognised) and the date — so the
+        saved log file is traceable back to the annotation session it
+        documents."""
+        date = datetime.datetime.now().strftime('%Y%m%d')
+        idx = getattr(self, '_current_idx', -1)
+        try:
+            if 0 <= idx < len(self._screenshots):
+                path = self._screenshots[idx]
+                stem = path.stem
+                stype = (self._screen_types.get(path.name) or '').upper()
+                fam = ''
+                if stype.startswith('SPACE'):
+                    fam = '_space'
+                elif stype.startswith('GROUND'):
+                    fam = '_ground'
+                return f'{stem}{fam}_{date}'
+        except Exception:
+            pass
+        return f'detection_{date}'
+
     def _load_screenshot(self, row: int):
         if row < 0 or row >= len(self._screenshots): return
         # Save layout for the screenshot we're leaving (if not marked Done)
@@ -1439,9 +1491,11 @@ class WarpCoreWindow(QMainWindow):
         path = self._screenshots[self._current_idx]
         stype = self._screen_types.get(path.name, 'UNKNOWN')
 
-        # Clear detection logs from the UI before starting a new run
+        # Clear detection logs from the UI before starting a new run.
+        # WARP CORE's own logs live on the 'detection_core' channel — using
+        # 'detection' here used to wipe the WARP window's log buffer instead.
         import warp.debug
-        warp.debug.clear_logs('detection')
+        warp.debug.clear_logs('detection_core')
 
         # Seed the icon matcher with all confirmed crops from this image
         # so Auto-Detect benefits from what the user has already confirmed

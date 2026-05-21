@@ -7,14 +7,21 @@ the running session and the prior session loaded from `warp_debug.log.bak`.
 """
 from __future__ import annotations
 
-from PySide6.QtCore import QObject, Qt, QUrl, Signal
-from PySide6.QtGui import QDesktopServices, QFont
+import datetime
+from pathlib import Path
+from typing import Callable
+
+import os
+
+from PySide6.QtCore import QEvent, QObject, Qt, QUrl, Signal
+from PySide6.QtGui import QCursor, QDesktopServices, QFont, QGuiApplication
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QHBoxLayout, QLabel, QPlainTextEdit, QPushButton,
-    QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QHBoxLayout, QLabel,
+    QPlainTextEdit, QPushButton, QVBoxLayout, QWidget,
 )
 
 from warp import debug as _warp_debug
+from warp.debug import syslog
 
 
 _LEVEL_LABEL = {
@@ -36,10 +43,33 @@ class LogViewWidget(QWidget):
         super().__init__(parent)
         self._channel = channel
         self._mode = 'CURRENT'
+        # Optional caller-supplied hook returning the proposed file name
+        # (no path, no extension) for the Save As dialog. WARP and WARP
+        # CORE both inject one so the dialog opens with a name derived
+        # from the currently-selected screenshot.
+        self._default_save_name_cb: Callable[[], str] | None = None
         self._build_ui()
         self._new_line.connect(self._on_new_line, Qt.ConnectionType.QueuedConnection)
         _warp_debug.subscribe(self._on_log_record)
         self._show_current_initial()
+        # Wheel-event probe — opt-in diagnostic for the "dead zone" where
+        # mouse wheel scrolling stops working over a vertical band of the
+        # log viewer. When WARP_WHEEL_PROBE=1, install an app-wide filter
+        # that prints which widget actually receives each QWheelEvent we
+        # see over this widget's subtree (and whether the event is accepted).
+        # Output goes to the system log channel so the detection log we're
+        # debugging stays uncluttered.
+        self._wheel_probe = None
+        if os.environ.get('WARP_WHEEL_PROBE') == '1':
+            self._wheel_probe = _WheelProbe(self)
+            QApplication.instance().installEventFilter(self._wheel_probe)
+            syslog.info(f'log_view: wheel probe ENABLED on {self._channel!r}')
+
+    def set_default_save_name_cb(self, cb: Callable[[], str] | None) -> None:
+        """Set the hook that supplies the Save As dialog's default file
+        stem (no extension). When unset, falls back to a timestamped
+        `detection_<channel>_<YYYYMMDD-HHMMSS>` name."""
+        self._default_save_name_cb = cb
 
     # ── UI ──────────────────────────────────────────────────────────
 
@@ -80,6 +110,20 @@ class LogViewWidget(QWidget):
         )
         self._open_dir_btn.clicked.connect(self._open_log_dir)
         bar.addWidget(self._open_dir_btn)
+
+        self._copy_all_btn = QPushButton('Copy All', self)
+        self._copy_all_btn.setToolTip(
+            'Copy the visible log buffer to the system clipboard.'
+        )
+        self._copy_all_btn.clicked.connect(self._copy_all_to_clipboard)
+        bar.addWidget(self._copy_all_btn)
+
+        self._save_as_btn = QPushButton('Save As…', self)
+        self._save_as_btn.setToolTip(
+            'Save the visible log buffer to a .log file.'
+        )
+        self._save_as_btn.clicked.connect(self._save_as)
+        bar.addWidget(self._save_as_btn)
 
         v.addLayout(bar)
 
@@ -176,6 +220,42 @@ class LogViewWidget(QWidget):
         cur_path, _ = _warp_debug.log_paths(self._channel)
         QDesktopServices.openUrl(QUrl.fromLocalFile(str(cur_path.parent)))
 
+    def _copy_all_to_clipboard(self):
+        cb = QGuiApplication.clipboard()
+        if cb is not None:
+            cb.setText(self._view.toPlainText())
+
+    def _default_save_stem(self) -> str:
+        ts = datetime.datetime.now().strftime('%Y%m%d-%H%M%S')
+        # Caller-supplied stem wins (e.g. screenshot name + space/ground).
+        if self._default_save_name_cb is not None:
+            try:
+                stem = self._default_save_name_cb()
+            except Exception:
+                stem = ''
+            if stem:
+                # Caller may or may not include the timestamp themselves.
+                # Don't second-guess — use the stem verbatim.
+                return stem
+        return f'detection_{self._channel}_{ts}'
+
+    def _save_as(self):
+        stem = self._default_save_stem()
+        # Last used directory: log file's directory by default.
+        cur_path, _ = _warp_debug.log_paths(self._channel)
+        suggested = str(Path(cur_path).parent / f'{stem}.log')
+        path, _flt = QFileDialog.getSaveFileName(
+            self, 'Save detection log',
+            suggested, 'Log files (*.log);;Text files (*.txt);;All files (*)',
+        )
+        if not path:
+            return
+        try:
+            Path(path).write_text(self._view.toPlainText(), encoding='utf-8')
+        except OSError as e:
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, 'Save failed', f'{type(e).__name__}: {e}')
+
     def clear_live(self):
         """Wipe the view only when tailing the live session — leaves the
         Previous-session buffer alone so reviewing old logs is undisturbed."""
@@ -195,4 +275,68 @@ class LogViewWidget(QWidget):
 
     def closeEvent(self, event):
         _warp_debug.unsubscribe(self._on_log_record)
+        if self._wheel_probe is not None:
+            QApplication.instance().removeEventFilter(self._wheel_probe)
+            self._wheel_probe = None
         super().closeEvent(event)
+
+
+class _WheelProbe(QObject):
+    """Diagnostic event filter that logs every QWheelEvent whose receiver
+    (or the widget under the cursor) lives inside the host LogViewWidget.
+
+    For each such event we record:
+      - the Qt event recipient (the widget Qt is delivering to),
+      - the widget actually under the mouse cursor at that instant,
+      - the local x within the LogViewWidget (helps spot the "1/4 strip"),
+      - whether the event has been .accepted() so far.
+
+    Enable with `WARP_WHEEL_PROBE=1`. Output goes to the system log. The
+    probe never marks events accepted — it's pure observation."""
+
+    def __init__(self, host: 'LogViewWidget'):
+        super().__init__(host)
+        self._host = host
+
+    def eventFilter(self, obj, event):
+        if event.type() != QEvent.Type.Wheel:
+            return False
+        host = self._host
+        if host is None:
+            return False
+        try:
+            gpos = QCursor.pos()
+            under = QApplication.widgetAt(gpos)
+
+            def _in_host(w):
+                cur = w
+                while cur is not None:
+                    if cur is host:
+                        return True
+                    cur = cur.parent() if hasattr(cur, 'parent') else None
+                return False
+
+            obj_in_host = hasattr(obj, 'parent') and _in_host(obj)
+            under_in_host = under is not None and _in_host(under)
+            if not (obj_in_host or under_in_host):
+                return False
+
+            host_local = host.mapFromGlobal(gpos)
+            obj_name = type(obj).__name__
+            obj_objname = obj.objectName() if hasattr(obj, 'objectName') else ''
+            under_name = type(under).__name__ if under is not None else 'None'
+            under_objname = under.objectName() if under is not None and hasattr(under, 'objectName') else ''
+            accepted = event.isAccepted()
+            syslog.info(
+                f'[WHEEL] host=({host.width()}x{host.height()}) '
+                f'local=({host_local.x()},{host_local.y()}) '
+                f'recipient={obj_name}({obj_objname!r}) '
+                f'underCursor={under_name}({under_objname!r}) '
+                f'accepted={accepted}'
+            )
+        except Exception as e:
+            try:
+                syslog.warning(f'wheel probe error: {e}')
+            except Exception:
+                pass
+        return False
