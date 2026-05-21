@@ -36,7 +36,12 @@ SCREENSHOT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
 SCREEN_TYPE_TO_BUILD_TYPE: dict[str, str] = {
     'SPACE_EQ':        'SPACE',
     'GROUND_EQ':       'GROUND',
-    'TRAITS':          'SPACE_TRAITS',
+    # Generic TRAITS = mixed evidence (image may contain BOTH space and
+    # ground trait sections, e.g. build-summary cards). Permissive
+    # detection — `trait_grid` skips its environment filter when bt does
+    # not contain "SPACE" / "GROUND" substring. User-narrowed SPACE_TRAITS
+    # / GROUND_TRAITS stay strict.
+    'TRAITS':          'TRAITS',
     'SPACE_TRAITS':    'SPACE_TRAITS',
     'GROUND_TRAITS':   'GROUND_TRAITS',
     'BOFFS':           'BOFFS',
@@ -255,6 +260,11 @@ SLOT_ORDER = {
     'GROUND':        GROUND_SLOT_ORDER,
     'SPACE_TRAITS':  SPACE_TRAITS_SLOT_ORDER,
     'GROUND_TRAITS': GROUND_TRAITS_SLOT_ORDER,
+    # Generic TRAITS = mixed; emits both space and ground sections so a
+    # build-summary card containing both gets fully captured. Downstream
+    # build writer routes each slot to its proper export (space build vs
+    # ground build) by slot name.
+    'TRAITS':        SPACE_TRAITS_SLOT_ORDER + GROUND_TRAITS_SLOT_ORDER,
     'BOFFS':         BOFFS_SLOT_ORDER,
     'SPACE_BOFFS':   BOFFS_SLOT_ORDER,   # same slot structure, different write target
     'GROUND_BOFFS':  BOFFS_SLOT_ORDER,
@@ -1323,7 +1333,7 @@ class WarpImporter:
             # WARP CORE: user explicitly selected screen type in dropdown — that
             # is a stronger signal than OCR build_type. Skip the OCR upgrade step.
             build_type = _caller_bt
-        elif _caller_bt in ('SPACE', 'GROUND', 'SPACE_TRAITS',
+        elif _caller_bt in ('SPACE', 'GROUND', 'TRAITS', 'SPACE_TRAITS',
                             'GROUND_TRAITS', 'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
                             'SPEC', 'SPACE_MIXED', 'GROUND_MIXED'):
             # Use caller's build_type as primary, OCR as confirmation.
@@ -1393,7 +1403,7 @@ class WarpImporter:
         # Skip for GROUND/GROUND_MIXED — ShipDB contains space ship data only.
         _is_ground = build_type in ('GROUND', 'GROUND_MIXED')
         _no_ship_profile = _is_ground or build_type in ('SPEC', 'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
-                                                         'SPACE_TRAITS', 'GROUND_TRAITS')
+                                                         'TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS')
         ship_tier = text_info.get('ship_tier', '')
         resolution: ShipResolution | None = None
         if _no_ship_profile:
@@ -1485,7 +1495,7 @@ class WarpImporter:
             # Traits use the structure-driven trait_grid detector (Strategy 0)
             # which probes icons through icon_matcher.classify_patch to label
             # each row-group's section independently.
-            'SPACE_TRAITS', 'GROUND_TRAITS',
+            'TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS',
         )
         _emit_stage(0.25, 'Detecting layout…')
         layout = self._get_layout().detect(

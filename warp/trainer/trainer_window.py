@@ -1516,27 +1516,18 @@ class WarpCoreWindow(QMainWindow):
         return 'SPACE'
 
     def _promote_generic_stype(self, path: Path, stype: str) -> str:
-        """Promote generic TRAITS / BOFFS to environment-specific variant
-        based on folder context. User-confirmed types are never overridden."""
-        if path.name in self._screen_types_manual:
-            return stype
-        env = self._folder_environment()
-        if stype == 'TRAITS':
-            return 'GROUND_TRAITS' if env == 'GROUND' else 'SPACE_TRAITS'
-        if stype == 'BOFFS':
-            return 'GROUND_BOFFS' if env == 'GROUND' else 'SPACE_BOFFS'
+        """Pass-through. Auto-promotion of generic TRAITS/BOFFS based on
+        folder context was removed: generic = "mixed evidence" (image may
+        contain both space and ground sections) and narrows detection
+        scope only when the user manually picks a SPACE_* / GROUND_*
+        variant. _folder_environment() remains as a helper for other call
+        sites (e.g. picking a default write target downstream)."""
         return stype
 
     def _start_recognition(self, path: Path, stype: str, preserve_confirmed: list | None = None):
         if self._recog_worker and self._recog_worker.isRunning():
             self._recog_worker.requestInterruption()
             self._recog_worker.wait(2000)
-        promoted = self._promote_generic_stype(path, stype)
-        if promoted != stype:
-            from warp.debug import log as _slog
-            _slog.info(f'_start_recognition: promoted {stype} → {promoted} '
-                       f'via folder-environment rule ({path.name})')
-            stype = promoted
         self._recognition_items = []
         self._review_list.clear()
         self._review_summary.setText('Running recognition...')

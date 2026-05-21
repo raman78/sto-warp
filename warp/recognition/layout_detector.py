@@ -127,7 +127,7 @@ _FULLSCAN_MAX_TOTAL: dict[str, int] = {
     'GROUND_EQ':     15,
     'SPACE_TRAITS':  27,
     'GROUND_TRAITS': 20,
-    'TRAITS':        27,
+    'TRAITS':        47,  # mixed = space (27) + ground (20)
     'BOFFS':         24,
     'SPACE_BOFFS':   24,
     'GROUND_BOFFS':  24,
@@ -419,7 +419,7 @@ class LayoutDetector:
 
     def detect(self, img: np.ndarray, build_type: str, ship_profile: dict | None = None,
                icon_matcher=None, app_cache=None) -> dict[str, list[tuple[int, int, int, int]]]:
-        if build_type in ('SPACE_TRAITS', 'GROUND_TRAITS'):
+        if build_type in ('TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS'):
             # Strategy 0: structure-driven trait grid detector with ML probe.
             # Multi-panel grid lock + multi-chain row extraction + per-group
             # ML classification (no canonical-order assumption). Prototype
