@@ -1662,8 +1662,13 @@ class LayoutDetector:
         spacing = max(24, round(w * 0.023))
         dims = (icon_w, icon_h, spacing)
 
-        # BOFF section in MIXED is always in the lower 70% (skip ship image/header)
+        # BOFF section in MIXED is usually in the lower 70% (below the ship
+        # image/header). Bottom scans use this as a top cap. A separate
+        # top-right scan covers PicCollage-style composites where a Space
+        # Stations panel can sit above this cut, directly to the right of
+        # the EQ column.
         y_start = int(h * 0.30)
+        top_skip = int(h * 0.02)  # skip the row of UI tabs at very top
 
         # Sub-region covers the BOFF panel (not full left/right half).
         # Narrower crop prevents band scan from averaging BOFF icons with adjacent
@@ -1673,16 +1678,25 @@ class LayoutDetector:
         panel_w = int(w * 0.34)
         right_x = w - panel_w
 
-        left_img = img[y_start:, :panel_w]
-        right_img = img[y_start:, right_x:]
+        left_img      = img[y_start:, :panel_w]
+        right_img     = img[y_start:, right_x:]
+        # Top-right scan: a Space Stations panel in a collage sits in
+        # y∈[~0.02h, ~0.30h]. The left half of the image at this y range
+        # contains the ship card + EQ icons (high false-positive risk),
+        # so we only add the right column here.
+        top_right_img = img[top_skip:y_start, right_x:]
 
-        left_result = self._detect_boffs(left_img, icon_dims=dims, offset=(0, y_start))
-        right_result = self._detect_boffs(right_img, icon_dims=dims, offset=(right_x, y_start))
+        left_result      = self._detect_boffs(left_img,  icon_dims=dims, offset=(0,       y_start))
+        right_result     = self._detect_boffs(right_img, icon_dims=dims, offset=(right_x, y_start))
+        top_right_result = self._detect_boffs(top_right_img, icon_dims=dims,
+                                              offset=(right_x, top_skip))
 
-        left_count = sum(len(v) for v in left_result.values())
-        right_count = sum(len(v) for v in right_result.values())
-        left_groups = len(left_result)
-        right_groups = len(right_result)
+        left_count       = sum(len(v) for v in left_result.values())
+        right_count      = sum(len(v) for v in right_result.values())
+        top_right_count  = sum(len(v) for v in top_right_result.values())
+        left_groups      = len(left_result)
+        right_groups     = len(right_result)
+        top_right_groups = len(top_right_result)
 
         # Tiebreak by (slot_groups, item_count) — more professions = more likely
         # real BOFF panel. Raw count alone misfires when one side (e.g. traits
@@ -1699,15 +1713,22 @@ class LayoutDetector:
             candidates.append(('left', left_groups, left_count, left_result))
         if 4 <= right_count <= MAX_BOFF_BBOXES:
             candidates.append(('right', right_groups, right_count, right_result))
+        if 4 <= top_right_count <= MAX_BOFF_BBOXES:
+            candidates.append(('top_right', top_right_groups, top_right_count, top_right_result))
 
         if candidates:
             candidates.sort(key=lambda c: (c[1], c[2]), reverse=True)
             side, groups, count, result = candidates[0]
-            _slog.info(f'LayoutDetector: BOFF-in-MIXED ({side}) → {groups} seats, {count} bboxes '
-                       f'(left={left_count}/{left_groups}g, right={right_count}/{right_groups}g)')
+            _slog.info(
+                f'LayoutDetector: BOFF-in-MIXED ({side}) → {groups} seats, {count} bboxes '
+                f'(left={left_count}/{left_groups}g, '
+                f'right={right_count}/{right_groups}g, '
+                f'top_right={top_right_count}/{top_right_groups}g)')
             return result
 
-        _slog.debug(f'LayoutDetector: BOFF-in-MIXED — no BOFF seats found (left={left_count}, right={right_count})')
+        _slog.debug(
+            f'LayoutDetector: BOFF-in-MIXED — no BOFF seats found '
+            f'(left={left_count}, right={right_count}, top_right={top_right_count})')
         return {}
 
     def _fill_boff_gaps(self, bboxes_abs: list, img, icon_est: int,
