@@ -148,7 +148,34 @@ def build_from_result(result: ImportResult, cache=None) -> tuple[dict, WriteRepo
         is_ground = (result.build_type == 'GROUND_BOFFS')
         _write_boffs(build, boff_items, ship_data, cache, is_ground, report)
 
+    _apply_elite_captain(build)
+
     return build, report
+
+
+def _apply_elite_captain(build: dict) -> None:
+    """Flip `captain.elite` on when any elite-gated slot was populated.
+
+    SETS hides the 6th kit module, 5th ground device, and the 10th
+    space/ground trait when the captain isn't Elite (buildmanager.py
+    279-292). Without this flag those items end up in the JSON but
+    invisible in the UI — the user opens their export and is missing a
+    slot. Reading the slots after the write phase is a one-way inference:
+    we never flip elite *off*, so a hand-edited build that explicitly
+    set elite stays unchanged."""
+    g, s = build['ground'], build['space']
+
+    def _filled(x) -> bool:
+        if isinstance(x, dict):
+            return bool(x.get('item'))
+        return isinstance(x, str) and bool(x)
+
+    if (_filled(g['kit_modules'][5])
+            or _filled(g['ground_devices'][4])
+            or _filled(g['traits'][9])
+            or _filled(s['traits'][9])):
+        build['captain']['elite'] = True
+        log.info('build_writer: detected Elite Captain — captain.elite = True')
 
 
 # ── Ship resolution ─────────────────────────────────────────────────
