@@ -483,6 +483,10 @@ class MatchWorker(QThread):
 class RecognitionWorker(QThread):
     finished = Signal(list)
     error    = Signal(str)
+    # (pct 0-100, stage label) — matches the importer's per-stage callback
+    # in WARP so both tools surface the same progress breakdown.
+    progress = Signal(int, str)
+
     def __init__(self, path, stype: str, sets_app, parent=None):
         super().__init__(parent)
         self._path = path
@@ -490,6 +494,12 @@ class RecognitionWorker(QThread):
         self._sets_app = sets_app
         # EQ panel geometry captured during detection; consumed by _on_recognition_done
         self.eq_geom = None
+
+    def _stage_cb(self, pct: int, label: str) -> None:
+        if self.isInterruptionRequested():
+            raise InterruptedError('cancelled')
+        self.progress.emit(pct, label)
+
     def run(self):
         from warp.debug import use_detection_channel
         with use_detection_channel('detection_core'):
@@ -522,7 +532,10 @@ class RecognitionWorker(QThread):
         _slog.info(f'RecognitionWorker: start {self._path.name} stype={self._stype} → importer={importer_type}')
 
         try:
-            importer = WarpImporter(sets_app=self._sets_app, build_type=importer_type, from_trainer=True)
+            importer = WarpImporter(
+                sets_app=self._sets_app, build_type=importer_type,
+                from_trainer=True, progress_callback=self._stage_cb,
+            )
             result = importer._process_image(img, str(self._path))
             _slog.info(f'RecognitionWorker: pipeline done — {len(result.items)} items found')
             # Capture EQ geometry from the layout detector's per-image cache so
@@ -544,6 +557,10 @@ class RecognitionWorker(QThread):
                         cross_check_failed_items.add((item.slot, item.name))
             except:
                 pass
+        except InterruptedError:
+            _slog.info('RecognitionWorker: cancelled by user')
+            self.error.emit('Cancelled')
+            return
         except Exception as e:
             _slog.warning(f'RecognitionWorker: exception — {e}')
             self.error.emit(str(e))
@@ -572,104 +589,6 @@ class RecognitionWorker(QThread):
 
         _slog.info(f'RecognitionWorker: emitting {len(items)} items')
         self.finished.emit(items)
-
-class _DetectProgressDialog(QWidget):
-    cancelled = Signal()
-    def __init__(self, total: int, max_iter: int = 1, parent=None):
-        super().__init__(parent, Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
-        self.setWindowTitle('WARP CORE — Detecting Screen Types')
-        self.setFixedSize(460, 160 if max_iter > 1 else 140)
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 16, 16, 16)
-        lay.setSpacing(8)
-        apply_dark_style(self)
-        title = 'Classifying screenshots — loop mode…' if max_iter > 1 else 'Classifying screenshots with ML model…'
-        self._title_lbl = QLabel(title)
-        self._title_lbl.setFont(QFont('', 10, QFont.Weight.Bold))
-        self._title_lbl.setStyleSheet(f'color:{ACCENT};')
-        self._iter_lbl = QLabel('')
-        self._iter_lbl.setStyleSheet(f'color:{MFG};font-size:10px;')
-        self._iter_lbl.setVisible(max_iter > 1)
-        self._file_lbl = QLabel('')
-        self._file_lbl.setStyleSheet(f'color:{MFG};font-size:10px;')
-        self._file_lbl.setWordWrap(True)
-        self._bar = QProgressBar()
-        self._bar.setRange(0, total)
-        self._bar.setValue(0)
-        self._btn_cancel = QPushButton('Stop' if max_iter > 1 else 'Cancel')
-        self._btn_cancel.setFixedWidth(80)
-        self._btn_cancel.clicked.connect(self.cancelled.emit)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(self._btn_cancel)
-        lay.addWidget(self._title_lbl)
-        lay.addWidget(self._iter_lbl)
-        lay.addWidget(self._file_lbl)
-        lay.addWidget(self._bar)
-        lay.addLayout(btn_row)
-
-    def update_progress(self, idx: int, total: int, filename: str, stype: str):
-        self._bar.setValue(idx)
-        icon = SCREEN_TYPE_ICONS.get(stype, '?')
-        label = SCREEN_TYPE_LABELS.get(stype, 'Unknown')
-        self._file_lbl.setText(f'{filename}  →  {icon} {label}')
-
-    def reset_progress(self, total: int):
-        self._bar.setRange(0, total)
-        self._bar.setValue(0)
-        self._file_lbl.setText('')
-
-    def mark_finished(self, reason: str):
-        self._title_lbl.setText(f'Done — {reason}')
-        self._btn_cancel.setText('Close')
-
-    def update_iteration(self, i: int, max_i: int, prev: int | None,
-                         curr: int, unknown: int, wrong: int):
-        if prev is None:
-            trend = ''
-        elif curr < prev:
-            trend = f'  {prev} → {curr} ↓'
-        elif curr == prev:
-            trend = f'  {prev} → {curr} →'
-        else:
-            trend = f'  {prev} → {curr} ↑'
-        self._iter_lbl.setText(
-            f'Iteration {i} / {max_i}{trend}   (UNKNOWN: {unknown}, wrong: {wrong})'
-        )
-
-class _RecognitionProgressDialog(QWidget):
-    cancelled = Signal()
-    def __init__(self, filename: str, stype: str, parent=None):
-        super().__init__(parent, Qt.WindowType.Window | Qt.WindowType.WindowStaysOnTopHint)
-        self.setWindowTitle('WARP CORE -- Recognising Icons')
-        self.setFixedSize(420, 130)
-        self.setWindowModality(Qt.WindowModality.ApplicationModal)
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(16, 14, 16, 14)
-        lay.setSpacing(8)
-        icon = SCREEN_TYPE_ICONS.get(stype, '?')
-        label = SCREEN_TYPE_LABELS.get(stype, stype)
-        apply_dark_style(self)
-        title = QLabel('Matching icons against SETS library...')
-        title.setFont(QFont('', 10, QFont.Weight.Bold))
-        title.setStyleSheet(f'color:{ACCENT};')
-        file_lbl = QLabel(f'{icon} {label}   {filename}')
-        file_lbl.setStyleSheet(f'color:{MFG};font-size:10px;')
-        file_lbl.setWordWrap(True)
-        bar = QProgressBar()
-        bar.setRange(0, 0)
-        bar.setFixedHeight(12)
-        btn_cancel = QPushButton('Cancel')
-        btn_cancel.setFixedWidth(80)
-        btn_cancel.clicked.connect(self.cancelled.emit)
-        btn_row = QHBoxLayout()
-        btn_row.addStretch()
-        btn_row.addWidget(btn_cancel)
-        lay.addWidget(title)
-        lay.addWidget(file_lbl)
-        lay.addWidget(bar)
-        lay.addLayout(btn_row)
 
 def _make_dot_icon(color: str) -> 'QIcon':
     """Small 14×14 filled circle icon for green/yellow confirmation state."""
@@ -760,6 +679,15 @@ class WarpCoreWindow(QMainWindow):
         self._build_toolbar()
         self.setStatusBar(QStatusBar())
         self.statusBar().showMessage('Ready — open a folder of STO screenshots to start annotating.')
+
+        # Shared status-bar progress widget — replaces the modal popups
+        # the trainer used to spawn for screen-type detection and icon
+        # recognition. Cancel goes through `_cancel_active_run` which
+        # routes the request to whichever worker is currently running.
+        from warp.gui.progress_bar import StatusProgressBar
+        self._status_progress = StatusProgressBar(self)
+        self._status_progress.cancel_requested.connect(self._cancel_active_run)
+        self.statusBar().addPermanentWidget(self._status_progress)
 
         # Periodic HF sync — fires every 5 minutes, uploads only if data changed.
         # Skipped in embed mode: the launcher's SyncCoordinator owns the timer
@@ -1101,9 +1029,17 @@ class WarpCoreWindow(QMainWindow):
                     'All screenshots are already confirmed — nothing to detect.',
                 )
             return
-        self._detect_dlg = _DetectProgressDialog(len(pending), max_iter=max_iter, parent=self)
-        self._detect_dlg.cancelled.connect(self._on_detect_cancelled)
-        self._detect_dlg.show()
+        # Status-bar progress now replaces the popup. _detect_dlg stays
+        # set to a truthy sentinel so the rest of the detect flow's
+        # `if self._detect_dlg:` guards still scope status-bar updates
+        # to runs that the user actually started here.
+        self._detect_dlg = '__statusbar__'
+        self._detect_max_iter = max_iter
+        self._status_progress.start(determinate=True, maximum=max(1, len(pending)))
+        self.statusBar().showMessage(
+            f'Classifying screenshots — loop mode ({max_iter} iterations)…'
+            if max_iter > 1 else 'Classifying screenshots with ML model…'
+        )
         self._run_detect_iteration()
 
     def _run_detect_iteration(self):
@@ -1124,7 +1060,7 @@ class WarpCoreWindow(QMainWindow):
         paths_to_scan = [p for p in self._screenshots if p.name not in seed_names]
         total = len(paths_to_scan)
         if self._detect_dlg:
-            self._detect_dlg.reset_progress(total)
+            self._status_progress.start(determinate=True, maximum=max(1, total))
         self._detect_worker = ScreenTypeDetectorWorker(
             paths_to_scan, models_dir=models_dir,
             confirmed_types=confirmed_types, parent=self,
@@ -1137,10 +1073,16 @@ class WarpCoreWindow(QMainWindow):
         )
 
     def _on_detect_progress(self, idx: int, total: int, filename: str, stype: str, conf: float):
+        def _push_status(disp_stype: str):
+            icon  = SCREEN_TYPE_ICONS.get(disp_stype, '?')
+            label = SCREEN_TYPE_LABELS.get(disp_stype, 'Unknown')
+            self._status_progress.set_progress(idx)
+            self.statusBar().showMessage(f'[{idx}/{total}] {filename}  →  {icon} {label}')
+
         # During scan: only update UI for items without a user-confirmed type
         if filename in self._screen_types_manual:
             if self._detect_dlg:
-                self._detect_dlg.update_progress(idx, total, filename, self._screen_types.get(filename, 'UNKNOWN'))
+                _push_status(self._screen_types.get(filename, 'UNKNOWN'))
             return
         self._screen_types[filename] = stype
         for row, p in enumerate(self._screenshots):
@@ -1159,7 +1101,7 @@ class WarpCoreWindow(QMainWindow):
                     self._file_list.setCurrentRow(0)
                 break
         if self._detect_dlg:
-            self._detect_dlg.update_progress(idx, total, filename, stype)
+            _push_status(stype)
 
     def _on_detect_finished(self, results: dict):
         """
@@ -1216,31 +1158,37 @@ class WarpCoreWindow(QMainWindow):
             prev = self._detect_loop_prev_unresolved
             self._detect_loop_prev_unresolved = unresolved
             if self._detect_dlg:
-                self._detect_dlg.update_iteration(
-                    self._detect_loop_iter, self._detect_loop_max,
-                    prev, unresolved, unknown_count, wrong_count,
+                trend = ('' if prev is None
+                         else f'  {prev} → {unresolved} ' + ('↓' if unresolved < prev
+                                                              else '→' if unresolved == prev
+                                                              else '↑'))
+                self.statusBar().showMessage(
+                    f'Iteration {self._detect_loop_iter} / {self._detect_loop_max}{trend}'
+                    f'   (UNKNOWN: {unknown_count}, wrong: {wrong_count})'
                 )
             progress_made = (prev is None) or (unresolved < prev)
             if progress_made and self._detect_loop_iter < self._detect_loop_max and unresolved > 0:
                 self._detect_worker = None
                 self._run_detect_iteration()
-                return  # dialog stays open, loop continues
+                return  # loop continues, status bar keeps updating
             reason = 'no progress' if not progress_made else ('all resolved' if unresolved == 0 else 'max iterations reached')
             log.info(f'Screen type loop stopped after {self._detect_loop_iter} iteration(s): {reason}')
             self._detect_worker = None
-            if self._detect_dlg:
-                self._detect_dlg.mark_finished(reason)
+            self._status_progress.finish()
+            self._detect_dlg = None
+            self.statusBar().showMessage(f'Screen-type detection done — {reason}.')
             if self._screenshots:
                 if self._current_idx < 0:
                     self._file_list.setCurrentRow(0)
                 else:
                     self._load_screenshot(self._current_idx)
             self._update_progress()
-            return  # dialog stays open until user clicks Close
+            return
 
         if self._detect_dlg:
-            self._detect_dlg.close()
+            self._status_progress.finish()
             self._detect_dlg = None
+            self.statusBar().showMessage('Screen-type detection done.')
         self._detect_worker = None
         if self._screenshots:
             if self._current_idx < 0:
@@ -1253,12 +1201,29 @@ class WarpCoreWindow(QMainWindow):
         if self._detect_worker and self._detect_worker.isRunning():
             self._detect_worker.requestInterruption()
             self._detect_worker.wait(3000)
-        if self._detect_dlg:
-            self._detect_dlg.close()
-            self._detect_dlg = None
+        self._status_progress.finish()
+        self._detect_dlg = None
+        self.statusBar().showMessage('Screen-type detection cancelled.')
         if self._screenshots:
             self._file_list.setCurrentRow(0)
         self._update_progress()
+
+    def _cancel_active_run(self):
+        """Status-bar Cancel button — routes to whichever worker is live.
+
+        The trainer never runs detect + recog concurrently, so checking
+        `isRunning()` on each in turn is sufficient. Disables Cancel
+        immediately so the user can't click twice while interruption
+        propagates through the worker's next progress checkpoint."""
+        self._status_progress.set_cancel_enabled(False)
+        if self._detect_worker is not None and self._detect_worker.isRunning():
+            self._on_detect_cancelled()
+            return
+        if self._recog_worker is not None and self._recog_worker.isRunning():
+            self._on_recognition_cancelled()
+            return
+        # No live worker — just hide the bar (defensive).
+        self._status_progress.finish()
 
     def _make_file_list_item(self, p: Path, stype: str) -> QListWidgetItem:
         sc_icon = SCREEN_TYPE_ICONS.get(stype, '?')
@@ -1515,27 +1480,40 @@ class WarpCoreWindow(QMainWindow):
         if self._recog_worker and self._recog_worker.isRunning():
             self._recog_worker.requestInterruption()
             self._recog_worker.wait(2000)
-        if self._recog_dlg:
-            self._recog_dlg.close()
-            self._recog_dlg = None
         self._recognition_items = []
         self._review_list.clear()
         self._review_summary.setText('Running recognition...')
         self._set_review_buttons_enabled(False)
-        self._recog_dlg = _RecognitionProgressDialog(path.name, stype, parent=self)
-        self._recog_dlg.show()
+        # Determinate bar driven by importer's per-stage progress callback
+        # (same signal WARP listens to). `_recog_dlg` is a sentinel so
+        # done/error/cancel callbacks scope cleanup to the run we just started.
+        self._recog_dlg = '__statusbar__'
+        self._status_progress.start(determinate=True, maximum=100)
+        icon = SCREEN_TYPE_ICONS.get(stype, '?')
+        label = SCREEN_TYPE_LABELS.get(stype, stype)
+        self.statusBar().showMessage(
+            f'Matching icons against SETS library —  {icon} {label}   {path.name}'
+        )
         self._recog_worker = RecognitionWorker(path, stype, self._sets, parent=self)
+        self._recog_worker.progress.connect(self._on_recognition_progress)
         self._recog_worker.finished.connect(
             lambda items: self._on_recognition_done(path.name, stype, items,
                                                     preserve_confirmed=preserve_confirmed))
         self._recog_worker.error.connect(self._on_recognition_error)
         self._recog_worker.start()
 
+    def _on_recognition_progress(self, pct: int, label: str):
+        if not self._recog_dlg:
+            return
+        self._status_progress.set_progress(pct)
+        self.statusBar().showMessage(label)
+
     def _on_recognition_done(self, filename: str, stype: str, items: list,
                              preserve_confirmed: list | None = None):
         if self._recog_dlg:
-            self._recog_dlg.close()
+            self._status_progress.finish()
             self._recog_dlg = None
+            self.statusBar().showMessage(f'Recognition done — {len(items)} item(s).')
         # Merge: keep confirmed items, add new detections that don't overlap
         if preserve_confirmed:
             confirmed_bboxes = {ri['bbox'] for ri in preserve_confirmed if ri.get('bbox')}
@@ -1600,18 +1578,24 @@ class WarpCoreWindow(QMainWindow):
 
     def _on_recognition_error(self, msg: str):
         if self._recog_dlg:
-            self._recog_dlg.close()
+            self._status_progress.finish()
             self._recog_dlg = None
+        if msg == 'Cancelled':
+            self._review_summary.setText('Recognition cancelled.')
+            self.statusBar().showMessage('Recognition cancelled.')
+            return
         self._review_summary.setText(f'Recognition error: {msg}')
+        self.statusBar().showMessage(f'Recognition error: {msg}')
 
     def _on_recognition_cancelled(self):
         if self._recog_worker and self._recog_worker.isRunning():
             self._recog_worker.requestInterruption()
             self._recog_worker.wait(2000)
         if self._recog_dlg:
-            self._recog_dlg.close()
+            self._status_progress.finish()
             self._recog_dlg = None
         self._review_summary.setText('Recognition cancelled.')
+        self.statusBar().showMessage('Recognition cancelled.')
 
     def _populate_review_panel(self, items: list, stype: str):
         confirmed_by_id: dict[str, dict] = {}
@@ -3550,12 +3534,24 @@ class WarpCoreWindow(QMainWindow):
         if hasattr(self, '_sync_timer') and self._sync_timer:
             self._sync_timer.stop()
 
-        # Stop active OCR workers
-        if hasattr(self, '_ocr_workers'):
-            for w in self._ocr_workers:
+        # Ask all live workers to bail at their next checkpoint, but do
+        # not block the UI thread on them — the close button must feel
+        # instantaneous. Anything mid-flight gets reaped at interpreter
+        # exit. Order: cheapest first so a quick worker actually finishes.
+        for attr in ('_ocr_workers',):
+            for w in getattr(self, attr, None) or []:
                 if w.isRunning():
                     w.requestInterruption()
-                    w.wait(500)
+        for attr in ('_detect_worker', '_recog_worker'):
+            w = getattr(self, attr, None)
+            if w is not None and w.isRunning():
+                w.requestInterruption()
+                w.quit()
+        # Single short grace window covering all of them combined.
+        for attr in ('_detect_worker', '_recog_worker'):
+            w = getattr(self, attr, None)
+            if w is not None and w.isRunning():
+                w.wait(200)
 
         if hasattr(self, '_data_mgr') and self._data_mgr:
             self._data_mgr.save()

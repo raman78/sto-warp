@@ -50,6 +50,12 @@ class _RefreshWorker(QThread):
         if self._sync_client is not None:
             log.info(f'SyncCoordinator: WARPSync backend={self._sync_client.backend_status()}')
 
+        def _interrupted() -> bool:
+            if self.isInterruptionRequested():
+                log.info('SyncCoordinator: interruption requested — aborting cycle')
+                return True
+            return False
+
         self.step.emit('assets')
         log.info('SyncCoordinator: step=assets — GitHub icon/ship asset mirror')
         try:
@@ -57,6 +63,7 @@ class _RefreshWorker(QThread):
             AssetSyncManager().run()
         except Exception as e:
             log.warning(f'SyncCoordinator: asset sync failed: {e}')
+        if _interrupted(): return
 
         self.step.emit('knowledge')
         log.info('SyncCoordinator: step=knowledge — community pHash download')
@@ -65,6 +72,7 @@ class _RefreshWorker(QThread):
                 self._sync_client._download_knowledge_bg(force=self._force)
         except Exception as e:
             log.warning(f'SyncCoordinator: knowledge refresh failed: {e}')
+        if _interrupted(): return
 
         self.step.emit('model')
         log.info('SyncCoordinator: step=model — central model version check')
@@ -74,6 +82,7 @@ class _RefreshWorker(QThread):
             updater._bg_check(on_updated=None)
         except Exception as e:
             log.warning(f'SyncCoordinator: model update check failed: {e}')
+        if _interrupted(): return
 
         self.step.emit('community')
         log.info('SyncCoordinator: step=community — approved crops + labels mirror')
@@ -82,6 +91,7 @@ class _RefreshWorker(QThread):
             CommunityCropsClient().fetch()
         except Exception as e:
             log.warning(f'SyncCoordinator: community crops fetch failed: {e}')
+        if _interrupted(): return
 
         self.step.emit('seed')
         log.info('SyncCoordinator: step=seed — icon matcher community seed')
@@ -90,6 +100,7 @@ class _RefreshWorker(QThread):
             SETSIconMatcher.seed_from_community_crops()
         except Exception as e:
             log.warning(f'SyncCoordinator: community seed failed: {e}')
+        if _interrupted(): return
 
         self.step.emit('upload')
         log.info('SyncCoordinator: step=upload — confirmed-crop HuggingFace upload')
@@ -97,8 +108,11 @@ class _RefreshWorker(QThread):
             if self._sync_manager is not None:
                 self._sync_manager.check_and_upload()
                 worker = getattr(self._sync_manager, '_worker', None)
+                # Bounded wait so a hung upload can't block app shutdown.
+                # If we time out the inner worker keeps running on its own
+                # QThread; Python will reap it on interpreter exit.
                 if worker is not None and worker.isRunning():
-                    worker.wait()
+                    worker.wait(2000)
         except Exception as e:
             log.warning(f'SyncCoordinator: crop upload failed: {e}')
 
@@ -151,9 +165,20 @@ class SyncCoordinator(QObject):
         self._timer.start()
 
     def stop(self):
+        """Cooperative stop — never blocks the UI thread for more than 200 ms.
+
+        The sync cycle does not persist critical local state, so if it is
+        mid-flight on a network call we ask it to bail at the next step
+        boundary and move on. Anything still running is left to the
+        interpreter to reap at exit (the alternative — `wait()` without
+        a tight bound — caused the close button to feel unresponsive
+        while an upload was in progress)."""
         self._timer.stop()
-        if self._worker is not None and self._worker.isRunning():
-            self._worker.wait(5000)
+        w = self._worker
+        if w is not None and w.isRunning():
+            w.requestInterruption()
+            w.quit()
+            w.wait(200)
 
     # ── public API ─────────────────────────────────────────────────────
 

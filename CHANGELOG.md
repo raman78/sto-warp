@@ -5,6 +5,45 @@ All notable changes to **sto-warp** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.2] — 2026-05-21
+
+Progress-bar unification across WARP and WARP CORE, plus a small
+responsiveness fix so the X button closes the app immediately even
+while a background sync or detection is mid-flight.
+
+### Added
+- Shared `StatusProgressBar` widget (`warp/gui/progress_bar.py`):
+  status-bar progress bar with an embedded `Cancel` button. WARP and
+  WARP CORE now use the same component, with the bar sized to its
+  natural width and Cancel pinned to the window's right corner.
+- WARP CORE: per-stage `%` progress during Auto-Detect Slots. The
+  trainer's `RecognitionWorker` now forwards the importer's
+  `progress_callback` and emits a `progress(int, str)` signal, so the
+  status bar shows the same `image.png: Fore Weapon 1/4`-style
+  breakdown as WARP. Cancel button stops the run at the next
+  checkpoint (cooperative via `QThread.requestInterruption()`).
+
+### Changed
+- WARP CORE: the modal "Detecting Screen Types" and "Recognising
+  Icons" popups are gone. Both flows now report progress in the main
+  status bar, matching WARP. Cancel routes through
+  `_cancel_active_run` so a single button covers whichever worker is
+  live.
+- WARP cancellation reworked to be cooperative — the importer's
+  progress callback raises `InterruptedError` when the user clicks
+  Cancel, which `RecognitionWorker.run()` translates into
+  `failed('Cancelled')`. No more relying on `QThread.terminate()`.
+
+### Fixed
+- Close button no longer feels unresponsive while a sync cycle or
+  detection is running. `SyncCoordinator.stop()` now caps its wait at
+  200 ms (was 5 s) and asks the refresh worker to bail at the next
+  step boundary via `isInterruptionRequested()`. The inner HF upload
+  worker also got a bounded `wait(2000)` so a hung upload can't block
+  app shutdown. WARP CORE's `closeEvent` likewise stopped per-worker
+  `wait(500/2000/3000)` calls — one 200 ms grace window covers them
+  all.
+
 ## [1.0.1] — 2026-05-21
 
 UI polish, log-channel isolation, and small bug fixes on top of 1.0.0.

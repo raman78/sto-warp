@@ -23,12 +23,13 @@ from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal
 from PySide6.QtGui import QBrush, QColor
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QHeaderView, QLabel,
-    QMainWindow, QMessageBox, QProgressBar, QPushButton, QTabWidget, QToolBar,
+    QMainWindow, QMessageBox, QPushButton, QTabWidget, QToolBar,
     QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout,
 )
 
 from warp.gui.log_view import LogViewWidget
 from warp.gui.preview_view import PreviewView
+from warp.gui.progress_bar import StatusProgressBar
 from warp.style import LBG, primary_btn_style, secondary_btn_style
 
 from warp.debug import log
@@ -86,6 +87,18 @@ class RecognitionWorker(QObject):
         super().__init__()
         self._folder     = folder
         self._build_type = build_type
+        self._cancelled  = False
+
+    def cancel(self):
+        """Mark the worker for cooperative cancellation. The next progress
+        callback the importer fires will raise InterruptedError which run()
+        translates into a `failed('Cancelled')` signal."""
+        self._cancelled = True
+
+    def _stage_cb(self, pct: int, label: str) -> None:
+        if self._cancelled:
+            raise InterruptedError('cancelled')
+        self.stage.emit(pct, label)
 
     def run(self):
         from warp.debug import use_detection_channel
@@ -95,12 +108,16 @@ class RecognitionWorker(QObject):
             try:
                 importer = WarpImporter(
                     build_type=self._build_type,
-                    progress_callback=lambda pct, label: self.stage.emit(pct, label),
+                    progress_callback=self._stage_cb,
                 )
                 result = importer.process_folder(
                     self._folder,
                     progress_cb=lambda done, total, name: self.progress.emit(done, total, name),
                 )
+            except InterruptedError:
+                log.info('RecognitionWorker: cancelled by user')
+                self.failed.emit('Cancelled')
+                return
             except Exception as e:
                 log.exception('RecognitionWorker failed')
                 self.failed.emit(f'{type(e).__name__}: {e}')
@@ -233,9 +250,8 @@ class WarpWindow(QMainWindow):
 
         self.setCentralWidget(central)
 
-        self._progress = QProgressBar(self)
-        self._progress.setRange(0, 100)
-        self._progress.setVisible(False)
+        self._progress = StatusProgressBar(self)
+        self._progress.cancel_requested.connect(self._on_cancel_requested)
         self.statusBar().addPermanentWidget(self._progress)
         self.statusBar().showMessage('Ready.')
 
@@ -295,8 +311,7 @@ class WarpWindow(QMainWindow):
         self._ship_banner.setVisible(False)
         self._export_sets_btn.setEnabled(False)
         self._summary_lbl.setText(f'Recognising {folder}…')
-        self._progress.setVisible(True)
-        self._progress.setValue(0)
+        self._progress.start(determinate=True, maximum=100)
         self._set_controls_enabled(False)
 
         self._thread = QThread(self)
@@ -324,15 +339,20 @@ class WarpWindow(QMainWindow):
         self.statusBar().showMessage(f'[{done + 1}/{total}] {name}')
 
     def _on_stage(self, pct: int, label: str):
-        self._progress.setValue(max(0, min(100, pct)))
+        self._progress.set_progress(pct)
         self.statusBar().showMessage(label)
+
+    def _on_cancel_requested(self):
+        if self._worker is not None:
+            self._worker.cancel()
+            self._progress.set_cancel_enabled(False)
+            self.statusBar().showMessage('Cancelling…')
 
     def _on_finished(self, result: ImportResult):
         self._result = result
         self._populate_tree(result)
         self._preview.set_result(result)
-        self._progress.setValue(100)
-        self._progress.setVisible(False)
+        self._progress.finish()
         self._set_ship_banner(result)
         msg = f'{len(result.items)} items recognised'
         if result.errors:
@@ -358,12 +378,17 @@ class WarpWindow(QMainWindow):
             self._ship_banner.setVisible(True)
 
     def _on_failed(self, err: str):
-        self._progress.setVisible(False)
+        self._progress.finish()
         self._ship_banner.setVisible(False)
-        self._summary_lbl.setText(f'Recognition failed: {err}')
-        self.statusBar().showMessage('Failed.')
+        if err == 'Cancelled':
+            self._summary_lbl.setText('Recognition cancelled.')
+            self.statusBar().showMessage('Cancelled.')
+        else:
+            self._summary_lbl.setText(f'Recognition failed: {err}')
+            self.statusBar().showMessage('Failed.')
         self._set_controls_enabled(True)
-        QMessageBox.critical(self, 'Recognition failed', err)
+        if err != 'Cancelled':
+            QMessageBox.critical(self, 'Recognition failed', err)
 
     def _cleanup_thread(self):
         if self._thread is not None:
