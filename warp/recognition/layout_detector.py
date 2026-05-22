@@ -446,7 +446,12 @@ class LayoutDetector:
                 full = self._detect_via_full_scan(img, build_type, icon_matcher, app_cache)
                 if full and len(full) >= 2:
                     return full
-            return self._detect_boffs(img)
+            # No structural fallback. The legacy `_detect_boffs` brightness/
+            # V-profile path produced false positives on ~140 STO_screens
+            # that had no real BOFF panel — it was masking gaps in marker
+            # detection. With Strategy 0 now covering all 247 real-panel
+            # cases, returning {} is the honest answer.
+            return {}
         if build_type == 'SPEC':
             return {}
 
