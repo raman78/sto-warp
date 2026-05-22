@@ -1391,7 +1391,7 @@ class LayoutDetector:
         )
         return out
 
-    def _detect_boffs(self, img, icon_dims=None, offset=(0, 0), max_bands=3):
+    def _detect_boffs(self, img, icon_dims=None, offset=(0, 0), max_bands=3, n_cols=2):
         """Detect BOFF ability icons using structural knowledge of BOFFS screen.
 
         BOFFS layout: 2 columns (left: max 3 seats, right: max 2 seats).
@@ -1427,8 +1427,14 @@ class LayoutDetector:
         gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
 
         # --- Step 2: Column split (defined early — also used for band scan) ---
-        col_split = round(w * 0.55)
-        columns = [(0, col_split), (col_split, w)]
+        # n_cols=1 → single full-width column (Space Stations panel in PicCollage
+        # composites). n_cols=2 → standard BOFFS / MIXED screens with L/R seats.
+        if n_cols == 1:
+            col_split = w
+            columns = [(0, w)]
+        else:
+            col_split = round(w * 0.55)
+            columns = [(0, col_split), (col_split, w)]
 
         # --- Step 1: Find icon row bands ---
         # Scan PER COLUMN independently and merge. Rationale: in MIXED screens
@@ -1459,7 +1465,7 @@ class LayoutDetector:
             return bands
 
         left_bands = _scan_bands_in_strip(0, col_split)
-        right_bands = _scan_bands_in_strip(col_split, w)
+        right_bands = _scan_bands_in_strip(col_split, w) if col_split < w else []
 
         # Merge bands from both columns by Y overlap/proximity
         all_bands = sorted(left_bands + right_bands, key=lambda b: b[0])
@@ -1678,18 +1684,33 @@ class LayoutDetector:
         panel_w = int(w * 0.34)
         right_x = w - panel_w
 
-        left_img      = img[y_start:, :panel_w]
-        right_img     = img[y_start:, right_x:]
         # Top-right scan: a Space Stations panel in a collage sits in
         # y∈[~0.02h, ~0.30h]. The left half of the image at this y range
         # contains the ship card + EQ icons (high false-positive risk),
         # so we only add the right column here.
-        top_right_img = img[top_skip:y_start, right_x:]
+        #
+        # Space Stations geometry differs from standard MIXED BOFF rows:
+        # icons are larger relative to the panel (~80×105 in a ~1000-px-tall
+        # panel) and use the canonical 3+2 seat layout (3 left, 2 right) with
+        # 4 abilities per seat at intra-seat spacing ≈ icon_w * 1.14. Use
+        # panel-relative dims; n_cols stays at the default 2.
+        # Crop wider than the normal panel_w so both columns of seats fit.
+        tr_panel_w = int(w * 0.42)
+        tr_x = w - tr_panel_w
+        tr_h_px = y_start - top_skip
+        tr_icon_h = max(28, round(tr_h_px * 0.104))
+        tr_icon_w = max(20, round(tr_icon_h * 0.76))
+        tr_spacing = max(24, round(tr_icon_w * 1.14))
+        tr_dims = (tr_icon_w, tr_icon_h, tr_spacing)
+
+        left_img      = img[y_start:, :panel_w]
+        right_img     = img[y_start:, right_x:]
+        top_right_img = img[top_skip:y_start, tr_x:]
 
         left_result      = self._detect_boffs(left_img,  icon_dims=dims, offset=(0,       y_start))
         right_result     = self._detect_boffs(right_img, icon_dims=dims, offset=(right_x, y_start))
-        top_right_result = self._detect_boffs(top_right_img, icon_dims=dims,
-                                              offset=(right_x, top_skip))
+        top_right_result = self._detect_boffs(top_right_img, icon_dims=tr_dims,
+                                              offset=(tr_x, top_skip))
 
         left_count       = sum(len(v) for v in left_result.values())
         right_count      = sum(len(v) for v in right_result.values())
