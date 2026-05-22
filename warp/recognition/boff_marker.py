@@ -369,90 +369,87 @@ def detect_markers(img: np.ndarray, icon_w: int, icon_h: int):
 # Spec-stripe / full bar
 # ---------------------------------------------------------------------------
 
+_STRIPE_COL_FILL = 0.60   # column must be ≥60% in-band to count
+_STRIPE_MIN_RUN  = 2      # need ≥2 consecutive in-band columns
+
+
+def _stripe_col_scan(hsv, marker):
+    """Column-by-column scan for a thin vertical spec stripe just to the
+    right of the marker's base bar. Returns (code, run_len, run_end_abs_x)
+    or (None, 0, -1).
+
+    Per STRIPE_BAND we compute the per-column fraction of pixels matching
+    the band, then keep the longest run of cols with frac ≥ _STRIPE_COL_FILL.
+    The winning band is the one with the longest qualifying run. This
+    rejects diffuse colour noise (e.g. green name-plate background bleeding
+    into the search box) by requiring vertical continuity — a real stripe
+    is ~2-5 px wide and fills almost the whole bar height.
+    """
+    x, y, w, h, _ = marker
+    H_im, W_im = hsv.shape[:2]
+    look = max(8, int(round(w * 0.45)))
+    # Scan covers the last ~20% of the base bar plus a lookahead window.
+    # The in-bbox region is needed because some markers (overview.png
+    # Xarnok ENG+MW) have the spec stripe physically INSIDE the base
+    # bbox (the connectedComponents bbox already includes the stripe).
+    # 20% is wide enough to catch a 4-5 px stripe at the bbox edge, narrow
+    # enough that solid base colour doesn't fill ≥0.6 of any stripe band
+    # (base hues are chosen to be distinguishable from stripe hues).
+    sx0 = max(0, x + max(1, int(round(w * 0.80))))
+    sx1 = min(W_im, x + w + look)
+    sy0 = max(0, y + int(h * 0.15))
+    sy1 = min(H_im, y + h - int(h * 0.15))
+    if sx1 <= sx0 or sy1 <= sy0:
+        return (None, 0, -1)
+    crop = hsv[sy0:sy1, sx0:sx1]
+    HCH = crop[:, :, 0]; SCH = crop[:, :, 1]; VCH = crop[:, :, 2]
+    best_code = None; best_run = 0; best_end = -1
+    for _, h_lo, h_hi, s_lo, s_hi, v_lo, v_hi, code in STRIPE_BANDS:
+        m = ((HCH >= h_lo) & (HCH <= h_hi)
+             & (SCH >= s_lo) & (SCH <= s_hi)
+             & (VCH >= v_lo) & (VCH <= v_hi))
+        col_frac = m.mean(axis=0)
+        cur = 0; run = 0; end = -1
+        for ci, f in enumerate(col_frac):
+            if f >= _STRIPE_COL_FILL:
+                cur += 1
+                if cur > run:
+                    run = cur; end = ci
+            else:
+                cur = 0
+        if run > best_run:
+            best_run = run; best_code = code; best_end = end
+    if best_run < _STRIPE_MIN_RUN:
+        return (None, 0, -1)
+    return (best_code, best_run, sx0 + best_end)
+
+
 def classify_stripe(hsv, marker, _icon_w_unused=None):
     """Identify the specialization stripe on the right edge of a marker.
-    Returns (spec_code, score) or (None, score)."""
-    x, y, w, h, _ = marker
-    sx0 = x + w - max(2, int(w * 0.10))
-    sx1 = x + w + max(6, int(w * 0.40))
-    sy0 = y + max(0, int(h * 0.10))
-    sy1 = y + h - max(0, int(h * 0.10))
-    H, W = hsv.shape[:2]
-    sx0 = max(0, sx0); sx1 = min(W, sx1)
-    sy0 = max(0, sy0); sy1 = min(H, sy1)
-    if sx1 <= sx0 or sy1 <= sy0:
-        return (None, 0.0)
-    crop = hsv[sy0:sy1, sx0:sx1]
-    total = crop.shape[0] * crop.shape[1]
-    if total <= 0:
-        return (None, 0.0)
-    best_code, best_count = None, 0
-    for _, h_lo, h_hi, s_lo, s_hi, v_lo, v_hi, code in STRIPE_BANDS:
-        m = ((crop[:, :, 0] >= h_lo) & (crop[:, :, 0] <= h_hi)
-             & (crop[:, :, 1] >= s_lo) & (crop[:, :, 1] <= s_hi)
-             & (crop[:, :, 2] >= v_lo) & (crop[:, :, 2] <= v_hi))
-        c = int(m.sum())
-        if c > best_count:
-            best_count = c; best_code = code
-    score = best_count / total
-    if score < 0.15:
-        return (None, score)
-    return (best_code, score)
+    Returns (spec_code, run_len_in_cols) or (None, 0)."""
+    code, run, _end = _stripe_col_scan(hsv, marker)
+    return (code, run)
 
 
 def full_bar_extent(hsv, marker):
-    """Find the rightmost x where the colour bar (main zone OR spec
-    stripe) still has a strong column-fill, starting from the marker
-    bbox. Returns (full_w_including_stripe, has_spec, stripe_width).
+    """Find the rightmost x where the colour bar (main zone + spec
+    stripe) still has a strong column-fill. Returns
+    (full_w_including_stripe, has_spec, stripe_width).
 
-    Two-phase walk past the main zone:
-      Phase 1: skip ≤6 dim cols (the gap between main and stripe).
-      Phase 2: extend through contiguous bright cols (the stripe itself).
-
-    This stops cleanly at the END of the spec stripe — beyond which
-    there's another gap and then the seat name bar (same hue as marker)
-    that a naive "rightmost ≥35%" rule would grab.
+    `has_spec` is True whenever `_stripe_col_scan` confirms a stripe,
+    even if the stripe lies INSIDE the detection bbox (full_w == w).
+    Some markers (overview.png Xarnok ENG+MW) ship with the stripe
+    already inside the connectedComponents bbox; downstream gating in
+    detect_markers needs to know the bar is multi-coloured so the
+    fill_ratio / edge_frac thresholds can be relaxed accordingly.
     """
-    x, y, w, h, _code = marker
-    spec, _score = classify_stripe(hsv, marker)
-    if spec is None:
+    x, _y, w, _h, _code = marker
+    code, _run, end_abs = _stripe_col_scan(hsv, marker)
+    if code is None:
         return (w, False, 0)
-    H_im, W_im = hsv.shape[:2]
-    look_ahead = max(4, int(round(w * 0.35)))
-    sx0 = max(0, x)
-    sx1 = min(W_im, x + w + look_ahead)
-    sy0 = max(0, y + max(0, int(h * 0.15)))
-    sy1 = min(H_im, y + h - max(0, int(h * 0.15)))
-    if sy1 <= sy0 or sx1 <= sx0:
-        return (w, False, 0)
-    crop = hsv[sy0:sy1, sx0:sx1]
-    H = crop[:, :, 0]; S = crop[:, :, 1]; V = crop[:, :, 2]
-    main_m = np.zeros(crop.shape[:2], dtype=bool)
-    for _n, h_lo, h_hi, s_lo, s_hi, v_lo, v_hi, _c in MAIN_BANDS:
-        main_m |= ((H >= h_lo) & (H <= h_hi)
-                   & (S >= s_lo) & (S <= s_hi)
-                   & (V >= v_lo) & (V <= v_hi))
-    stripe_m = np.zeros(crop.shape[:2], dtype=bool)
-    for _n, h_lo, h_hi, s_lo, s_hi, v_lo, v_hi, _c in STRIPE_BANDS:
-        stripe_m |= ((H >= h_lo) & (H <= h_hi)
-                     & (S >= s_lo) & (S <= s_hi)
-                     & (V >= v_lo) & (V <= v_hi))
-    full_m = main_m | stripe_m
-    col_frac = full_m.mean(axis=0)
-    main_end_in_crop = (x + w) - sx0
-    last_col = main_end_in_crop - 1
-    n_cols = col_frac.shape[0]
-    ci = main_end_in_crop
-    while (ci < n_cols
-           and col_frac[ci] < 0.35
-           and ci - main_end_in_crop < 6):
-        ci += 1
-    while ci < n_cols and col_frac[ci] >= 0.35:
-        last_col = ci
-        ci += 1
-    full_w = max(w, last_col + 1)
-    has_spec = full_w > w + 1
-    stripe_w = full_w - w if has_spec else 0
+    full_w = max(w, end_abs - x + 1)
+    has_spec = True
+    stripe_w = max(0, full_w - w)
     return (full_w, has_spec, stripe_w)
 
 
