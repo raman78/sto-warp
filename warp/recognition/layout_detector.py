@@ -506,11 +506,19 @@ class LayoutDetector:
             if marker_boffs:
                 _all = [b for bxs in marker_boffs.values() for b in bxs]
                 if _all:
+                    # Inflate left by ~1 icon_w (seat-letter / portrait CCs
+                    # sitting just left of the markers) and down by ~1 icon_h
+                    # (ability-icon row immediately below each slot row, which
+                    # trait_grid otherwise grabs as a phantom panel).
+                    _ws = sorted(b[2] for b in _all)
+                    _hs = sorted(b[3] for b in _all)
+                    _iw = int(_ws[len(_ws) // 2])
+                    _ih = int(_hs[len(_hs) // 2])
                     boff_panel_box = (
-                        min(b[0] for b in _all),
+                        min(b[0] for b in _all) - _iw,
                         min(b[1] for b in _all),
                         max(b[0] + b[2] for b in _all),
-                        max(b[1] + b[3] for b in _all),
+                        max(b[1] + b[3] for b in _all) + _ih,
                     )
 
             def _in_boff_panel(bbox):
