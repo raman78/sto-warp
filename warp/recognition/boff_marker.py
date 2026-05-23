@@ -57,6 +57,7 @@ MAIN_BANDS: list[tuple[str, int, int, int, int, int, int, str]] = [
     ('SCI', 102, 114,   160, 255,  90, 255, 'S'),  # blue (V_lo: 140->90 for dark UI)
     ('UNI',  18,  33,    25,  95, 145, 255, 'U'),  # pale cream (V_lo: 195->145, H_hi: 30->33 for darker-tinted bars in compressed UI)
     ('UNI',  10,  35,     0,  25, 220, 255, 'U'),  # near-white variant — selection-highlighted Universal bars (S near 0, V blown to 255)
+    ('GND',  15,  30,   120, 230,  25,  95, 'G'),  # ground BOFF — dark saturated brown (sampled H≈23 S≈206 V≈67 from /home/raman/STO_przydatne/ground.png)
 ]
 
 # Spec-stripe bands (narrow right edge, 5-25% of bar width). NOT used
@@ -690,18 +691,33 @@ def project_seat_slots(panel, n_abilities=4, hsv=None):
 # Public entry point
 # ---------------------------------------------------------------------------
 
+# Marker codes split by panel family. Ground markers are dark-brown
+# tabs (code 'G'); the remaining profession codes are space seats.
+# Each family forms its own 2-col grid — a screen may show both
+# (Space Stations + Standard Away Team), so detect_panel runs
+# best_panel once per family and merges the results.
+_SPACE_CODES = frozenset({'T', 'E', 'S', 'U'})
+_GROUND_CODES = frozenset({'G'})
+
+
 def detect_panel(img: np.ndarray) -> Optional[dict]:
-    """Detect the BOFF panel in `img`. Returns None when no plausible
+    """Detect BOFF panel(s) in `img`. Returns None when no plausible
     panel is found.
 
+    Markers are grouped by family (space: T/E/S/U; ground: G) and
+    `best_panel` runs per family, so screens with both a Space Stations
+    panel and a Standard Away Team panel emit seats from both in a
+    single pass. Seats from each panel stay contiguous in `col_a`/
+    `col_b` so that `seat_idx` in `slots` still indexes into
+    `col_a + col_b`.
+
     Output dict:
-      'col_a':   list[(x, y, w, h, code, spec_code | None)] — left column
-                 markers (top→bottom). `spec_code` is the spec-stripe code
-                 ('Cmd'/'Int'/'Tem'/'Plt'/'MW') when detected, else None.
-      'col_b':   list[(x, y, w, h, code, spec_code | None)] — right column
-      'score':   float — RANSAC score of the chosen 2-column grid
+      'col_a':   list[(x, y, w, h, code, spec_code | None)] — left
+                 column markers concatenated panel-by-panel.
+      'col_b':   list[(x, y, w, h, code, spec_code | None)] — right
+                 column markers concatenated panel-by-panel.
+      'score':   float — max RANSAC score across detected panels
       'seats':   list[(side, mx, my, mw, mh, seat_code, spec_code | None)]
-                 — 'L' or 'R'
       'slots':   list[(seat_idx, slot_idx, x, y, w, h, seat_code)]
                  — `seat_idx` indexes into `col_a + col_b`.
     """
@@ -714,28 +730,64 @@ def detect_panel(img: np.ndarray) -> Optional[dict]:
         return None
 
     icon_w, icon_h = _refine_dims_from_markers(markers, icon_w, icon_h)
-    panel = best_panel(markers, icon_w, icon_h, img=img)
-    if panel is None:
+    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
+
+    groups = [
+        ('space',  [m for m in markers if m[4] in _SPACE_CODES]),
+        ('ground', [m for m in markers if m[4] in _GROUND_CODES]),
+    ]
+
+    # Build per-family panels first so we can lay out global indices
+    # before concatenating the column lists.
+    detected: list[tuple[list, list, float]] = []
+    for _gname, gm in groups:
+        if len(gm) < 3:
+            continue
+        p = best_panel(gm, icon_w, icon_h, img=img)
+        if p is None:
+            continue
+        detected.append(p)
+    if not detected:
         return None
 
-    hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
-    slots = project_seat_slots(panel, hsv=hsv)
-    a, b, score = panel
-    # Augment column markers with spec stripe (per-seat) — 6-tuple
-    # (mx, my, mw, mh, code, spec_code | None). Detection rate ~36% on
-    # 36 GT screens; missing specs leave the slot at None.
-    a = [(mx, my, mw, mh, c, classify_stripe(hsv, (mx, my, mw, mh, c))[0])
-         for (mx, my, mw, mh, c) in a]
-    b = [(mx, my, mw, mh, c, classify_stripe(hsv, (mx, my, mw, mh, c))[0])
-         for (mx, my, mw, mh, c) in b]
+    n_a_total = sum(len(p[0]) for p in detected)
+
+    col_a_all: list[tuple] = []
+    col_b_all: list[tuple] = []
+    slots_all: list[tuple] = []
+    score_max = 0.0
+    a_cursor = 0
+    b_cursor = n_a_total
+    for (a, b, score) in detected:
+        score_max = max(score_max, float(score))
+        a6 = [(mx, my, mw, mh, c, classify_stripe(hsv, (mx, my, mw, mh, c))[0])
+              for (mx, my, mw, mh, c) in a]
+        b6 = [(mx, my, mw, mh, c, classify_stripe(hsv, (mx, my, mw, mh, c))[0])
+              for (mx, my, mw, mh, c) in b]
+        col_a_all.extend(a6)
+        col_b_all.extend(b6)
+        # Local seat_idx convention from project_seat_slots: 0..len(a)-1
+        # references `a`, len(a)..len(a)+len(b)-1 references `b`.
+        # Remap each to the global col_a+col_b layout.
+        len_a = len(a)
+        for (lsi, slot_idx, x, y, w, h, code) in project_seat_slots(
+                (a, b, score), hsv=hsv):
+            if lsi < len_a:
+                gsi = a_cursor + lsi
+            else:
+                gsi = b_cursor + (lsi - len_a)
+            slots_all.append((gsi, slot_idx, x, y, w, h, code))
+        a_cursor += len_a
+        b_cursor += len(b)
+
     seats = (
-        [('L', mx, my, mw, mh, c, sp) for (mx, my, mw, mh, c, sp) in a]
-        + [('R', mx, my, mw, mh, c, sp) for (mx, my, mw, mh, c, sp) in b]
+        [('L', mx, my, mw, mh, c, sp) for (mx, my, mw, mh, c, sp) in col_a_all]
+        + [('R', mx, my, mw, mh, c, sp) for (mx, my, mw, mh, c, sp) in col_b_all]
     )
     return {
-        'col_a':  a,
-        'col_b':  b,
-        'score':  float(score),
+        'col_a':  col_a_all,
+        'col_b':  col_b_all,
+        'score':  score_max,
         'seats':  seats,
-        'slots':  slots,
+        'slots':  slots_all,
     }
