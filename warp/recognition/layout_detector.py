@@ -629,6 +629,20 @@ class LayoutDetector:
                             full.update(boff_result)
                             _slog.info(f'LayoutDetector: MIXED merged → {len(full)} slot groups total')
                     return _merge_traits(full)
+
+            # All EQ strategies failed. BOFF/trait detection is independent of
+            # EQ — user may have pasted a MIXED screen with partial content.
+            # Emit whatever boffs/traits we found rather than dropping them.
+            if marker_boffs or trait_grid_res:
+                result: dict[str, list] = {}
+                if marker_boffs:
+                    result.update(marker_boffs)
+                merged = _merge_traits(result)
+                _slog.info(
+                    f'LayoutDetector: MIXED (no EQ anchor) → '
+                    f'{sum(1 for k in merged if k.startswith("Boff "))} boff seats, '
+                    f'{sum(1 for k in merged if not k.startswith("Boff "))} trait groups')
+                return merged
             # Fall through to standard strategies if both OCR-anchored and full scan fail
 
         # Strategy 1: pixel analysis backed by eq_geometry. On 38 GT screens
