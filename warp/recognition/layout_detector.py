@@ -336,11 +336,14 @@ class LayoutDetector:
         self._ocr = None
         self._calibration = self._load_calibration()
         self._community_anchors: list | None = None  # instance cache for community_anchors.json (P11)
-        # Per-image cached EQ geometry result (keyed by id(img)).
-        # Populated lazily by _get_eq_geometry so multiple callers share one OCR run.
+        # Per-detect()-call cached EQ geometry result (keyed by id(img)).
+        # Shared across multiple callers within one detect() call so they
+        # reuse a single OCR run. CLEARED at the top of detect() — id(img)
+        # is not stable across calls (Python reuses ids after GC), so
+        # persisting entries across detect() calls causes false cache hits
+        # and non-deterministic results when LayoutDetector instances are
+        # reused for batch processing.
         self._eq_geom_cache: dict[int, EQGeometry | None] = {}
-        # Per-image cached ground EQ geometry. Separate from space cache because
-        # the two detectors anchor on different OCR labels.
         self._ground_eq_geom_cache: dict[int, GroundEQGeometry | None] = {}
 
     def _get_eq_geometry(self, img: np.ndarray) -> EQGeometry | None:
@@ -419,6 +422,11 @@ class LayoutDetector:
 
     def detect(self, img: np.ndarray, build_type: str, ship_profile: dict | None = None,
                icon_matcher=None, app_cache=None) -> dict[str, list[tuple[int, int, int, int]]]:
+        # Reset per-image caches: id(img) is unstable across calls (Python
+        # may reuse ids after GC), so stale entries can silently match a
+        # different image and corrupt downstream detection.
+        self._eq_geom_cache.clear()
+        self._ground_eq_geom_cache.clear()
         if build_type in ('TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS'):
             # Strategy 0: structure-driven trait grid detector with ML probe.
             # Multi-panel grid lock + multi-chain row extraction + per-group
