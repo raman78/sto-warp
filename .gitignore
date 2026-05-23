@@ -44,9 +44,11 @@ warp/knowledge/rate_limit.json
 warp/hub_token.txt
 warp/training_data/
 
-# Local-only developer diagnostics
-tests/diag_*.py
-tests/_diag_out/
+# Local-only developer diagnostics — keep .py scripts under tests/_*/
+# tracked, but ignore everything they generate (PNG/JPG/TXT/LOG/etc).
+tests/_*/**
+!tests/_*/**/
+!tests/_*/**/*.py
 
 # Maintainer review tools — superseded by the democratic merger cron,
 # kept locally for emergency one-shot use.
