@@ -57,7 +57,7 @@ MAIN_BANDS: list[tuple[str, int, int, int, int, int, int, str]] = [
     ('SCI', 102, 114,   160, 255,  90, 255, 'S'),  # blue (V_lo: 140->90 for dark UI)
     ('UNI',  18,  33,    25,  95, 145, 255, 'U'),  # pale cream (V_lo: 195->145, H_hi: 30->33 for darker-tinted bars in compressed UI)
     ('UNI',  10,  35,     0,  25, 220, 255, 'U'),  # near-white variant — selection-highlighted Universal bars (S near 0, V blown to 255)
-    ('GND',  15,  30,   120, 230,  25,  95, 'G'),  # ground BOFF — dark saturated brown (sampled H≈23 S≈206 V≈67 from /home/raman/STO_przydatne/ground.png)
+    ('GND',  18,  28,   150, 230,  35,  95, 'G'),  # ground BOFF — dark saturated brown (sampled H≈23 S≈206 V≈67 from /home/raman/STO_przydatne/ground.png); tightened from H[15,30] S[120,230] V[25,95] to reject background bleed (darker, less saturated edge pixels) on JPG screenshots with non-uniform surroundings
 ]
 
 # Spec-stripe bands (narrow right edge, 5-25% of bar width). NOT used
@@ -729,7 +729,6 @@ def detect_panel(img: np.ndarray) -> Optional[dict]:
     if len(markers) < 3:
         return None
 
-    icon_w, icon_h = _refine_dims_from_markers(markers, icon_w, icon_h)
     hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
     groups = [
@@ -738,12 +737,15 @@ def detect_panel(img: np.ndarray) -> Optional[dict]:
     ]
 
     # Build per-family panels first so we can lay out global indices
-    # before concatenating the column lists.
+    # before concatenating the column lists. Refine icon dims per family
+    # so a space panel and a ground panel pasted into the same screen at
+    # different scales cannot pollute each other's geometry hint.
     detected: list[tuple[list, list, float]] = []
     for _gname, gm in groups:
         if len(gm) < 3:
             continue
-        p = best_panel(gm, icon_w, icon_h, img=img)
+        fam_w, fam_h = _refine_dims_from_markers(gm, icon_w, icon_h)
+        p = best_panel(gm, fam_w, fam_h, img=img)
         if p is None:
             continue
         detected.append(p)
