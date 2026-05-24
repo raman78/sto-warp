@@ -101,6 +101,7 @@ SEAT_CODE_LABEL = {
     'E': 'Engineering',
     'S': 'Science',
     'U': 'Universal',
+    'G': 'Ground',
 }
 SPEC_CODE_LABEL = {
     'Cmd': 'Command',

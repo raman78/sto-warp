@@ -36,6 +36,11 @@ _SEAT_CODE_TO_PROF = {
     'S': 'Science',
     # 'U' (Universal) intentionally maps to None — Universal seats have
     # no inherent profession; callers must derive it from ability content.
+    # 'G' (Ground) also maps to None: the brown ground marker carries no
+    # profession info, and a single ground seat may mix base + spec
+    # profs across its slots (e.g. 1× Tac + 3× MW). Use is_ground_seat()
+    # to distinguish 'G' from 'U' for environment-based candidate filtering.
+    'G': None,
 }
 # Multi-char human-friendly spec codes — single letters (O/P/Y/C/L)
 # were not first-letter mnemonics and confused human readers of logs
@@ -75,7 +80,7 @@ _LEGACY_SPEC_PROFESSIONS = frozenset(_SPEC_CODE_TO_PROF.values())
 # with stale caches; normalized to canonical multi-char codes in the
 # parsing helpers below.
 _SEAT_KEY_RE = re.compile(
-    r'^Boff Seat ([LR])(?:\[([TESU])(?:\+(Cmd|Int|Tem|Plt|MW|O|P|Y|C|L))?\])?_(\d+)$'
+    r'^Boff Seat ([LR])(?:\[([TESUG])(?:\+(Cmd|Int|Tem|Plt|MW|O|P|Y|C|L))?\])?_(\d+)$'
 )
 
 
@@ -138,11 +143,24 @@ def is_seat_keyed(slot_name: str) -> bool:
     return isinstance(slot_name, str) and bool(_SEAT_KEY_RE.match(slot_name))
 
 
+def is_ground_seat(slot_name: str) -> bool:
+    """True iff `slot_name` is a ground BOFF seat key (marker code 'G').
+    Used by icon_matcher to restrict candidate abilities to the ground
+    environment. Ground seats allow base+spec profession mixing within
+    a single seat, so callers must NOT also constrain by profession.
+    """
+    if not isinstance(slot_name, str):
+        return False
+    m = _SEAT_KEY_RE.match(slot_name)
+    return bool(m and m.group(2) == 'G')
+
+
 def pretty_slot(slot_name: str) -> str:
     """Convert a dynamic BOFF seat key into a user-friendly label:
     - `Boff Seat L[E]_392`     → `Boff Engineering`
     - `Boff Seat R[T+Plt]_510` → `Boff Tactical+Pilot`
     - `Boff Seat L[U]_478`     → `Boff Universal`
+    - `Boff Seat L[G]_478`     → `Boff Ground`
     - `Boff Seat L_478`        → `Boff Universal` (legacy seat-keyed without code)
 
     Non-seat-keyed slot names (e.g. `Boff Tactical`, `Fore Weapons`,
@@ -154,5 +172,10 @@ def pretty_slot(slot_name: str) -> str:
         return slot_name
     prof = parse_seat_profession(slot_name)
     spec = parse_seat_spec(slot_name)
-    base = f'Boff {prof}' if prof else 'Boff Universal'
+    if prof:
+        base = f'Boff {prof}'
+    elif is_ground_seat(slot_name):
+        base = 'Boff Ground'
+    else:
+        base = 'Boff Universal'
     return f'{base}+{spec}' if spec else base

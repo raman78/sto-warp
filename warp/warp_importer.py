@@ -2478,28 +2478,38 @@ class WarpImporter:
         # Without this, candidate_names=None → full index search → equipment items
         # (Deflectors, Consoles, etc.) can match ability slots at conf=1.00 via
         # session examples that were accidentally confirmed in the wrong slot.
-        # For ground build types, the ability pool is further narrowed to the
-        # 'ground' env so the matcher cannot return space-only abilities.
+        # Per-slot routing:
+        #   - Marker-keyed ground seat (Boff Seat L[G]_<y>) → ground-only pool,
+        #     even on MIXED screens where space and ground panels coexist.
+        #   - Ground build type → ground-only pool for all BOFF slots.
+        #   - Otherwise → full pool (cache.all = space ∪ ground), so legacy
+        #     seat-keyed and profession-keyed slots stay permissive.
+        from warp.recognition.boff_keys import is_ground_seat
         _is_ground_bt = build_type in ('GROUND', 'GROUND_MIXED', 'GROUND_BOFFS')
-        boff_names: set[str] = set()
+        ground_boff_names: set[str] = set()
+        all_boff_names: set[str] = set()
         try:
             cache = self._cache.boff_abilities
-            if _is_ground_bt:
-                for _prof, rank_lists in (cache.get('ground') or {}).items():
-                    if not isinstance(rank_lists, (list, tuple)):
-                        continue
-                    for rank_dict in rank_lists:
-                        if isinstance(rank_dict, dict):
-                            boff_names.update(rank_dict.keys())
-            else:
-                boff_names = set(cache.get('all', {}).keys())
+            for _prof, rank_lists in (cache.get('ground') or {}).items():
+                if not isinstance(rank_lists, (list, tuple)):
+                    continue
+                for rank_dict in rank_lists:
+                    if isinstance(rank_dict, dict):
+                        ground_boff_names.update(rank_dict.keys())
+            all_boff_names = set(cache.get('all', {}).keys())
         except Exception:
-            boff_names = set()
-        if boff_names:
-            for sd in slot_defs:
-                slot_name = sd['name']
-                if slot_name.startswith('Boff ') and slot_name not in result:
-                    result[slot_name] = boff_names
+            ground_boff_names = set()
+            all_boff_names = set()
+        for sd in slot_defs:
+            slot_name = sd['name']
+            if not slot_name.startswith('Boff ') or slot_name in result:
+                continue
+            if is_ground_seat(slot_name) or _is_ground_bt:
+                pool = ground_boff_names
+            else:
+                pool = all_boff_names
+            if pool:
+                result[slot_name] = pool
 
         # Trait slots: restrict to the matching trait category.
         # Without this, candidate_names=None → full index search lets a ground
