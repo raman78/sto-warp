@@ -413,3 +413,111 @@ The local `.pt` and community `.pt` are the **same file** —
 | `warp/models/ship_type_corrections.json` | OCR correction map downloaded from community (optional) |
 | `warp/knowledge/install_id.txt` | Anonymous UUID identifying this installation |
 | `warp/hub_token.txt` | HuggingFace write token (optional, for uploads) |
+
+---
+
+## 9. Local bootstrap trainer (one-shot)
+
+The icon embedder (`icon_embedder.pt` + `embedding_index.npz`) is normally
+trained centrally on community contributions — the same democratic-voting
+pipeline described above for the softmax classifier. When the central
+embedder is missing entire class regions (e.g. ground BOFF abilities, whose
+icons rarely show up in space-side screenshots), waiting for those crops to
+arrive via HF staging is infeasible: 10,600 synthetic crops at
+200 uploads/install/UTC day = ~53 days through normal sync.
+
+For that one-time gap-closure, sto-warp ships a **local** bootstrap path:
+
+```
+1. Generate synthetic crops from cargo wiki PNGs (64×64 BGR, augmented).
+2. Train the ArcFace embedder locally on real + synthetic crops.
+3. Manually upload the resulting .pt + gallery + label map to central HF.
+4. Resume normal central training thereafter.
+```
+
+This path is **not** a replacement for central training — it is a single
+intervention to seed unknown classes into the gallery so subsequent
+community contributions have something to vote against.
+
+### 9.1 Synthetic crop generator
+
+File: `warp/trainer/synthetic_crop_generator.py`
+
+```bash
+python -m warp.trainer.synthetic_crop_generator --env ground -n 100
+```
+
+For each ability name in `boff_abilities()[env]`, loads the cargo wiki PNG
+from `icons_dir()` and emits `n` augmented 64×64 BGR variants under:
+
+```
+~/.local/share/warp/training_data/synthetic_crops/<env>/<class_slug>/<seq>.png
+```
+
+Augmentations approximate STO's icon-on-UI domain:
+
+| Step | Detail |
+|------|--------|
+| Background | Random dark BGR gradient + Gaussian noise (mimics navy/grey UI surfaces) |
+| Composite | Alpha-aware (icons are BGRA with transparent corners) |
+| Scale | Icon height uniform in [44, 60] px before centring |
+| Position | ±3 px bbox jitter from canvas centre |
+| Colour | HSV: ±15 % brightness, ±20 % saturation, ±5° hue |
+| Cooldown | 10 % chance of radial dim sweep overlay |
+| Codec | JPEG re-encode at quality 70–95 (gameplay screens are JPEG) |
+
+Synthetic crops live alongside real crops in `training_data/` but are
+**never** synced to HF — they are local bootstrap data, not community
+contributions.
+
+### 9.2 Local embedder trainer
+
+File: `warp/trainer/embedder_trainer.py`
+
+```bash
+# Generate + train in one shot
+python -m warp.trainer.embedder_trainer --generate-synthetic --env ground -n 100 --train
+
+# Or train against pre-generated crops
+python -m warp.trainer.embedder_trainer --train
+```
+
+Architecture mirrors the central trainer (`admin_train_metric.py`):
+
+| Component | Value |
+|-----------|-------|
+| Backbone | EfficientNet-B0 (ImageNet warm start, then warm-started from existing `icon_embedder.pt` when present) |
+| Projection | Linear → 256-d → L2-normalize |
+| Head | ArcFace, margin = 0.5, scale = 30.0 |
+| Sampler | PK: P = 8 classes × K = 4 samples / batch = 32 |
+| Optimizer | AdamW, lr = 3e-4, CosineAnnealingLR |
+| Loss | CrossEntropy on ArcFace logits |
+| Stop | Early stop on val recall@1, patience = 5, max 30 epochs |
+
+Data sources:
+- **Real crops** from `~/.local/share/warp/training_data/crops/` —
+  filenames are `<slot>__<slug>__<hash>.png`; canonical labels are pulled
+  from `crops/crop_index.json` (key `name`) so the resulting label map
+  stays consistent with the existing embedder.
+- **Synthetic crops** from `training_data/synthetic_crops/<env>/<slug>/` —
+  class slug is reverse-mapped to canonical name via
+  `boff_abilities()[env]`.
+
+Outputs in `userdata.models_dir()` (= `~/.cache/warp/models/`):
+
+```
+icon_embedder.pt           — backbone + projection state_dict
+embedding_index.npz        — full-train gallery (no aug)
+embedder_label_map.json    — {index: canonical_name}
+icon_embedder_meta.json    — hyper-params + val_recall@1 + source='local-bootstrap'
+```
+
+### 9.3 Manual upload to central
+
+After training, copy the four output files to
+`sets-sto/warp-knowledge/models/` on HuggingFace (web UI or `huggingface-cli upload`).
+The next `ModelUpdater` tick on every install will pull them via the same
+flow as in §4. After upload, **central training resumes normal operation**
+on community-contributed real crops — no further local intervention.
+
+The upload is a one-time admin action; users do not run this themselves.
