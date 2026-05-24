@@ -5,6 +5,57 @@ All notable changes to **sto-warp** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [1.0.4] — 2026-05-24
+
+Ground BOFF recognition + local bootstrap embedder workstream. Closes the
+embedder's ground BOFF class-coverage gap (was 6/106) and ships a one-off
+local-training path so future gaps can be patched without the 53-day HF
+staging round-trip.
+
+### Added
+- `warp/trainer/synthetic_crop_generator.py` — generates augmented 64×64
+  BGR crops from cargo wiki PNGs for embedder bootstrap. Per-class
+  background synthesis (dark gradient + noise), alpha-aware composite,
+  bbox / scale / colour jitter, optional radial cooldown overlay, JPEG
+  re-encode. CLI: `python -m warp.trainer.synthetic_crop_generator
+  --env ground -n 100`.
+- `warp/trainer/embedder_trainer.py` — local ArcFace + EfficientNet-B0
+  + PK sampler + k-NN gallery trainer (mirrors central
+  `admin_train_metric.py`). Loads real crops via `crops/crop_index.json`
+  and synthetic crops via cargo slug reverse-map; warm-starts from the
+  existing `icon_embedder.pt` to preserve previously-learned classes.
+  Outputs `icon_embedder.pt` + `embedding_index.npz` +
+  `embedder_label_map.json` + `icon_embedder_meta.json` to
+  `userdata.models_dir()`. CLI:
+  `python -m warp.trainer.embedder_trainer --generate-synthetic
+  --env ground -n 100 --train`.
+- Ground BOFF seat code `G` parsed by `recognition/boff_keys.py`
+  (regex + `is_ground_seat()` helper); `boff_marker.py` labels marker
+  panels accordingly.
+- `recognition/warp_importer._build_candidate_pools` routes ground
+  seats to a ground-only ability pool (cargo `boff_abilities['ground']`),
+  preventing space abilities from being suggested for ground BOFFs.
+- `docs/ML_PIPELINE.md` §9 — full documentation of the one-shot local
+  bootstrap workflow, hyper-parameters, data sources, output files, and
+  the manual upload step to `sets-sto/warp-knowledge/models/`.
+
+### Fixed
+- Embedder trainer no longer filters out crops named `__inactive__` /
+  `__empty__`; the original filter on `name.startswith('__')` silently
+  dropped 433 + 113 real training crops, which made the embedder
+  nearest-neighbour-snap empty slots to a random ability (typically
+  Charged Particle Burst at conf≈0.93). System labels are now learned
+  as proper classes so blank/greyed-out slots are recognised as empty.
+
+### Trained model
+Local bootstrap produced **956-class embedder** (was 524), val_recall@1
+0.965, gallery 27 127 vectors. Uploaded to
+`sets-sto/warp-knowledge/models/` (HF commit `1304198cc8f1a8e0`); other
+installs pull on their next `ModelUpdater` tick. Coverage: ground BOFF
+106/106 (was 6/106), space BOFF 122/122 (was 64/122).
+
+---
+
 ## [1.0.3] — 2026-05-21
 
 Targeted bug fixes on top of 1.0.2 — review-panel data integrity in
