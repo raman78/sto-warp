@@ -1521,8 +1521,16 @@ class WarpImporter:
                 layout[_slot] = [_bb_t]
                 # Append as RecognisedItem so trainer review list picks it up.
                 # Ship Name is position-only in WARP CORE (no content stored),
-                # so name='' there; Type/Tier carry the OCR value.
-                _val = '' if _slot == 'Ship Name' else text_info.get(_valkey, '')
+                # so name='' there; Tier carries the OCR value; Type uses the
+                # canonical class string from ShipDB.resolve() (already promoted
+                # into local `ship_type` above) so the bbox label shows the
+                # cargo-validated name instead of the raw OCR text.
+                if _slot == 'Ship Name':
+                    _val = ''
+                elif _slot == 'Ship Type':
+                    _val = ship_type
+                else:
+                    _val = text_info.get(_valkey, '')
                 result.items.append(RecognisedItem(
                     slot        = _slot,
                     slot_index  = 0,
