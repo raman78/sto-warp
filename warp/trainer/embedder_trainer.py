@@ -99,7 +99,10 @@ def _load_real_crops(crops_dir: Path) -> list[tuple[np.ndarray, str]]:
     skipped_meta = skipped_read = 0
     for fname, meta in idx.items():
         name = (meta or {}).get('name')
-        if not isinstance(name, str) or not name or name.startswith('__'):
+        # Keep `__inactive__` / `__empty__` — they are legitimate classes the
+        # embedder must learn so empty/greyed-out slots get recognised as such
+        # instead of nearest-neighbour-snapping to a random real ability.
+        if not isinstance(name, str) or not name:
             skipped_meta += 1
             continue
         p = crops_dir / fname
