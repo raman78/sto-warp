@@ -208,12 +208,25 @@ class _ContributeQueue:
                     self._ack_to_disk(item['id'])
                     if outcome == 'sent':
                         self._sent_since_drain += 1
-                    if not self._queue and self._sent_since_drain > 0:
+                    if not self._queue:
+                        if self._sent_since_drain > 0:
+                            log.info(
+                                f'WARPSync: drained queue '
+                                f'({self._sent_since_drain} contribution(s) sent)'
+                            )
+                            self._sent_since_drain = 0
+                    elif (outcome == 'sent'
+                          and self._sent_since_drain > 0
+                          and self._sent_since_drain % self._client._PROGRESS_EVERY == 0):
+                        # Periodic progress signal while draining a long
+                        # queue — without this the user would see nothing
+                        # between "backend recovered" and "drained queue"
+                        # which can be many minutes apart at rate-limit
+                        # pace.
                         log.info(
-                            f'WARPSync: drained queue '
-                            f'({self._sent_since_drain} contribution(s) sent)'
+                            f'WARPSync: sent {self._sent_since_drain} '
+                            f'contribution(s) ({len(self._queue)} remaining)'
                         )
-                        self._sent_since_drain = 0
                 # outcome == 'retry': leave item at queue head; breaker is
                 # now open, next loop iteration will sleep until it lifts.
 
@@ -237,7 +250,9 @@ class WARPSyncClient:
     # Circuit breaker: after a 503/network error, stop contributing for this
     # many seconds to avoid log spam when the backend is sleeping (Render cold-start
     # takes ~50 s but we back off for longer to avoid hammering it).
-    _BACKOFF_SECONDS = 300   # 5 minutes
+    _BACKOFF_SECONDS    = 300    # 5 minutes between retries during outage
+    _OUTAGE_HEARTBEAT_S = 1800   # 30 min between "still down" heartbeat logs
+    _PROGRESS_EVERY     = 10     # emit progress INFO every N successful sends
 
     def __init__(self, backend_url: str | None = None):
         self._url       = (backend_url or self._load_config_url()
@@ -251,6 +266,11 @@ class WARPSyncClient:
         # should reflect state transitions (READY → BACKOFF, BACKOFF →
         # drained), not periodic breaker re-trips while nothing changes.
         self._outage_warned: bool = False
+        # Timestamp of the last outage-related log line (WARN or heartbeat
+        # INFO). Used to emit a periodic "still down" heartbeat every
+        # _OUTAGE_HEARTBEAT_S while the outage persists, so a long
+        # silence doesn't make the worker look dead.
+        self._outage_last_log_ts: float = 0.0
 
         # Single-worker contribute queue (replaces per-call thread spawn).
         # Constructed AFTER _backend_unavailable_until so the worker can
@@ -486,22 +506,43 @@ class WARPSyncClient:
 
         if result is None:
             self._backend_unavailable_until = time.time() + self._BACKOFF_SECONDS
-            # Only WARN on the FIRST trip of an outage. Repeated trips
-            # at the end of each 5-min backoff window add no new
-            # information — the breaker state is still BACKOFF — so we
-            # stay silent until a successful send resets the flag.
+            now = time.time()
+            depth = self._queue.depth()
+            # Only WARN on the FIRST trip of an outage. Repeated trips at
+            # the end of each 5-min backoff window add no new information
+            # — the breaker state is still BACKOFF. To avoid going
+            # completely silent on long outages (which makes the worker
+            # look dead), emit an INFO heartbeat every
+            # _OUTAGE_HEARTBEAT_S so the user can still see the queue
+            # depth and confirm the worker is alive.
             if not self._outage_warned:
-                depth = self._queue.depth()
                 log.warning(
                     f'WARPSync: backend unavailable ({last_err}) — '
                     f'backing off {self._BACKOFF_SECONDS}s ({depth} queued)'
                 )
-                self._outage_warned = True
+                self._outage_warned     = True
+                self._outage_last_log_ts = now
+            elif now - self._outage_last_log_ts >= self._OUTAGE_HEARTBEAT_S:
+                log.info(
+                    f'WARPSync: backend still unavailable ({depth} queued)'
+                )
+                self._outage_last_log_ts = now
             return 'retry'
 
         success = result.get('ok', False)
         if success:
-            self._outage_warned = False  # outage over — next failure WARNs again
+            # Recovery signal — first success after an outage tells the
+            # user the worker just got through. depth() still includes
+            # the item we're about to ack, so subtract 1 for "remaining
+            # after this".
+            if self._outage_warned:
+                remaining = max(0, self._queue.depth() - 1)
+                log.info(
+                    f'WARPSync: backend recovered, resuming uploads '
+                    f'({remaining} remaining)'
+                )
+                self._outage_warned      = False
+                self._outage_last_log_ts = 0.0
             self._increment_rate_limit()
             return 'sent'
         else:
