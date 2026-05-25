@@ -28,7 +28,9 @@ import json
 import threading
 import time
 import uuid
+from collections import deque
 from datetime import date
+from pathlib import Path
 from typing import Callable
 
 import numpy as np
@@ -42,6 +44,178 @@ MAX_CONTRIBUTIONS_PER_DAY = 200    # per installation, per day
 KNOWLEDGE_MAX_AGE_HOURS   = 24     # re-download knowledge base after this
 
 WARP_VERSION = '1.0b'
+
+
+class _ContributeQueue:
+    """Single-worker bounded queue with disk persistence + TTL.
+
+    Replaces the old "spawn one thread per `contribute()`" model. All
+    uploads funnel through a single background worker, so:
+      - at most one retry-burst runs at a time (no thread pile-up while
+        the backend is sleeping / cold-starting)
+      - circuit-breaker trips once per outage cycle, not once per call
+      - log noise drops from N×4 lines to ~2 per outage cycle
+      - items survive app restarts via append-only JSONL log
+      - items older than TTL_DAYS are dropped on load (stale relative to
+        current training session, not worth sending)
+
+    File format (one JSON object per line):
+        {"kind":"item","id":...,"ts":...,"phash":...,"crop_png_b64":...,
+         "item_name":...,"wrong_name":...,"confirmed":...}
+        {"kind":"ack","id":...}
+
+    On load, items appear in `pending = items - acked`. After load the
+    file is compacted when it grew past COMPACT_THRESHOLD lines.
+    """
+
+    MAX_IN_MEMORY     = 50      # hard cap on pending items
+    TTL_DAYS          = 7       # drop items older than this on load
+    COMPACT_THRESHOLD = 100     # rewrite file if it has more than N lines
+
+    def __init__(self, client: 'WARPSyncClient', path: Path):
+        self._client = client
+        self._path   = path
+        self._lock   = threading.Lock()
+        self._cv     = threading.Condition(self._lock)
+        self._queue: deque[dict] = deque()
+        self._sent_since_drain   = 0
+        self._overflow_warned    = False
+        self._stop               = False
+        self._load_from_disk()
+        threading.Thread(
+            target=self._worker_loop,
+            daemon=True, name='warp-contribute-worker',
+        ).start()
+
+    # ── Public API ─────────────────────────────────────────────────────────
+    def enqueue(self, item: dict) -> bool:
+        """Append item to queue + persist. Returns False if queue full."""
+        with self._cv:
+            if len(self._queue) >= self.MAX_IN_MEMORY:
+                if not self._overflow_warned:
+                    log.warning(
+                        f'WARPSync: contribute queue full ({self.MAX_IN_MEMORY}) — '
+                        f'dropping new items until backend recovers'
+                    )
+                    self._overflow_warned = True
+                return False
+            self._overflow_warned = False
+            self._queue.append(item)
+            self._append_to_disk({'kind': 'item', **item})
+            self._cv.notify()
+            return True
+
+    def depth(self) -> int:
+        with self._lock:
+            return len(self._queue)
+
+    # ── Persistence ────────────────────────────────────────────────────────
+    def _append_to_disk(self, rec: dict) -> None:
+        try:
+            self._path.parent.mkdir(parents=True, exist_ok=True)
+            with self._path.open('a', encoding='utf-8') as f:
+                f.write(json.dumps(rec, ensure_ascii=False) + '\n')
+        except Exception as e:
+            log.debug(f'WARPSync: queue append failed: {e}')
+
+    def _load_from_disk(self) -> None:
+        if not self._path.exists():
+            return
+        try:
+            raw = self._path.read_text(encoding='utf-8').splitlines()
+        except Exception as e:
+            log.warning(f'WARPSync: queue file unreadable ({e}); starting empty')
+            return
+        items: dict[str, dict] = {}
+        acked: set[str]        = set()
+        cutoff = time.time() - self.TTL_DAYS * 86400
+        for line in raw:
+            line = line.strip()
+            if not line:
+                continue
+            try:
+                rec = json.loads(line)
+            except Exception:
+                continue
+            kind = rec.get('kind')
+            if kind == 'ack':
+                iid = rec.get('id')
+                if iid:
+                    acked.add(iid)
+            elif kind == 'item':
+                if rec.get('ts', 0) < cutoff:
+                    continue
+                iid = rec.get('id')
+                if iid:
+                    rec.pop('kind', None)
+                    items[iid] = rec
+        pending = [it for iid, it in items.items() if iid not in acked]
+        pending.sort(key=lambda r: r.get('ts', 0))
+        if len(pending) > self.MAX_IN_MEMORY:
+            dropped = len(pending) - self.MAX_IN_MEMORY
+            log.warning(
+                f'WARPSync: queue file had {len(pending)} pending; '
+                f'trimmed {dropped} oldest to fit cap')
+            pending = pending[-self.MAX_IN_MEMORY:]
+        self._queue.extend(pending)
+        if len(raw) > self.COMPACT_THRESHOLD:
+            self._compact_locked()
+        if pending:
+            log.info(f'WARPSync: restored {len(pending)} pending contribution(s) from disk')
+
+    def _ack_to_disk(self, item_id: str) -> None:
+        self._append_to_disk({'kind': 'ack', 'id': item_id})
+
+    def _compact_locked(self) -> None:
+        """Rewrite queue file with only currently-pending items.
+
+        Caller must hold self._lock (or be confident no concurrent write
+        is in flight — only called from __init__ and the worker thread).
+        """
+        try:
+            tmp = self._path.with_suffix(self._path.suffix + '.tmp')
+            with tmp.open('w', encoding='utf-8') as f:
+                for rec in self._queue:
+                    f.write(json.dumps({'kind': 'item', **rec},
+                                       ensure_ascii=False) + '\n')
+            tmp.replace(self._path)
+            log.debug(f'WARPSync: queue compacted ({len(self._queue)} pending)')
+        except Exception as e:
+            log.debug(f'WARPSync: compact failed: {e}')
+
+    # ── Worker ─────────────────────────────────────────────────────────────
+    def _worker_loop(self) -> None:
+        while not self._stop:
+            with self._cv:
+                while not self._queue and not self._stop:
+                    self._cv.wait()
+                if self._stop:
+                    return
+                item = self._queue[0]
+
+            # If breaker is open, sleep until it expires (poll in chunks
+            # so a stop signal can still bring us down quickly).
+            remaining = self._client._backend_unavailable_until - time.time()
+            if remaining > 0:
+                time.sleep(min(remaining + 1, 30))
+                continue
+
+            outcome = self._client._send_one(item)
+            with self._cv:
+                if outcome in ('sent', 'dropped'):
+                    if self._queue and self._queue[0] is item:
+                        self._queue.popleft()
+                    self._ack_to_disk(item['id'])
+                    if outcome == 'sent':
+                        self._sent_since_drain += 1
+                    if not self._queue and self._sent_since_drain > 0:
+                        log.info(
+                            f'WARPSync: drained queue '
+                            f'({self._sent_since_drain} contribution(s) sent)'
+                        )
+                        self._sent_since_drain = 0
+                # outcome == 'retry': leave item at queue head; breaker is
+                # now open, next loop iteration will sleep until it lifts.
 
 
 class WARPSyncClient:
@@ -72,6 +246,16 @@ class WARPSyncClient:
         self._knowledge: dict[str, str] = {}   # phash_hex → item_name
         self._knowledge_lock = threading.Lock()
         self._backend_unavailable_until: float = 0.0   # epoch seconds
+        # True between the first WARN of an outage and the next successful
+        # send. Suppresses repeat WARNs every backoff window — log noise
+        # should reflect state transitions (READY → BACKOFF, BACKOFF →
+        # drained), not periodic breaker re-trips while nothing changes.
+        self._outage_warned: bool = False
+
+        # Single-worker contribute queue (replaces per-call thread spawn).
+        # Constructed AFTER _backend_unavailable_until so the worker can
+        # safely read it from the start.
+        self._queue = _ContributeQueue(self, userdata.contribute_queue_file())
 
         # Start background knowledge download immediately
         threading.Thread(
@@ -94,15 +278,20 @@ class WARPSyncClient:
 
         `READY`               — no recent failure recorded; next contribute
                                 will hit the backend.
-        `BACKOFF until HH:MM:SS` — last contribute failed; further calls are
-                                being skipped silently until the timestamp.
+        `BACKOFF until HH:MM:SS` — last contribute failed; the queue worker
+                                is waiting until the timestamp before
+                                trying again. Pending items stay queued.
+
+        When the queue has pending items, a `(N queued)` suffix is added.
         """
         remaining = self._backend_unavailable_until - time.time()
+        depth = self._queue.depth() if hasattr(self, '_queue') else 0
+        suffix = f' ({depth} queued)' if depth > 0 else ''
         if remaining <= 0:
-            return 'READY'
+            return f'READY{suffix}'
         until = time.strftime('%H:%M:%S',
                               time.localtime(self._backend_unavailable_until))
-        return f'BACKOFF until {until}'
+        return f'BACKOFF until {until}{suffix}'
 
     def contribute(
         self,
@@ -115,8 +304,16 @@ class WARPSyncClient:
         """
         Upload a crop + label to the community knowledge base.
 
-        Non-blocking — fires a background thread and returns immediately.
-        on_done(success: bool) is called when the upload completes (optional).
+        Non-blocking — encodes the crop, hands it to the single-worker
+        contribute queue, and returns immediately. The actual POST may
+        happen later (after backend recovery from a backoff window or
+        after preceding queued items have drained).
+
+        `on_done(success: bool)` is currently fired only on synchronous
+        rejection paths (empty name, rate-limit, queue overflow). The
+        async send path does not callback — callers should not depend on
+        it for UI state. (Existing call sites at trainer_window.py:1877
+        ignore the callback.)
         """
         if not item_name.strip():
             log.debug('WARPSync: contribute called with empty item_name, skipped')
@@ -128,18 +325,33 @@ class WARPSyncClient:
                 on_done(False)
             return
 
-        # Circuit breaker: skip if backend was recently unavailable
-        if time.time() < self._backend_unavailable_until:
-            log.debug('WARPSync: backend in backoff period, skipping contribution')
+        try:
+            import cv2
+            ok, buf = cv2.imencode('.png', crop_bgr)
+            if not ok:
+                raise ValueError('imencode failed')
+            crop_b64 = base64.b64encode(buf.tobytes()).decode('ascii')
+            icon64   = cv2.resize(crop_bgr, (64, 64), interpolation=cv2.INTER_AREA)
+            phash    = _compute_phash(icon64)
+        except Exception as e:
+            log.warning(f'WARPSync: contribute encode failed ({e}); dropped')
             if on_done:
                 on_done(False)
             return
 
-        threading.Thread(
-            target=self._contribute_bg,
-            args=(crop_bgr.copy(), item_name, wrong_name, confirmed, on_done),
-            daemon=True, name='warp-contribute'
-        ).start()
+        item = {
+            'id':            str(uuid.uuid4()),
+            'ts':            time.time(),
+            'timestamp_iso': time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
+            'phash':         phash,
+            'crop_png_b64':  crop_b64,
+            'item_name':     item_name,
+            'wrong_name':    wrong_name,
+            'confirmed':     confirmed,
+        }
+        accepted = self._queue.enqueue(item)
+        if not accepted and on_done:
+            on_done(False)
 
     def refresh_knowledge(self) -> None:
         """Force re-download of knowledge base (ignores cache age)."""
@@ -204,109 +416,97 @@ class WARPSyncClient:
                 except Exception:
                     pass
 
-    def _contribute_bg(
-        self,
-        crop_bgr:   np.ndarray,
-        item_name:  str,
-        wrong_name: str,
-        confirmed:  bool,
-        on_done:    Callable[[bool], None] | None,
-    ) -> None:
-        """Send crop + label to backend (runs in background thread)."""
-        try:
-            import cv2
+    def _send_one(self, item: dict) -> str:
+        """Send a single queued item. Returns one of:
 
-            # Encode crop as PNG → base64
-            ok, buf = cv2.imencode('.png', crop_bgr)
-            if not ok:
-                raise ValueError('imencode failed')
-            crop_b64 = base64.b64encode(buf.tobytes()).decode('ascii')
+        - `'sent'`    — POST succeeded; caller should ack + drop the item.
+        - `'dropped'` — backend rejected the payload with a 4xx (other
+                        than 429); retrying would not help, so ack + drop.
+        - `'retry'`   — network / 5xx error. Circuit breaker is now open;
+                        the queue worker will sleep until it lifts and
+                        try the same item again.
 
-            # Compute phash for deduplication
-            icon64 = cv2.resize(crop_bgr, (64, 64), interpolation=cv2.INTER_AREA)
-            phash  = _compute_phash(icon64)
+        Per-attempt errors log at DEBUG; only the final outcome of a
+        burst (breaker trip or success drain) is logged at WARN/INFO
+        level. This is the key noise reduction over the old design.
+        """
+        payload = json.dumps({
+            'install_id':    self._install_id,
+            'phash':         item['phash'],
+            'crop_png_b64':  item['crop_png_b64'],
+            'item_name':     item['item_name'],
+            'wrong_name':    item.get('wrong_name', ''),
+            'confirmed':     item.get('confirmed', True),
+            'warp_version':  WARP_VERSION,
+            'timestamp':     item.get('timestamp_iso',
+                                      time.strftime('%Y-%m-%dT%H:%M:%SZ',
+                                                    time.gmtime())),
+        }, ensure_ascii=False).encode('utf-8')
 
-            payload = json.dumps({
-                'install_id':    self._install_id,
-                'phash':         phash,
-                'crop_png_b64':  crop_b64,
-                'item_name':     item_name,
-                'wrong_name':    wrong_name,
-                'confirmed':     confirmed,
-                'warp_version':  WARP_VERSION,
-                'timestamp':     time.strftime('%Y-%m-%dT%H:%M:%SZ', time.gmtime()),
-            }, ensure_ascii=False).encode('utf-8')
+        import urllib.request
+        import urllib.error as _ue
 
-            import urllib.request
+        def _post() -> dict:
+            req = urllib.request.Request(
+                f'{self._url}/contribute',
+                data=payload,
+                headers={
+                    'Content-Type': 'application/json',
+                    'User-Agent':   f'WARP/{WARP_VERSION}',
+                },
+                method='POST',
+            )
+            with urllib.request.urlopen(req, timeout=config.SYNC_CONTRIBUTE_TIMEOUT) as resp:
+                return json.loads(resp.read().decode('utf-8'))
 
-            def _post() -> dict:
-                req = urllib.request.Request(
-                    f'{self._url}/contribute',
-                    data=payload,
-                    headers={
-                        'Content-Type': 'application/json',
-                        'User-Agent':   f'WARP/{WARP_VERSION}',
-                    },
-                    method='POST',
-                )
-                with urllib.request.urlopen(req, timeout=config.SYNC_CONTRIBUTE_TIMEOUT) as resp:
-                    return json.loads(resp.read().decode('utf-8'))
-
-            # Retry loop — Render free tier cold-starts in ~50 s,
-            # may return 503 before it's ready.
-            import urllib.error as _ue
-            last_err = None
-            result = None
-            for _attempt in range(3):
-                # If another thread tripped the circuit breaker while we were sleeping, abort early
-                if _attempt > 0 and time.time() < self._backend_unavailable_until:
-                    raise Exception('Circuit breaker tripped by another thread')
-                
-                try:
-                    result = _post()
-                    break
-                except _ue.HTTPError as e:
-                    last_err = e
-                    if 400 <= e.code < 500 and e.code != 429:
-                        # Client error (e.g. 400 Bad Request). No point in retrying.
-                        # Do not trip the global circuit breaker for client validation errors.
-                        log.warning(f'WARPSync: contribution rejected by backend (HTTP {e.code})')
-                        if on_done:
-                            on_done(False)
-                        return
-                    
-                    if e.code == 503:
-                        wait = 20
-                    else:
-                        wait = 5
-                    log.warning(f'WARPSync: attempt {_attempt+1} failed (HTTP {e.code}), '
-                                f'retrying in {wait}s...')
-                    time.sleep(wait)
-                except Exception as e:
-                    last_err = e
-                    log.warning(f'WARPSync: attempt {_attempt+1} failed ({e}), retrying in 5s...')
+        # Retry burst — Render free tier cold-starts in ~50 s and may
+        # return 503 before it's ready. 3 attempts × 20 s covers that
+        # without keeping the worker tied up indefinitely. Per-attempt
+        # errors are intentionally not logged — the final outcome
+        # (success / breaker trip) tells the user everything that
+        # matters, and per-attempt lines just spam the log even at
+        # DEBUG level when the backend is sleeping.
+        last_err: Exception | None = None
+        result: dict | None = None
+        for attempt in range(3):
+            try:
+                result = _post()
+                break
+            except _ue.HTTPError as e:
+                last_err = e
+                if 400 <= e.code < 500 and e.code != 429:
+                    log.warning(f'WARPSync: contribution rejected by backend (HTTP {e.code})')
+                    return 'dropped'
+                if attempt < 2:
+                    time.sleep(20 if e.code == 503 else 5)
+            except Exception as e:
+                last_err = e
+                if attempt < 2:
                     time.sleep(5)
-            if result is None:
-                raise last_err
 
-            success = result.get('ok', False)
-            if success:
-                self._increment_rate_limit()
-                log.debug(f'WARPSync: contribution accepted id={result.get("contribution_id")}')
-            else:
-                log.warning(f'WARPSync: contribution rejected: {result.get("error")}')
-
-            if on_done:
-                on_done(success)
-
-        except Exception as e:
-            # Activate circuit breaker on any network/server error so subsequent
-            # contributions are skipped silently instead of flooding the log.
+        if result is None:
             self._backend_unavailable_until = time.time() + self._BACKOFF_SECONDS
-            log.warning(f'WARPSync: contribution failed ({e}) — backing off '
-                        f'{self._BACKOFF_SECONDS}s')
-            if on_done:
-                on_done(False)
+            # Only WARN on the FIRST trip of an outage. Repeated trips
+            # at the end of each 5-min backoff window add no new
+            # information — the breaker state is still BACKOFF — so we
+            # stay silent until a successful send resets the flag.
+            if not self._outage_warned:
+                depth = self._queue.depth()
+                log.warning(
+                    f'WARPSync: backend unavailable ({last_err}) — '
+                    f'backing off {self._BACKOFF_SECONDS}s ({depth} queued)'
+                )
+                self._outage_warned = True
+            return 'retry'
+
+        success = result.get('ok', False)
+        if success:
+            self._outage_warned = False  # outage over — next failure WARNs again
+            self._increment_rate_limit()
+            return 'sent'
+        else:
+            log.warning(f'WARPSync: contribution rejected: {result.get("error")}')
+            return 'dropped'
 
     # ── Rate limiting ──────────────────────────────────────────────────────────
 

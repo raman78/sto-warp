@@ -114,6 +114,11 @@ def recognition_stats_file() -> Path:
     return data_dir() / 'recognition_stats.json'
 
 
+def contribute_queue_file() -> Path:
+    """Pending WARPSync contributions persisted across app restarts."""
+    return data_dir() / 'contribute_queue.jsonl'
+
+
 def screen_type_stats_file() -> Path:
     """Validation-accuracy stats kept by the trainer."""
     return data_dir() / 'screen_type_stats.json'
