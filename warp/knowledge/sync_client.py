@@ -349,8 +349,20 @@ class WARPSyncClient:
         it for UI state. (Existing call sites at trainer_window.py:1877
         ignore the callback.)
         """
-        if not item_name.strip():
+        _name = item_name.strip()
+        if not _name:
             log.debug('WARPSync: contribute called with empty item_name, skipped')
+            return
+
+        # Mirror backend's poison-label filter (sets-warp-backend main.py:188).
+        # Virtual classes (__empty__, __inactive__, __boff_*) are legitimate
+        # for local training but must never reach the community knowledge
+        # dataset, where they'd hard-override real icons. Filtering here
+        # (instead of letting the backend reject with HTTP 400) avoids
+        # filling the queue with items we know are going to be dropped,
+        # plus the WARN spam on each rejection.
+        if _name.startswith('__') or _name == 'Test Item Name':
+            log.debug(f'WARPSync: skipping ineligible label {_name!r}')
             return
 
         if not self._check_rate_limit():
