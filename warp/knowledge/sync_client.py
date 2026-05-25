@@ -251,7 +251,7 @@ class WARPSyncClient:
     # many seconds to avoid log spam when the backend is sleeping (Render cold-start
     # takes ~50 s but we back off for longer to avoid hammering it).
     _BACKOFF_SECONDS    = 300    # 5 minutes between retries during outage
-    _OUTAGE_HEARTBEAT_S = 1800   # 30 min between "still down" heartbeat logs
+    _OUTAGE_HEARTBEAT_S = 600    # 10 min (= 2 backoff cycles) between "still down" heartbeat logs
     _PROGRESS_EVERY     = 10     # emit progress INFO every N successful sends
 
     def __init__(self, backend_url: str | None = None):
