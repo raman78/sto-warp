@@ -185,6 +185,12 @@ class _ContributeQueue:
 
     # ── Worker ─────────────────────────────────────────────────────────────
     def _worker_loop(self) -> None:
+        # Tracks whether the previous iteration slept on an open breaker,
+        # so we can emit a single "retrying" line at the moment the
+        # breaker lifts. Without this signal the user sees the WARN, then
+        # nothing for a full backoff window, even though the worker
+        # actively re-attempts at the 5-min mark.
+        was_waiting = False
         while not self._stop:
             with self._cv:
                 while not self._queue and not self._stop:
@@ -197,8 +203,16 @@ class _ContributeQueue:
             # so a stop signal can still bring us down quickly).
             remaining = self._client._backend_unavailable_until - time.time()
             if remaining > 0:
+                was_waiting = True
                 time.sleep(min(remaining + 1, 30))
                 continue
+
+            if was_waiting:
+                log.info(
+                    f'WARPSync: backoff window elapsed, retrying '
+                    f'({len(self._queue)} queued)'
+                )
+                was_waiting = False
 
             outcome = self._client._send_one(item)
             with self._cv:
@@ -251,7 +265,7 @@ class WARPSyncClient:
     # many seconds to avoid log spam when the backend is sleeping (Render cold-start
     # takes ~50 s but we back off for longer to avoid hammering it).
     _BACKOFF_SECONDS    = 300    # 5 minutes between retries during outage
-    _OUTAGE_HEARTBEAT_S = 600    # 10 min (= 2 backoff cycles) between "still down" heartbeat logs
+    _OUTAGE_HEARTBEAT_S = 300    # aligned with backoff so heartbeat fires right after each retry cycle
     _PROGRESS_EVERY     = 10     # emit progress INFO every N successful sends
 
     def __init__(self, backend_url: str | None = None):
