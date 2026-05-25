@@ -39,7 +39,11 @@ from warp import userdata, config
 from warp.debug import syslog as log
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-DEFAULT_BACKEND_URL       = 'https://sets-warp-backend.onrender.com'
+# Backend lives on HF Spaces (sets-sto/warp-backend). Migrated from Render
+# in 2026-05 so the shared HF write token could be removed from clients —
+# the token now lives only as a Space secret. Render kept as a fallback
+# during Phase 2 of the migration; will be turned off in Phase 3.
+DEFAULT_BACKEND_URL       = 'https://sets-sto-warp-backend.hf.space'
 MAX_CONTRIBUTIONS_PER_DAY = 200    # per installation, per day
 KNOWLEDGE_MAX_AGE_HOURS   = 24     # re-download knowledge base after this
 

@@ -37,7 +37,7 @@ try:
 except Exception:
     log = logging.getLogger(__name__)
 
-_BACKEND_URL          = 'https://sets-warp-backend.onrender.com'
+_BACKEND_URL          = 'https://sets-sto-warp-backend.hf.space'
 _CHECK_INTERVAL_HOURS = 0.25        # minimum hours between remote checks (15 min)
 _VERSION_CACHE_FILENAME = 'model_version_remote_cache.json'
 _MODEL_FILES          = [           # files to download from HF knowledge repo
@@ -291,10 +291,6 @@ class ModelUpdater:
         models_dir.mkdir(parents=True, exist_ok=True)
         tmp_files: list[tuple[Path, Path]] = []  # (tmp_path, final_path)
 
-        # Use upload token if available — suppresses HF unauthenticated warning
-        # and gets higher rate limits. Falls back to anonymous (public repo).
-        token = self._read_hub_token()
-
         total = len(_MODEL_FILES)
         n_classes = remote_meta.get('n_classes', '?')
         for idx, (hf_path, local_name) in enumerate(_MODEL_FILES):
@@ -310,7 +306,6 @@ class ModelUpdater:
                     repo_id=hf_repo,
                     filename=hf_path,
                     repo_type='dataset',
-                    token=token or None,
                 )
                 tmp_files.append((Path(downloaded), final_path))
             except Exception as e:
@@ -345,7 +340,6 @@ class ModelUpdater:
             return
         import shutil
         hf_repo = 'sets-sto/warp-knowledge'
-        token = self._read_hub_token()
         models_dir.mkdir(parents=True, exist_ok=True)
         for hf_path, local_name in _SCREEN_CLASSIFIER_FILES:
             try:
@@ -353,7 +347,6 @@ class ModelUpdater:
                     repo_id=hf_repo,
                     filename=hf_path,
                     repo_type='dataset',
-                    token=token or None,
                 )
                 shutil.copy2(downloaded, models_dir / local_name)
                 log.info(f'ModelUpdater: downloaded {local_name}')
@@ -385,14 +378,6 @@ class ModelUpdater:
             pass
 
     # ── helpers ───────────────────────────────────────────────────────────────
-
-    @staticmethod
-    def _read_hub_token() -> str:
-        """Read hub_token.txt from XDG config dir. Returns '' if not found."""
-        try:
-            return userdata.hub_token_file().read_text().strip()
-        except Exception:
-            return ''
 
     @staticmethod
     def _embedder_needs_refresh(models_dir: Path) -> bool:

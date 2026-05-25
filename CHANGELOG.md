@@ -5,6 +5,25 @@ All notable changes to **sto-warp** will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [Unreleased]
+
+### Changed
+- **Backend migration Phase 2 — clients no longer hold an HF write token.**
+  All upload channels (`HF Sync` confirmed crops, screen-type screenshots,
+  anchor grids) now POST to the WARP backend on HF Spaces instead of
+  calling `HfApi.create_commit` directly. The shared write token in
+  `~/.config/warp/hub_token.txt` is no longer read by `warp/trainer/sync.py`
+  or `warp/trainer/model_updater.py`; the file becomes inert and will be
+  purged by a one-shot startup migration in Phase 3.
+  - `warp/knowledge/sync_client.py`: `DEFAULT_BACKEND_URL` → HF Space.
+  - `warp/trainer/sync.py`: `SyncWorker` drops the `hf_token` parameter and
+    routes through `/contribute/bulk-crops`, `/upload/screen-types`,
+    `/upload/anchors` in batches of 50/20/20.
+  - `warp/trainer/model_updater.py`: `_BACKEND_URL` → HF Space; HF reads on
+    the public `sets-sto/warp-knowledge` dataset are now anonymous.
+  - `SyncManager` no longer requires a token to start an upload cycle.
+  - `HFTokenDialog` deleted (no longer used).
+
 ## [1.0.4] — 2026-05-24
 
 Ground BOFF recognition + local bootstrap embedder workstream. Closes the

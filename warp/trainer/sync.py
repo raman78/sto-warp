@@ -1,45 +1,44 @@
 # warp/trainer/sync.py
-# Synchronises training data (annotations + icon crops) with Hugging Face Hub.
+# Synchronises training data (annotations + icon crops) with Hugging Face Hub
+# via the WARP backend proxy. The backend holds the HF write token; clients
+# hold no credentials.
 #
-# SECURITY MODEL — two-folder staging:
+# SECURITY MODEL — two-folder staging (enforced on the backend side):
 #
 #   staging/<install_id>/annotations.jsonl   — contributed by users, unverified
 #   staging/<install_id>/crops/<sha>.png
 #   data/annotations.jsonl                   — approved by repo owner only
 #   data/crops/<sha>.png
 #
-# Users upload to staging/ only.
+# Users POST to backend endpoints which write only to staging/ on HF.
 # Repo owner runs approve_staging.py (or manually) to merge into data/.
 # A single bad actor can only pollute their own staging/ folder.
 #
 # RATE LIMITING (client-side):
-#   Max 200 annotations per day per install_id.
-#   Enforced locally — a determined attacker could bypass this,
-#   but it stops accidental flooding.
+#   Max 1000 crops per day per install_id (client gate).
+#   Backend also enforces a per-IP daily request cap.
 #
-# VALIDATION (client-side + file-level):
-#   - Crop must be non-empty PNG, ≥ 32×32 px
+# VALIDATION (client-side + backend-side):
+#   - Crop must be non-empty PNG, ≥ 16×16 px (text crops use relaxed mins)
 #   - Slot must be a known slot name
 #   - Name must be non-empty, ≤ 120 chars, printable ASCII/Unicode
 #   - No duplicate sha256 in the same upload batch
 
 from __future__ import annotations
 
+import base64
 import json
 import hashlib
 import logging
 import datetime
-import tempfile
+import urllib.request
+import urllib.error
 from pathlib import Path
-from typing import Callable
 
-from PySide6.QtCore import Qt, QObject, QThread, Signal
-from PySide6.QtWidgets import (
-    QDialog, QVBoxLayout, QHBoxLayout, QLabel,
-    QLineEdit, QPushButton, QCheckBox
-)
+from PySide6.QtCore import QObject, QThread, Signal
 
 from warp.trainer.training_data import TrainingDataManager, NON_ICON_SLOTS
+from warp.knowledge.sync_client import DEFAULT_BACKEND_URL
 
 logger = logging.getLogger(__name__)
 try:
@@ -47,7 +46,8 @@ try:
 except Exception:
     _slog = logger
 
-# Hugging Face dataset repository ID
+# Hugging Face dataset repository ID — kept for bootstrap reads (public).
+# Writes go through the backend, not directly to HF.
 HF_DATASET_REPO  = "sets-sto/sto-icon-dataset"
 HF_REPO_TYPE     = "dataset"
 CROPS_DIR        = "data/crops"           # approved
@@ -59,6 +59,12 @@ MAX_NAME_LEN      = 120
 MIN_CROP_PX       = 16   # icon crops: minimum on both sides (BOFF ability icons can be ~22px)
 MIN_TEXT_CROP_H   = 10   # text crops (ship_type/ship_tier): minimum height only
 MIN_TEXT_CROP_W   = 50   # text crops: minimum width
+
+# Backend batch sizes must stay ≤ MAX_BULK_* in sets-warp-backend/main.py.
+BULK_CROPS_BATCH    = 50
+BULK_SCREENS_BATCH  = 20
+BULK_ANCHORS_BATCH  = 20
+BACKEND_TIMEOUT_S   = 60
 
 
 def _get_install_id() -> str:
@@ -128,7 +134,7 @@ def _validate_crop(path: Path) -> str | None:
 
 class SyncWorker(QThread):
     """
-    Uploads confirmed crops to staging/ on HF Hub.
+    Uploads confirmed crops to staging/ on HF Hub via the WARP backend proxy.
     Never writes to data/ — only repo owner can approve staging.
 
     Signals:
@@ -142,13 +148,13 @@ class SyncWorker(QThread):
     def __init__(
         self,
         data_manager: TrainingDataManager,
-        hf_token: str,
         mode: str = "upload",
+        backend_url: str | None = None,
     ):
         super().__init__()
-        self._mgr   = data_manager
-        self._token = hf_token
-        self._mode  = mode
+        self._mgr  = data_manager
+        self._mode = mode
+        self._url  = (backend_url or DEFAULT_BACKEND_URL).rstrip('/')
 
     def run(self):
         try:
@@ -163,20 +169,32 @@ class SyncWorker(QThread):
             logger.error(f"Sync error: {e}")
             self.finished.emit(False)
 
+    # ------------------------------------------------------------- backend POST
+
+    def _post(self, path: str, payload: dict) -> dict:
+        """POST JSON to backend; raise on error, return parsed response.
+
+        Caller is expected to catch and handle exceptions — the queued-upload
+        loop logs a single WARN per failed channel and moves on, mirroring the
+        non-fatal behaviour the old direct-HF path had.
+        """
+        data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
+        req = urllib.request.Request(
+            f'{self._url}{path}',
+            data=data,
+            headers={
+                'Content-Type': 'application/json',
+                'User-Agent':   'WARP-Trainer',
+            },
+            method='POST',
+        )
+        with urllib.request.urlopen(req, timeout=BACKEND_TIMEOUT_S) as resp:
+            return json.loads(resp.read().decode('utf-8'))
+
     # ---------------------------------------------------------------- upload
 
     def _upload(self):
-        """Upload new confirmed crops to staging/<install_id>/ on HF Hub."""
-        from huggingface_hub import HfApi
-        api = HfApi(token=self._token)
-
-        api.create_repo(
-            repo_id=HF_DATASET_REPO,
-            repo_type=HF_REPO_TYPE,
-            exist_ok=True,
-            private=False,
-        )
-
+        """Upload new confirmed crops to staging/<install_id>/ via backend."""
         install_id   = _get_install_id()
         staging_dir  = f"{STAGING_ROOT}/{install_id}"
         staging_anno = f"{staging_dir}/annotations.jsonl"
@@ -202,40 +220,34 @@ class SyncWorker(QThread):
             self.progress.emit(100, f"Daily upload limit ({MAX_DAILY_UPLOADS}) reached.")
             return
 
-        # Load local cache of already-uploaded hashes (avoids list_repo_files on every sync)
+        # Load local cache of already-uploaded hashes (avoids list_repo_files on every sync).
+        # Bootstrap reads are anonymous — the dataset is public.
         self.progress.emit(5, "Checking existing uploads…")
         existing_hashes = self._load_uploaded_hashes_cache()
-        # Per-sha label cache lets us detect when only the label changed
-        # (user corrected a name/slot for an already-uploaded crop) — and
-        # skip queuing unchanged labels so we don't rewrite the HF jsonl
-        # on every sync.
         uploaded_labels = self._load_uploaded_labels_cache()
         if existing_hashes:
             _slog.info(f'HF Sync: {len(existing_hashes)} crops in local cache (skipping HF listing)')
         else:
-            # Bootstrap: fetch from HF once, then persist locally
-            existing_hashes = self._fetch_staging_hashes(api, staging_crop)
+            existing_hashes = self._fetch_staging_hashes(staging_crop)
             _slog.info(f'HF Sync: bootstrapped {len(existing_hashes)} hashes from HF listing')
             self._save_uploaded_hashes_cache(existing_hashes)
-        # Bootstrap labels cache from HF jsonl on first run after upgrade —
-        # otherwise every confirmed crop would look like a "label changed"
-        # case and trigger an unnecessary annotations.jsonl rewrite.
         if not uploaded_labels and existing_hashes:
-            uploaded_labels = self._fetch_staging_labels(api, staging_anno)
+            uploaded_labels = self._fetch_staging_labels(staging_anno)
             if uploaded_labels:
                 _slog.info(f'HF Sync: bootstrapped {len(uploaded_labels)} labels from HF annotations.jsonl')
                 self._save_uploaded_labels_cache(uploaded_labels)
 
-        # Collect all new files first, then upload in a single commit
-        from huggingface_hub import CommitOperationAdd
-        new_annotations: list[dict] = []
-        operations:      list       = []
-        uploaded = 0
+        # Build the list of items to send. We send {slot, name, crop_png_b64,
+        # ml_name?} per item; the backend handles annotations.jsonl merge
+        # with last-wins per sha, so the client no longer mirrors that logic.
+        batch_items:       list[dict] = []
+        batch_metadata:    list[dict] = []   # parallel array: {sha, is_new_file}
+        uploaded     = 0
+        corrections  = 0
         skipped_unchanged = 0
-        total    = len(confirmed)
 
         self.progress.emit(10, "Preparing files…")
-        for idx, item in enumerate(confirmed):
+        for item in confirmed:
             if daily_count + uploaded >= MAX_DAILY_UPLOADS:
                 break
 
@@ -257,51 +269,80 @@ class SyncWorker(QThread):
             sha = self._file_sha256(crop_path)
             file_already_on_hf = sha in existing_hashes
             current_label = f'{item["slot"]}|{item["name"]}'
-            cached_label = uploaded_labels.get(sha)
+            cached_label  = uploaded_labels.get(sha)
             label_changed = cached_label != current_label
-            if not file_already_on_hf:
-                # _slog.debug(f'HF Sync: queuing [{item["slot"]}] {item["name"]} → {sha[:12]}…')
-                operations.append(CommitOperationAdd(
-                    path_in_repo=f"{staging_crop}/{sha}.png",
-                    path_or_fileobj=str(crop_path),
-                ))
-                existing_hashes.add(sha)
-                uploaded += 1
-            elif label_changed:
-                pass # _slog.debug(f'HF Sync: label correction [{item["slot"]}] {item["name"]} → {sha[:12]} (was {cached_label!r})')
-            else:
-                # File on HF AND label unchanged — nothing to do for this item.
+            if file_already_on_hf and not label_changed:
                 skipped_unchanged += 1
                 continue
-            uploaded_labels[sha] = current_label
-            ann_entry: dict = {
-                "slot":        item["slot"],
-                "name":        item["name"],
-                "crop_sha256": sha,
-                "date":        today,
-            }
-            if item.get("ml_name") is not None:
-                ann_entry["ml_name"] = item["ml_name"]
-            new_annotations.append(ann_entry)
 
-        ann_total = len(new_annotations)
-        ann_corrections = ann_total - uploaded  # entries reusing an existing HF crop
+            try:
+                png_b64 = base64.b64encode(crop_path.read_bytes()).decode('ascii')
+            except Exception as e:
+                _slog.warning(f'HF Sync: crop read failed for {crop_path.name}: {e}')
+                continue
+
+            payload_item = {
+                'slot':         item['slot'],
+                'name':         item['name'],
+                'crop_png_b64': png_b64,
+            }
+            if item.get('ml_name') is not None:
+                payload_item['ml_name'] = item['ml_name']
+            batch_items.append(payload_item)
+            batch_metadata.append({'sha': sha, 'is_new_file': not file_already_on_hf})
+
+            if not file_already_on_hf:
+                uploaded += 1
+            else:
+                corrections += 1
+
+        total_to_send = len(batch_items)
         _slog.info(
-            f'HF Sync: queued {uploaded} new crops + {ann_corrections} label corrections '
+            f'HF Sync: queued {uploaded} new crops + {corrections} label corrections '
             f'(skipped {skipped_unchanged} already on HF with unchanged labels)')
-        if new_annotations:
-            self.progress.emit(88, f"Uploading {uploaded} crops + {ann_total} annotations…")
-            self._append_staging_annotations_to_ops(operations, staging_anno, new_annotations, api)
-            api.create_commit(
-                repo_id=HF_DATASET_REPO,
-                repo_type=HF_REPO_TYPE,
-                operations=operations,
-                commit_message=f"WARP staging: {uploaded} new crops + {ann_corrections} corrections ({today})",
+
+        if not batch_items:
+            _slog.info('HF Sync: nothing new to upload')
+            self.progress.emit(100, 'Nothing new to upload (all already on HF).')
+            return
+
+        # POST in batches of BULK_CROPS_BATCH; each batch is one HF commit
+        # server-side. On a per-batch HTTP failure, log + break (rate limit /
+        # outage would just repeat on every batch).
+        sent = 0
+        for start in range(0, total_to_send, BULK_CROPS_BATCH):
+            sub_items = batch_items[start:start + BULK_CROPS_BATCH]
+            sub_meta  = batch_metadata[start:start + BULK_CROPS_BATCH]
+            self.progress.emit(
+                10 + int(80 * start / max(1, total_to_send)),
+                f'Uploading batch {start // BULK_CROPS_BATCH + 1} '
+                f'({len(sub_items)} items)…',
             )
-            _slog.info(f'HF Sync: commit sent — {uploaded} new crops, {ann_corrections} label corrections')
-            # Persist newly uploaded hashes so next sync skips list_repo_files
+            try:
+                resp = self._post('/contribute/bulk-crops', {
+                    'install_id': install_id,
+                    'items':      sub_items,
+                })
+            except urllib.error.HTTPError as e:
+                body = e.read().decode('utf-8', errors='replace')[:300]
+                _slog.warning(f'HF Sync: backend rejected batch (HTTP {e.code}): {body}')
+                break
+            except Exception as e:
+                _slog.warning(f'HF Sync: backend POST failed: {e}')
+                break
+
+            accepted = int(resp.get('accepted', 0))
+            sent    += accepted
+            # Mark sent items in caches (only for accepted ones — backend may
+            # have rejected some on poison-label / dim checks).
+            for meta, payload_item in zip(sub_meta, sub_items):
+                existing_hashes.add(meta['sha'])
+                uploaded_labels[meta['sha']] = f'{payload_item["slot"]}|{payload_item["name"]}'
+
+        if sent:
             self._save_uploaded_hashes_cache(existing_hashes)
             self._save_uploaded_labels_cache(uploaded_labels)
+            _slog.info(f'HF Sync: backend accepted {sent}/{total_to_send} items')
 
         # Update local rate limit counter (file uploads only — corrections are cheap)
         rl[today] = daily_count + uploaded
@@ -310,11 +351,8 @@ class SyncWorker(QThread):
         except Exception:
             pass
 
-        if ann_total:
-            msg = f"Uploaded {uploaded} new crops + {ann_corrections} corrections."
-        else:
-            msg = "Nothing new to upload (all already on HF)."
-        _slog.info(f'HF Sync: done — {uploaded} new crops, {ann_corrections} corrections, total on HF: {len(existing_hashes)}')
+        msg = f'Uploaded {uploaded} new crops + {corrections} corrections.'
+        _slog.info(f'HF Sync: done — {uploaded} new crops, {corrections} corrections, total on HF: {len(existing_hashes)}')
         self.progress.emit(100, msg)
 
     def _load_uploaded_hashes_cache(self) -> set[str]:
@@ -353,16 +391,18 @@ class SyncWorker(QThread):
         except Exception:
             pass
 
-    def _fetch_staging_labels(self, api, path_in_repo: str) -> dict[str, str]:
+    def _fetch_staging_labels(self, path_in_repo: str) -> dict[str, str]:
         """Bootstrap labels cache: read existing annotations.jsonl from HF and
-        return {sha: 'slot|name'} for the most recent entry per sha."""
+        return {sha: 'slot|name'} for the most recent entry per sha.
+
+        Anonymous read — the dataset is public.
+        """
         try:
             from huggingface_hub import hf_hub_download
             local = hf_hub_download(
                 repo_id=HF_DATASET_REPO,
                 filename=path_in_repo,
                 repo_type=HF_REPO_TYPE,
-                token=self._token,
             )
         except Exception:
             return {}
@@ -386,9 +426,11 @@ class SyncWorker(QThread):
             pass
         return labels
 
-    def _fetch_staging_hashes(self, api, staging_crop_dir: str) -> set[str]:
+    def _fetch_staging_hashes(self, staging_crop_dir: str) -> set[str]:
+        """Anonymous listing of already-uploaded staging crops on public dataset."""
         try:
-            files = api.list_repo_files(
+            from huggingface_hub import HfApi
+            files = HfApi().list_repo_files(
                 repo_id=HF_DATASET_REPO,
                 repo_type=HF_REPO_TYPE,
             )
@@ -400,75 +442,10 @@ class SyncWorker(QThread):
         except Exception:
             return set()
 
-    def _append_staging_annotations_to_ops(self, operations: list, path_in_repo: str,
-                                           new_entries: list[dict], api) -> None:
-        """Build annotations.jsonl content and add it as a CommitOperationAdd to operations.
-
-        Per-sha dedup with last-wins semantics: new_entries override matching
-        existing lines so name/slot corrections propagate to the central
-        pipeline instead of accumulating multiple labels for the same crop.
-        """
-        import io
-        from huggingface_hub import CommitOperationAdd
-        existing_lines: list[str] = []
-        try:
-            from huggingface_hub import hf_hub_download
-            local = hf_hub_download(
-                repo_id=HF_DATASET_REPO,
-                filename=path_in_repo,
-                repo_type=HF_REPO_TYPE,
-                token=self._token,
-            )
-            with open(local, encoding='utf-8') as f:
-                for line in f:
-                    line = line.strip()
-                    if line:
-                        existing_lines.append(line)
-        except Exception:
-            pass
-
-        # Dedup by sha — last write wins. Preserve order: keep first
-        # appearance for entries we are NOT overriding (so history stays
-        # readable), but drop earlier lines whose sha is overridden by a
-        # new entry. Final new entries are appended at the end.
-        override_shas = {e.get("crop_sha256", "") for e in new_entries if e.get("crop_sha256")}
-        kept_lines: list[str] = []
-        replaced = 0
-        for line in existing_lines:
-            try:
-                sha = json.loads(line).get("crop_sha256", "")
-            except Exception:
-                kept_lines.append(line)
-                continue
-            if sha and sha in override_shas:
-                replaced += 1
-                continue
-            kept_lines.append(line)
-
-        # Within new_entries themselves, also dedup by sha keeping the last
-        # occurrence (caller may have queued multiple corrections in one batch).
-        seen: dict[str, dict] = {}
-        for e in new_entries:
-            sha = e.get("crop_sha256", "")
-            if sha:
-                seen[sha] = e
-        deduped_new = list(seen.values())
-
-        combined = kept_lines + [json.dumps(e, ensure_ascii=False) for e in deduped_new]
-
-        if replaced:
-            _slog.info(f'HF Sync: annotations.jsonl — replaced {replaced} stale entries with corrected labels')
-
-        content_bytes = "\n".join(combined).encode("utf-8")
-        operations.append(CommitOperationAdd(
-            path_in_repo=path_in_repo,
-            path_or_fileobj=io.BytesIO(content_bytes),
-        ))
-
     # ---------------------------------------------------------------- anchor grids (P11)
 
     def _upload_anchors_grid(self):
-        """Upload normalized bbox grid entries from local anchors.json to HF staging (P11)."""
+        """Upload normalized bbox grid entries from local anchors.json via backend (P11)."""
         anchors_path = Path(self._mgr._dir) / 'anchors.json'
         if not anchors_path.exists():
             return
@@ -481,11 +458,7 @@ class SyncWorker(QThread):
         if not learned:
             return
 
-        from huggingface_hub import HfApi, CommitOperationAdd
-        import io as _io
-        api = HfApi(token=self._token)
-        install_id  = _get_install_id()
-        staging_dir = f"{STAGING_ROOT}/{install_id}"
+        install_id = _get_install_id()
 
         cache_file = Path(self._mgr._dir) / '.sync_uploaded_grids.json'
         try:
@@ -493,58 +466,67 @@ class SyncWorker(QThread):
         except Exception:
             uploaded_grids = set()
 
-        operations: list = []
-        new_hashes:  set[str] = set()
+        grids_payload: list[dict] = []
+        new_hashes:    list[str]  = []
 
         for entry in learned:
             build_type = entry.get('type', '')
             if not build_type:
                 continue
             slots = entry.get('slots', {})
-            # Keep only icon slots (skip NON_ICON_SLOTS text labels)
             icon_slots = {k: v for k, v in slots.items() if k not in NON_ICON_SLOTS}
             if len(icon_slots) < 3:
                 continue
 
-            payload = {
+            grid = {
                 'build_type': build_type,
                 'aspect':     entry.get('aspect'),
                 'resolution': entry.get('res', ''),
                 'slots':      icon_slots,
             }
-            payload_json = json.dumps(payload, sort_keys=True, ensure_ascii=False)
-            sha8 = hashlib.sha256(payload_json.encode()).hexdigest()[:8]
-
+            # sha8 must match backend's canonical form (json.dumps sort_keys=True).
+            sha8 = hashlib.sha256(
+                json.dumps(grid, sort_keys=True, ensure_ascii=False).encode()
+            ).hexdigest()[:8]
             if sha8 in uploaded_grids:
                 continue
 
-            operations.append(CommitOperationAdd(
-                path_in_repo=f"{staging_dir}/anchors_grid_{sha8}.json",
-                path_or_fileobj=_io.BytesIO(payload_json.encode()),
-            ))
-            new_hashes.add(sha8)
+            grids_payload.append(grid)
+            new_hashes.append(sha8)
 
-        if not operations:
+        if not grids_payload:
             _slog.debug('HF Sync: no new anchor grids to upload')
             return
 
-        api.create_commit(
-            repo_id=HF_DATASET_REPO,
-            repo_type=HF_REPO_TYPE,
-            operations=operations,
-            commit_message=f"WARP anchors: {len(operations)} grid entries",
-        )
-        uploaded_grids.update(new_hashes)
+        sent = 0
+        for start in range(0, len(grids_payload), BULK_ANCHORS_BATCH):
+            sub      = grids_payload[start:start + BULK_ANCHORS_BATCH]
+            sub_sha  = new_hashes[start:start + BULK_ANCHORS_BATCH]
+            try:
+                resp = self._post('/upload/anchors', {
+                    'install_id': install_id,
+                    'grids':      sub,
+                })
+            except urllib.error.HTTPError as e:
+                body = e.read().decode('utf-8', errors='replace')[:300]
+                _slog.warning(f'HF Sync: anchors backend rejected batch (HTTP {e.code}): {body}')
+                break
+            except Exception as e:
+                _slog.warning(f'HF Sync: anchors backend POST failed: {e}')
+                break
+            sent += int(resp.get('accepted', 0))
+            uploaded_grids.update(sub_sha)
+
         try:
             cache_file.write_text(json.dumps(sorted(uploaded_grids)))
         except Exception:
             pass
-        _slog.info(f'HF Sync: uploaded {len(operations)} anchor grid entries')
+        _slog.info(f'HF Sync: uploaded {sent} anchor grid entries')
 
     # ---------------------------------------------------------------- screen types
 
     def _upload_screen_types(self):
-        """Upload confirmed screen type screenshots to staging/<install_id>/screen_types/."""
+        """Upload confirmed screen type screenshots via backend."""
         screen_types_dir = self._mgr._dir / 'screen_types'
         if not screen_types_dir.exists():
             return
@@ -552,8 +534,6 @@ class SyncWorker(QThread):
         if not type_dirs:
             return
 
-        from huggingface_hub import HfApi, CommitOperationAdd
-        api = HfApi(token=self._token)
         install_id  = _get_install_id()
         staging_dir = f"{STAGING_ROOT}/{install_id}/screen_types"
 
@@ -562,37 +542,61 @@ class SyncWorker(QThread):
         if existing:
             _slog.info(f'HF Sync: {len(existing)} screen type screenshots in local cache (skipping HF listing)')
         else:
-            existing = self._fetch_staging_screen_hashes(api, staging_dir)
+            existing = self._fetch_staging_screen_hashes(staging_dir)
             _slog.info(f'HF Sync: bootstrapped {len(existing)} screen hashes from HF listing')
 
-        operations: list = []
+        total_sent = 0
         for type_dir in sorted(type_dirs):
             stype = type_dir.name
+            # Build list of {png_b64} for crops we haven't uploaded yet, in
+            # parallel with the sha list so we can update the cache after
+            # backend ack.
+            payloads: list[dict] = []
+            shas:     list[str]  = []
             for png in sorted(type_dir.glob('*.png')):
                 sha = self._file_sha256(png)
                 if sha in existing:
                     continue
-                operations.append(CommitOperationAdd(
-                    path_in_repo=f"{staging_dir}/{stype}/{sha}.png",
-                    path_or_fileobj=str(png),
-                ))
-                existing.add(sha)
+                try:
+                    b64 = base64.b64encode(png.read_bytes()).decode('ascii')
+                except Exception as e:
+                    _slog.warning(f'HF Sync: screen-type read failed for {png.name}: {e}')
+                    continue
+                payloads.append({'png_b64': b64})
+                shas.append(sha)
 
-        if not operations:
+            if not payloads:
+                continue
+
+            # POST in batches of BULK_SCREENS_BATCH per screen_type.
+            for start in range(0, len(payloads), BULK_SCREENS_BATCH):
+                sub      = payloads[start:start + BULK_SCREENS_BATCH]
+                sub_shas = shas[start:start + BULK_SCREENS_BATCH]
+                try:
+                    resp = self._post('/upload/screen-types', {
+                        'install_id':  install_id,
+                        'screen_type': stype,
+                        'items':       sub,
+                    })
+                except urllib.error.HTTPError as e:
+                    body = e.read().decode('utf-8', errors='replace')[:300]
+                    _slog.warning(f'HF Sync: screen-types backend rejected (HTTP {e.code}): {body}')
+                    break
+                except Exception as e:
+                    _slog.warning(f'HF Sync: screen-types backend POST failed: {e}')
+                    break
+                total_sent += int(resp.get('accepted', 0))
+                existing.update(sub_shas)
+
+        if not total_sent:
             _slog.debug('HF Sync: no new screen type screenshots to upload')
             return
 
-        api.create_commit(
-            repo_id=HF_DATASET_REPO,
-            repo_type=HF_REPO_TYPE,
-            operations=operations,
-            commit_message=f"WARP screen types: {len(operations)} screenshots",
-        )
         try:
             screen_cache_file.write_text(json.dumps(sorted(existing)))
         except Exception:
             pass
-        _slog.info(f'HF Sync: uploaded {len(operations)} screen type screenshot(s)')
+        _slog.info(f'HF Sync: uploaded {total_sent} screen type screenshot(s)')
 
     @staticmethod
     def _load_screen_hashes_cache(cache_file: Path) -> set[str]:
@@ -601,9 +605,11 @@ class SyncWorker(QThread):
         except Exception:
             return set()
 
-    def _fetch_staging_screen_hashes(self, api, staging_screen_dir: str) -> set[str]:
+    def _fetch_staging_screen_hashes(self, staging_screen_dir: str) -> set[str]:
+        """Anonymous listing of already-uploaded screen-type crops."""
         try:
-            files = api.list_repo_files(
+            from huggingface_hub import HfApi
+            files = HfApi().list_repo_files(
                 repo_id=HF_DATASET_REPO,
                 repo_type=HF_REPO_TYPE,
             )
@@ -674,15 +680,12 @@ class SyncManager(QObject):
     # ---------------------------------------------------------------- public API
 
     def check_and_upload(self) -> None:
-        """One sync cycle: upload pending crops if any. Called by BackgroundTaskManager."""
-        token = self._read_token()
-        if not token:
-            msg = ('SyncManager: skipped — no HuggingFace token configured '
-                   '(~/.config/warp/hub_token missing or placeholder)')
-            _slog.warning(msg)
-            self.progress.emit(0, '⚠ Upload skipped — no HuggingFace token configured')
-            return
+        """One sync cycle: upload pending crops if any. Called by BackgroundTaskManager.
 
+        No more HF-token gate — uploads flow through the WARP backend, which
+        holds the only write-capable HF token. The client just needs a
+        training data manager with confirmed crops.
+        """
         mgr = self._data_manager()
         if mgr is None:
             _slog.info(
@@ -702,7 +705,7 @@ class SyncManager(QObject):
             return
 
         _slog.info(f'SyncManager: {len(confirmed)} confirmed crops — checking for new uploads…')
-        self._worker = SyncWorker(data_manager=mgr, hf_token=token, mode='upload')
+        self._worker = SyncWorker(data_manager=mgr, mode='upload')
         self._worker.finished.connect(self._on_finished)
         # Forward worker's per-stage progress to coordinator/launcher.
         self._worker.progress.connect(self.progress)
@@ -740,17 +743,6 @@ class SyncManager(QObject):
         return None
 
     @staticmethod
-    def _read_token() -> str:
-        try:
-            from warp import userdata
-            t = userdata.hub_token_file().read_text().strip()
-            if t and t != 'YOUR_HF_TOKEN_HERE':
-                return t
-        except Exception:
-            pass
-        return ''
-
-    @staticmethod
     def _load_uploaded_hashes(mgr) -> set[str]:
         cache_file = mgr._dir / '.sync_uploaded_hashes.json'
         try:
@@ -759,40 +751,3 @@ class SyncManager(QObject):
             return set()
 
 
-# ---------------------------------------------------------------------------
-# HF Token setup dialog (kept for internal use / testing)
-# ---------------------------------------------------------------------------
-
-class HFTokenDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setWindowTitle("Hugging Face Token")
-        self.setFixedWidth(440)
-        self._token = ""
-        self._build_ui()
-
-    def _build_ui(self):
-        lay = QVBoxLayout(self)
-        lay.setSpacing(12)
-        lay.addWidget(QLabel("Hugging Face Token:"))
-        self._token_edit = QLineEdit()
-        self._token_edit.setPlaceholderText("hf_…")
-        self._token_edit.setEchoMode(QLineEdit.EchoMode.Password)
-        lay.addWidget(self._token_edit)
-        btns = QHBoxLayout()
-        btn_ok     = QPushButton("Save")
-        btn_cancel = QPushButton("Cancel")
-        btn_ok.clicked.connect(self._on_ok)
-        btn_cancel.clicked.connect(self.reject)
-        btns.addStretch()
-        btns.addWidget(btn_cancel)
-        btns.addWidget(btn_ok)
-        lay.addLayout(btns)
-
-    def _on_ok(self):
-        self._token = self._token_edit.text().strip()
-        if self._token:
-            self.accept()
-
-    def get_token(self) -> str:
-        return self._token
