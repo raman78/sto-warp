@@ -29,7 +29,7 @@ def main(argv: list[str] | None = None) -> int:
 
     p_mig = sub.add_parser(
         'migrate-from-sets-warp',
-        help='Copy install_id / hub_token / caches from a sets-warp checkout.')
+        help='Copy install_id and caches from a sets-warp checkout.')
     p_mig.add_argument(
         '--overwrite-id', action='store_true',
         help='Replace existing sto-warp install_id (backed up as install_id.txt.bak).')

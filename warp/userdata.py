@@ -4,9 +4,11 @@ Single source of truth for *every* place sto-warp persists state at
 runtime. Splits files across the three XDG basedirs based on intent:
 
   - **config_dir** (`$XDG_CONFIG_HOME/warp`, default `~/.config/warp`)
-    User-controlled identity / secrets — `hub_token.txt`,
-    `install_id.txt`, `backend.json`. Survives `pipx uninstall`,
-    survives reinstalls, never deleted by `pip`.
+    User-controlled identity / config — `install_id.txt`,
+    `backend.json`. Survives `pipx uninstall`, survives reinstalls,
+    never deleted by `pip`. Pre-1.0.5 installs also stored
+    `hub_token.txt` here; that file is purged on first run after upgrade
+    because the HF write token now lives only as a server-side secret.
 
   - **data_dir**   (`$XDG_DATA_HOME/warp`,   default `~/.local/share/warp`)
     Persistent user-generated state we cannot regenerate — annotations,
@@ -19,10 +21,10 @@ runtime. Splits files across the three XDG basedirs based on intent:
 
 Pre-XDG installs kept everything next to the source tree
 (`<repo>/warp/training_data/`, `<repo>/warp/models/`,
-`<repo>/warp/knowledge/*.json`, `<repo>/warp/hub_token.txt`). On first
-call to any path helper we copy missing files from those legacy
-locations so an existing user's training data and tokens survive the
-move. The migration is one-shot and idempotent.
+`<repo>/warp/knowledge/*.json`). On first call to any path helper we
+copy missing files from those legacy locations so an existing user's
+training data survives the move. The migration is one-shot and
+idempotent.
 
 Pipx + AUR installs land in read-only site-packages, so attempting to
 write next to the source would either fail outright or silently land
@@ -86,11 +88,6 @@ def models_dir() -> Path:
     return p
 
 
-def hub_token_file() -> Path:
-    """HuggingFace upload token (CONFIG — user-supplied secret)."""
-    return config_dir() / 'hub_token.txt'
-
-
 def install_id_file() -> Path:
     """Per-install UUID for deduplication on the WARP backend."""
     return config_dir() / 'install_id.txt'
@@ -145,6 +142,36 @@ def _legacy_repo_root() -> Path | None:
     return None
 
 
+def _purge_legacy_hub_token() -> bool:
+    """Delete the shared HF write token left over from pre-1.0.5 installs.
+
+    Every sto-warp install used to ship with the same write-scoped HF
+    token in `~/.config/warp/hub_token.txt`, which meant a single leaked
+    file could compromise the entire `sets-sto` dataset namespace.
+    Starting with 1.0.5 the token lives only as a server-side secret
+    in the backend (HF Space `sets-sto/warp-backend`); the on-disk file
+    is no longer read by any code path, so we delete it on first run.
+
+    Idempotent: returns True only the first time it actually removes a
+    file, False otherwise (already gone, never existed, or unreadable
+    filesystem). A removal failure is logged but never raised — losing
+    the deletion is not worth crashing the app.
+    """
+    legacy_token = config_dir() / 'hub_token.txt'
+    if not legacy_token.exists():
+        return False
+    try:
+        legacy_token.unlink()
+        log.info(
+            f'userdata: removed legacy {legacy_token} — HF write token '
+            f'now lives only on the backend (sets-sto/warp-backend Space)'
+        )
+        return True
+    except Exception as e:
+        log.warning(f'userdata: failed to purge legacy hub_token.txt: {e}')
+        return False
+
+
 def _copy_if_missing(src: Path, dst: Path) -> bool:
     """Copy file or directory tree from `src` to `dst` unless `dst` already
     exists. Returns True if a copy was actually performed."""
@@ -184,13 +211,12 @@ def migrate_legacy(force: bool = False) -> dict[str, bool]:
         legacy = repo / 'warp'
         moved: dict[str, bool] = {}
 
-        # CONFIG — secrets / identity
-        moved['hub_token']  = _copy_if_missing(legacy / 'hub_token.txt',
-                                               hub_token_file())
+        # CONFIG — identity / runtime override
         moved['install_id'] = _copy_if_missing(legacy / 'knowledge' / 'install_id.txt',
                                                install_id_file())
         moved['backend']    = _copy_if_missing(legacy / 'knowledge' / 'config.json',
                                                backend_config_file())
+        moved['hub_token_purged'] = _purge_legacy_hub_token()
 
         # CACHE — downloads
         moved['knowledge_cache'] = _copy_if_missing(
@@ -308,8 +334,6 @@ def migrate_from_sets_warp(overwrite_install_id: bool = False,
                 log.warning(f'userdata: install_id copy failed: {e}')
                 moved['install_id'] = False
 
-    moved['hub_token']       = _copy_if_missing(legacy / 'hub_token.txt',
-                                                 hub_token_file())
     moved['knowledge_cache'] = _copy_if_missing(
         legacy / 'knowledge' / 'knowledge_cache.json', knowledge_cache_file())
     moved['rate_limit']      = _copy_if_missing(

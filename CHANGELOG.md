@@ -7,22 +7,54 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.0.5] — 2026-05-25
+
+**Security release — removes the shared HF write token from every install.**
+
+Until now, every sto-warp install shipped with the same write-scoped HF
+token in `~/.config/warp/hub_token.txt`, giving any user (or anyone with
+filesystem access to a user's machine) push rights to the entire
+`sets-sto` dataset namespace. v1.0.5 routes every upload through a
+backend on HF Spaces that holds the token as a server-side secret; the
+on-disk file is purged on first run after upgrade.
+
 ### Changed
-- **Backend migration Phase 2 — clients no longer hold an HF write token.**
-  All upload channels (`HF Sync` confirmed crops, screen-type screenshots,
-  anchor grids) now POST to the WARP backend on HF Spaces instead of
-  calling `HfApi.create_commit` directly. The shared write token in
-  `~/.config/warp/hub_token.txt` is no longer read by `warp/trainer/sync.py`
-  or `warp/trainer/model_updater.py`; the file becomes inert and will be
-  purged by a one-shot startup migration in Phase 3.
+- **All client writes now go through the HF Spaces backend
+  (`sets-sto-warp-backend.hf.space`).** The three upload channels —
+  confirmed crops, screen-type screenshots, anchor grids — POST to
+  `/contribute/bulk-crops`, `/upload/screen-types`, `/upload/anchors`
+  in batches of 50/20/20 instead of calling `HfApi.create_commit`
+  directly.
   - `warp/knowledge/sync_client.py`: `DEFAULT_BACKEND_URL` → HF Space.
-  - `warp/trainer/sync.py`: `SyncWorker` drops the `hf_token` parameter and
-    routes through `/contribute/bulk-crops`, `/upload/screen-types`,
-    `/upload/anchors` in batches of 50/20/20.
-  - `warp/trainer/model_updater.py`: `_BACKEND_URL` → HF Space; HF reads on
-    the public `sets-sto/warp-knowledge` dataset are now anonymous.
-  - `SyncManager` no longer requires a token to start an upload cycle.
-  - `HFTokenDialog` deleted (no longer used).
+  - `warp/trainer/sync.py`: `SyncWorker` drops the `hf_token` parameter;
+    last-wins `annotations.jsonl` merge moved server-side.
+  - `warp/trainer/model_updater.py`: `_BACKEND_URL` → HF Space; HF reads
+    on the public `sets-sto/warp-knowledge` dataset are now anonymous.
+  - `SyncManager` no longer requires a token to start an upload cycle;
+    the `HFTokenDialog` class has been deleted.
+
+### Removed
+- `~/.config/warp/hub_token.txt` is **purged on first run** after upgrade
+  (`userdata._purge_legacy_hub_token`, wired into `migrate_legacy()`).
+  Idempotent — the deletion only happens once; subsequent runs are
+  no-ops. Failures are logged but never raised.
+- `userdata.hub_token_file()` helper removed.
+- `migrate-from-sets-warp` no longer copies `hub_token.txt` from a
+  sets-warp checkout (and its CLI help text reflects this).
+
+### Security
+- The old shared write token is still valid on HF until manually revoked.
+  Maintainer action required: rotate the token in the HF UI so that any
+  leaked copies on user machines (the file is purged but backups,
+  filesystem snapshots, and old support bundles may still contain it)
+  become inert.
+
+### Docs
+- `docs/REMOTE_SYNC_AUDIT.md` rewritten to reflect the new single-backend
+  architecture; the high-severity shared-token risk row is now marked
+  RESOLVED.
+- `docs/ML_PIPELINE.md` updated to remove `warp/hub_token.txt` from the
+  runtime-files table and the sync description.
 
 ## [1.0.4] — 2026-05-24
 

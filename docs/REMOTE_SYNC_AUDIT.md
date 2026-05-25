@@ -9,19 +9,23 @@
 
 ## 1. Channels in use
 
-WARP talks to **two separate backends**:
+WARP talks to **a single backend** for all writes; HF Hub is read-only
+from the client.
 
 | Channel | Target | Used for | Auth |
 |---------|--------|----------|------|
-| HF Hub (direct) | `sets-sto/sto-icon-dataset` | Training crops, annotations.jsonl, screen-type screenshots, anchor grids | Shared write token `warp/hub_token.txt` |
-| HF Hub (direct, read-only) | `sets-sto/warp-knowledge` | Model + label-map + community_anchors + ship_type_corrections download | Public read (optional token for higher rate limits) |
-| Render service | `sets-warp-backend.onrender.com` | `POST /contribute` (pHash knowledge), `GET /knowledge`, `GET /model/version` | Server-side `HF_TOKEN` (never on client) |
+| HF Spaces backend | `sets-sto-warp-backend.hf.space` | `POST /contribute` (pHash), `POST /contribute/bulk-crops`, `POST /upload/screen-types`, `POST /upload/anchors`, `GET /knowledge`, `GET /model/version` | Server-side `HF_TOKEN` (never on client) |
+| HF Hub (read-only) | `sets-sto/warp-knowledge` | Model + label-map + community_anchors + ship_type_corrections download | Anonymous (public dataset) |
+
+**Since v1.0.5** the client holds **no HF credentials**. All writes to the
+icon dataset go through the backend, which holds the write token as a
+Space secret.
 
 ---
 
 ## 2. Upload path
 
-### 2.1 Crops + annotations + screen-types + anchors (HF Hub direct)
+### 2.1 Crops + annotations + screen-types + anchors (backend proxy)
 
 ```
 WARP CORE confirm
@@ -35,25 +39,29 @@ SyncManager.check_and_upload()         (registered in warp_button.py)
   • startup delay:   15 s after app launch
   • daily rate cap:  1000 new files per install_id (corrections are free)
   ▼
-SyncWorker.run() — single HF commit per cycle, contains:
-  • staging/<install_id>/crops/<sha>.png         (only when sha unseen)
-  • staging/<install_id>/annotations.jsonl       (last-wins sha dedup)
-  • staging/<install_id>/screen_types/<stype>/<sha>.png
-  • staging/<install_id>/anchors_grid_<sha8>.json
+SyncWorker.run() — batched POSTs to the HF Spaces backend:
+  • POST /contribute/bulk-crops      (≤50 items per request)
+      → staging/<install_id>/crops/<sha>.png (only when sha unseen)
+      → annotations.jsonl entry merged server-side (last-wins per sha)
+  • POST /upload/screen-types        (≤20 items per request)
+      → staging/<install_id>/screen_types/<stype>/<sha>.png
+  • POST /upload/anchors             (≤20 grids per request)
+      → staging/<install_id>/anchors_grid_<sha8>.json
 ```
 
-**Validated invariants** (`warp/trainer/sync.py`):
+**Validated invariants** (`warp/trainer/sync.py`, `main.py` on the backend):
 
 - Crops are stored under `staging/<install_id>/` — no two users can collide.
 - `.sync_uploaded_hashes.json` and `.sync_uploaded_labels.json` cache the
-  sha→sent and sha→label state locally so `list_repo_files` is only called
-  once per install (bootstrap), not on every cycle.
-- `_append_staging_annotations_to_ops` performs per-sha last-wins dedup so
-  correction events overwrite stale labels instead of accumulating.
-- One commit per 10-min cycle bundles all changes — N crops + N annotations
-  cost exactly one HF commit, not N.
+  sha→sent and sha→label state locally so anonymous `list_repo_files` is
+  only called once per install (bootstrap), not on every cycle.
+- Per-sha last-wins dedup for `annotations.jsonl` runs **server-side** —
+  the backend reads the current jsonl, merges new entries, and rewrites
+  in one commit.
+- One commit per batch on the backend — N crops cost ceil(N/50) HF
+  commits, not N.
 
-### 2.2 pHash knowledge (Render proxy)
+### 2.2 pHash knowledge (backend proxy)
 
 ```
 WARP user confirms an unusual icon
@@ -62,8 +70,8 @@ WARP user confirms an unusual icon
           • local rate-limit:  200 contributions / install_id / day
           • circuit breaker:   on 503/network error, back off 5 min
   ▼
-POST https://sets-warp-backend.onrender.com/contribute
-  • 60 s read timeout (covers Render free-tier cold-start ~50 s)
+POST https://sets-sto-warp-backend.hf.space/contribute
+  • 60 s read timeout (covers Space cold-start after ~48 h idle)
   • backend appends to contributions/YYYY-MM-DD/<uuid>.{png,json}
   • admin merge (manual / scheduled) folds approved contributions into
     knowledge.json
@@ -81,7 +89,7 @@ ModelUpdater().check_and_update()        (called at app launch + WARP CORE open)
   • rate-limit cache: warp/models/model_version_remote_cache.json
   • requests with (connect=5 s, read=60 s) timeouts
   ▼
-GET https://sets-warp-backend.onrender.com/model/version
+GET https://sets-sto-warp-backend.hf.space/model/version
   └─► remote = {trained_at, n_classes, val_acc, available}
   ▼
 If remote.trained_at > local.trained_at OR embedder stale:
@@ -124,32 +132,31 @@ TextExtractor.load_corrections(...)
 
 ## 4. Capacity envelope
 
-### 4.1 HF Hub (sets-sto/sto-icon-dataset)
+### 4.1 HF Hub (sets-sto/sto-icon-dataset) — backend-side writes
 
 | Constraint | Value (source) | Headroom at 100 users | Headroom at 1000 users |
 |------------|----------------|----------------------|------------------------|
-| Commits per user token | ~1000/day (HF docs) | 100 × 144 cycles/day × 1 commit ≈ 14 400 commits/day on one shared token | Same shared token would hit the daily ceiling |
-| Concurrent commits | Tolerated, no per-second hard limit documented | Fine — 100 users staggered over 10 min = ~10/min | Risky — 1000 users × 1 cycle / 10 min = 100/min if startup not staggered |
-| `list_repo_files` size | Grows linearly with crops | 100 × 50 crops = 5 000 files → list ≈ 1–2 s | 1000 × 50 = 50 000 files → list ≈ 10–20 s |
+| Commits per token (backend) | ~1000/day (HF docs) | Batched: 100 users × ~2 batches/cycle × 144 cycles/day ≈ 28 800/day in worst case, but the cache + 10-min de-dup typically reduces to <500/day | Same shared backend token; batching of 50 crops / 20 screens / 20 anchors keeps commit count tractable up to ~5 k users |
+| Concurrent commits | Serialized on the backend side (single Space worker) | Fine — requests queue at backend, not at HF | Need to scale Space replicas or move to paid tier before commit serialization becomes the bottleneck |
+| `list_repo_files` (anonymous, client) | Grows linearly with crops | 100 × 50 = 5 000 files → list ≈ 1–2 s | 1000 × 50 = 50 000 files → list ≈ 10–20 s |
 | Storage | Free public datasets, no published cap | Negligible (~64×64 PNG ≈ 4 KB) | ~200 MB at 1000 × 50 crops |
 
-**Key observation — single shared HF token.** All clients use the same
-`hub_token.txt` (admin write token). HF's rate limits apply per token, not
-per user. The current path therefore scales as N total commits across the
-whole user base, not N per user.
+**Single shared backend token, never on clients.** The HF write token
+lives only as a Space secret. Compromising a client cannot leak the token;
+abuse must come through the backend's rate-limited, validating endpoints.
 
-### 4.2 Render free-tier backend (`sets-warp-backend`)
+### 4.2 HF Spaces backend (`sets-sto/warp-backend`)
 
 | Constraint | Free tier | At 100 active users | At 1000 active users |
 |------------|-----------|--------------------|----------------------|
-| Cold start | ~50 s after 15 min idle | Handled by 60 s read timeout | Same — once warm, stays warm |
-| Concurrent requests | ~100 (default uvicorn workers) | OK | Bottleneck — request queue grows |
-| Daily request budget | 750 hours/month CPU time | Fine | Will exhaust within a week if users actively contribute |
+| Cold start | ~30–60 s after ~48 h idle | Handled by 60 s read timeout + client circuit breaker | Same — once warm, stays warm |
+| Concurrent requests | Single uvicorn worker (default Docker SDK) | OK — most requests are I/O-bound on HF API | Bottleneck — request queue grows; upgrade Space or shard by install_id |
+| CPU/RAM | 2 vCPU / 16 GB (free CPU Basic) | Plenty | Fine for proxying; HF Hub is the real bottleneck |
 | Bandwidth | Generous but not unlimited | OK | Monitor — `/knowledge` is the heaviest endpoint |
 
-**Render free tier comfortably supports ~100 concurrent users.** Beyond
-that, the cold-start delay multiplies (queue forms), and CPU-time budget
-becomes the constraint.
+**Free Spaces comfortably supports ~100 concurrent users.** Beyond that,
+the single-worker queue becomes the constraint; paid Space tiers add
+replicas without code changes.
 
 ### 4.3 GitHub Actions training pipeline
 
@@ -164,9 +171,9 @@ becomes the constraint.
 
 | Risk | Severity | Mitigation today | Recommendation |
 |------|----------|------------------|----------------|
-| HF token shared across all users — leak compromises every install | High | Token kept out of repo; `hub_token.txt` gitignored | Move uploads through Render proxy (like `/contribute` does today) so the token lives only server-side. Cuts the HF commit fan-out, eliminates client-side leakage. |
-| HF rate limit on shared token at >500 active users | Medium | Per-sha + per-label cache keeps cycles ~no-op when nothing changed | Same — Render proxy lets us aggregate uploads server-side and commit in batches. |
-| Render cold-start makes the first user of a session wait | Low | 60 s read timeout absorbs it; UI is non-blocking | Upgrade to Render Starter ($7/mo) — no sleep, ~5 s warm restart. |
+| ~~HF token shared across all users — leak compromises every install~~ | **RESOLVED v1.0.5** | Token removed from all clients; lives only as Space secret; legacy `~/.config/warp/hub_token.txt` purged on first run after upgrade | Rotate the old shared token in HF UI (old one must be revoked since it leaked to every install). |
+| HF rate limit on backend token at >5000 active users | Medium | Backend batches 50 crops / 20 screens / 20 anchors per commit; per-sha + per-label cache keeps cycles ~no-op when nothing changed | Shard backend writes by install_id prefix, or rotate among multiple backend tokens. |
+| Space cold-start makes the first user of a session wait | Low | 60 s read timeout absorbs it; client circuit breaker holds outbound queue | Upgrade to a paid Space tier — no idle sleep, faster restart. |
 | All clients start at the same time (e.g. weekend evening) → thundering herd at second 16 | Medium | Fixed 15 s startup delay; per-cycle de-duplication keeps payload small | Add jitter to startup delay (e.g. `15 s + uniform(0, 30 s)`) to spread commits over 30 s window. |
 | `list_repo_files` cost grows with crops | Low | Cached locally after first call; subsequent syncs O(1) | None now. Revisit if user base passes 5 k installs. |
 | Bad actor floods their own staging/ folder | Low | Per-install staging; client rate limit (1000/day); admin merge step is the gate | None — staging is the right design. |
@@ -177,21 +184,21 @@ becomes the constraint.
 
 ## 6. Bottom line
 
-**For the first round of wider testing (a few dozen to ~100 concurrent
-users), the current setup is fit for purpose.** Both upload and download
-paths are non-blocking, idempotent, and cached. The retry/back-off logic
-covers the Render cold-start. No code changes required to open the program
-to a wider beta.
+**v1.0.5 closed the high-severity shared-token risk.** All client writes
+now flow through the HF Spaces backend, which holds the write token as a
+Space secret. Existing installs purge their legacy `hub_token.txt` on
+first run after upgrade.
 
-**Before scaling past ~500 active contributors,** two changes earn their
-keep:
+**For wider testing (a few dozen to ~100 concurrent users), the setup is
+fit for purpose.** Both upload and download paths are non-blocking,
+idempotent, and cached. The retry/back-off + circuit breaker covers
+Space cold-starts.
 
-1. Move client uploads behind the Render proxy (same as `/contribute`
-   already does for pHash), so the HF write token leaves the client side
-   entirely and the backend can batch commits.
-2. Add startup-delay jitter to spread the per-cycle uploads over a 30 s
+**Remaining follow-ups before scaling past ~5 000 active contributors:**
+
+1. Rotate the old shared HF write token (still valid until revoked in
+   the HF UI — manual user action).
+2. Add startup-delay jitter to spread per-cycle uploads over a 30 s
    window.
-
-Neither is urgent. Both can be done before v3.0 (public release) without
-breaking compatibility — clients fall back to direct HF uploads if the
-proxy is unreachable.
+3. Consider sharding backend writes by install_id prefix, or a paid
+   Space tier for replica concurrency.

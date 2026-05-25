@@ -85,9 +85,11 @@ Saved to `warp/models/screen_classifier.pt` and distributed via ModelUpdater.
 
 ### When it happens
 
-WARP CORE runs a background sync timer every 5 minutes. On each tick it
-checks for unsynced confirmed crops and uploads them if a HuggingFace token
-is present in `warp/hub_token.txt`.
+WARP CORE runs a background sync timer every 10 minutes. On each tick it
+checks for unsynced confirmed crops and POSTs them in batches to the HF
+Spaces backend (`sets-sto-warp-backend.hf.space`), which holds the HF
+write token as a server-side secret. Since v1.0.5 the client holds no HF
+credentials.
 
 File: `warp/trainer/sync.py` — `SyncWorker`
 
@@ -284,7 +286,7 @@ each time WARP CORE is opened.
 
 ```
 1. Check rate limit: skip if last check was < 24 h ago
-2. GET https://sets-warp-backend.onrender.com/model/version
+2. GET https://sets-sto-warp-backend.hf.space/model/version
    → returns {available, trained_at, n_classes, val_acc, ...}
 3. Compare remote trained_at vs local model_version.json trained_at:
      remote > local  → download and install new model
@@ -412,7 +414,6 @@ The local `.pt` and community `.pt` are the **same file** —
 | `warp/training_data/screen_types/<TYPE>/<file>.png` | Confirmed screen type screenshots |
 | `warp/models/ship_type_corrections.json` | OCR correction map downloaded from community (optional) |
 | `warp/knowledge/install_id.txt` | Anonymous UUID identifying this installation |
-| `warp/hub_token.txt` | HuggingFace write token (optional, for uploads) |
 
 ---
 
