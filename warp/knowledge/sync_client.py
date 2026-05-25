@@ -501,6 +501,7 @@ class WARPSyncClient:
         # matters, and per-attempt lines just spam the log even at
         # DEBUG level when the backend is sleeping.
         last_err: Exception | None = None
+        last_err_detail: str = ''
         result: dict | None = None
         for attempt in range(3):
             try:
@@ -508,13 +509,29 @@ class WARPSyncClient:
                 break
             except _ue.HTTPError as e:
                 last_err = e
+                # Backend uses HTTPException(detail=...) which lands in the
+                # response body as JSON {"detail":"..."}. urllib loses this
+                # by default — read it so the WARN/dropped log carries the
+                # real reason (e.g. "Storage unavailable, please try
+                # later") instead of just "Service Unavailable".
+                body = ''
+                try:
+                    body = e.read().decode('utf-8', errors='replace')[:200]
+                    parsed = json.loads(body)
+                    last_err_detail = str(parsed.get('detail', body))[:200]
+                except Exception:
+                    last_err_detail = body
                 if 400 <= e.code < 500 and e.code != 429:
-                    log.warning(f'WARPSync: contribution rejected by backend (HTTP {e.code})')
+                    log.warning(
+                        f'WARPSync: contribution rejected by backend '
+                        f'(HTTP {e.code}: {last_err_detail or e.reason})'
+                    )
                     return 'dropped'
                 if attempt < 2:
                     time.sleep(20 if e.code == 503 else 5)
             except Exception as e:
                 last_err = e
+                last_err_detail = ''
                 if attempt < 2:
                     time.sleep(5)
 
@@ -530,8 +547,9 @@ class WARPSyncClient:
             # _OUTAGE_HEARTBEAT_S so the user can still see the queue
             # depth and confirm the worker is alive.
             if not self._outage_warned:
+                reason = last_err_detail or str(last_err)
                 log.warning(
-                    f'WARPSync: backend unavailable ({last_err}) — '
+                    f'WARPSync: backend unavailable ({reason}) — '
                     f'backing off {self._BACKOFF_SECONDS}s ({depth} queued)'
                 )
                 self._outage_warned     = True
