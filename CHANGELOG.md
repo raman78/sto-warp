@@ -8,6 +8,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.7] — 2026-05-26
+
+### Changed
+- Startup synchronisation of community-shared icon crops is now
+  much faster. The mirror is checked against the upstream revision
+  first, and only crops that are actually missing locally get
+  downloaded — instead of re-walking all ~7500 files every cycle.
+  Typical startup with an unchanged upstream drops from over two
+  minutes to about one second; when upstream has new crops, only
+  the deltas are pulled.
+
+### Fixed
+- Crops that were removed from the shared dataset are now also
+  removed from the local mirror, with a soft-delete safety net so
+  nothing is lost permanently if something goes wrong.
+
 ## [1.0.6] — 2026-05-26
 
 ### Added
