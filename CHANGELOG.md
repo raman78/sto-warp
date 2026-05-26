@@ -27,33 +27,32 @@ details live in the git history.
 
 ## [1.0.5] — 2026-05-25
 
-Security release. Removes a shared upload token that previously sat in
-every install's local config.
+Security release. Removes a shared upload token that previously
+shipped with every install.
 
 ### Changed
-- Uploads (confirmed crops, screenshots, anchor grids) now go through
-  a server-side endpoint instead of a token stored locally.
+- Confirmed crops, screenshots, and anchor grids are now uploaded
+  through a server-side endpoint instead of using a token stored on
+  disk.
 
 ### Removed
 - The old shared token file is automatically deleted on first launch
   after upgrade.
 
 ### Security
-- Backups or support bundles created before this release may still
-  contain the previous token. The token will be rotated server-side so
-  leaked copies stop working.
+- The previous token will be rotated server-side, so any copies of
+  it in old backups or support bundles will stop working.
 
 ## [1.0.4] — 2026-05-24
 
-Ground BOFF recognition overhaul. Previously only 6 of 106 ground
-abilities were recognised; this release brings full coverage.
+Ground BOFF recognition overhaul. Earlier releases recognised only 6
+of 106 ground abilities; this release brings full coverage.
 
 ### Added
-- Full recognition of all 106 ground BOFF abilities (previously: 6).
-- Space BOFF coverage extended to all 122 abilities (previously: 64).
-- Ground BOFF seats are now detected and treated separately from
-  space seats — the suggester only offers ground abilities for ground
-  slots.
+- All 106 ground BOFF abilities are now recognised (previously 6).
+- Space BOFF coverage extended to all 122 abilities (previously 64).
+- Ground BOFF seats are now detected separately from space seats —
+  ground slots only receive ground-ability suggestions.
 
 ### Fixed
 - Empty and greyed-out ability slots are now recognised as empty
@@ -71,13 +70,13 @@ Trainer (WARP CORE) bug-fix round.
 
 ### Fixed
 - Clicking a **Ship Tier** or **Ship Type** row in the review list
-  now fills in the matching dropdown (previously the dropdown stayed
+  now updates the matching dropdown (previously the dropdown stayed
   on its old value).
-- Re-running Auto-Detect no longer gets silently overridden by an
-  older confirmed value for the same slot. The fresh detection wins
-  and the row is marked for re-confirmation.
-- Pressing **Confirm** on Ship Type / Ship Tier with an empty
-  dropdown no longer wipes the value.
+- Re-running Auto-Detect no longer leaves an older confirmed value
+  shadowing a fresh detection for the same slot — the fresh
+  detection wins and the row is reset to pending.
+- Confirming **Ship Type** / **Ship Tier** with an empty dropdown no
+  longer wipes the row's value.
 
 ## [1.0.2] — 2026-05-21
 
@@ -99,15 +98,16 @@ Progress bar and responsiveness improvements.
 
 ## [1.0.1] — 2026-05-21
 
-User interface polish. No data or pipeline changes — drop-in upgrade.
+User interface polish. No recognition-behaviour changes — drop-in
+upgrade.
 
 ### Added
 - Detection logs are now separate for WARP and WARP CORE — runs no
   longer overwrite each other.
 - **Copy All** and **Save As…** buttons on the Detection Logs view.
   Saved files get a default name based on the active screenshot.
-- Centralised theme — the whole app's appearance can be swapped from
-  one place (or via the `WARP_THEME` environment variable).
+- Centralised theme — the whole app's appearance can be swapped via
+  the `WARP_THEME` environment variable.
 
 ### Changed
 - Toolbar and button styling unified between WARP and WARP CORE.
@@ -137,15 +137,15 @@ that previously lived inside sets-warp.
 - **WARP CORE** — trainer for reviewing detection results and
   feeding corrections back into the model.
 - **Community sync** — confirmed crops and the trained model are
-  shared via Hugging Face so corrections from every install improve
-  the shared baseline.
+  shared via Hugging Face, so corrections from every install
+  improve the shared baseline.
 - Three-pane file picker with image preview and a build-type badge
   for verifying the screen type before importing.
 - One-command install / upgrade via `pipx`.
 
 ### Behaviour notes
-- Background sync runs every 60 minutes (down from the earlier
-  5-minute beta interval) to keep network use light.
-- Recognition is more accurate for ship tier / type, traits, and a
-  range of edge cases (T6-X2 detection, Personal Ground Traits vs
-  Space Traits, low-confidence trait grid rows, etc.).
+- Background sync runs every 60 minutes (down from the 5-minute
+  beta interval) to keep network use light.
+- Recognition accuracy improvements for ship tier / type, traits,
+  and edge cases such as T6-X2 detection, Personal Ground Traits
+  vs Space Traits, and low-confidence trait grid rows.
