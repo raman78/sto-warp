@@ -60,12 +60,33 @@ class CommunityCropsClient:
 
     def fetch(self) -> CommunityCropsSnapshot:
         try:
-            from huggingface_hub import snapshot_download
+            from huggingface_hub import snapshot_download, HfApi
         except Exception as e:
             log.warning(f'community_crops: huggingface_hub unavailable: {e}')
             return CommunityCropsSnapshot(0, 0, ok=False)
 
         root = community_root()
+        revision_file = root / '.last_commit.sha'
+
+        # Short-circuit by dataset commit SHA — when the upstream hasn't
+        # moved since our last successful snapshot, the local mirror is
+        # already byte-identical and snapshot_download would just re-list
+        # ~7500 files for nothing (~2.5 min on cold I/O).
+        current_sha: str | None = None
+        try:
+            current_sha = HfApi().dataset_info(HF_DATASET_REPO).sha
+        except Exception as e:
+            log.warning(f'community_crops: dataset_info failed, falling back to full snapshot: {e}')
+
+        if current_sha:
+            try:
+                cached_sha = revision_file.read_text().strip()
+            except Exception:
+                cached_sha = ''
+            if cached_sha == current_sha:
+                log.info(f'community_crops: mirror up-to-date at {current_sha[:8]} — skipping download')
+                return self._scan(ok=True)
+
         log.info(f'community_crops: snapshot_download {HF_DATASET_REPO} → {root}')
         try:
             snapshot_download(
@@ -73,10 +94,17 @@ class CommunityCropsClient:
                 repo_type=HF_REPO_TYPE,
                 local_dir=str(root),
                 allow_patterns=_ALLOW_PATTERNS,
+                revision=current_sha,
             )
         except Exception as e:
             log.warning(f'community_crops: snapshot download failed: {e}')
             return self._scan(ok=False)
+
+        if current_sha:
+            try:
+                revision_file.write_text(current_sha)
+            except Exception:
+                pass
 
         return self._scan(ok=True)
 

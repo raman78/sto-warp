@@ -105,6 +105,15 @@ def _validate_annotation(item: dict) -> str | None:
 _TEXT_CROP_PREFIXES = ('ship_type_', 'ship_tier_')
 
 
+def _stat_key(path: Path) -> tuple[int, int] | None:
+    """Return (mtime_ns, size) for cache invalidation, or None if missing."""
+    try:
+        st = path.stat()
+    except OSError:
+        return None
+    return (st.st_mtime_ns, st.st_size)
+
+
 def _validate_crop(path: Path) -> str | None:
     """Returns None if valid PNG crop, or an error string.
 
@@ -246,6 +255,13 @@ class SyncWorker(QThread):
         corrections  = 0
         skipped_unchanged = 0
 
+        # Per-file (mtime, size) → (sha, valid) cache. Crops are content-
+        # addressed and effectively immutable once written, so cache hit-rate
+        # on subsequent syncs is ~100% — skips both the PNG decode in
+        # _validate_crop and the full-file SHA hash.
+        file_meta = self._load_file_meta_cache()
+        file_meta_dirty = False
+
         self.progress.emit(10, "Preparing files…")
         for item in confirmed:
             if daily_count + uploaded >= MAX_DAILY_UPLOADS:
@@ -257,16 +273,27 @@ class SyncWorker(QThread):
                 continue
 
             crop_path = Path(item["path"])
-            if not crop_path.exists():
+            stat_key = _stat_key(crop_path)
+            if stat_key is None:
                 _slog.warning(f'HF Sync: crop file missing, skipping: {crop_path.name}')
                 continue
 
-            err = _validate_crop(crop_path)
-            if err:
-                logger.warning(f"Sync: skipping invalid crop ({err}): {crop_path.name}")
-                continue
+            cached = file_meta.get(str(crop_path))
+            if cached and cached.get('mtime_ns') == stat_key[0] and cached.get('size') == stat_key[1]:
+                if not cached.get('valid', False):
+                    continue
+                sha = cached['sha']
+            else:
+                err = _validate_crop(crop_path)
+                if err:
+                    file_meta[str(crop_path)] = {'mtime_ns': stat_key[0], 'size': stat_key[1], 'valid': False}
+                    file_meta_dirty = True
+                    logger.warning(f"Sync: skipping invalid crop ({err}): {crop_path.name}")
+                    continue
+                sha = self._file_sha256(crop_path)
+                file_meta[str(crop_path)] = {'mtime_ns': stat_key[0], 'size': stat_key[1], 'sha': sha, 'valid': True}
+                file_meta_dirty = True
 
-            sha = self._file_sha256(crop_path)
             file_already_on_hf = sha in existing_hashes
             current_label = f'{item["slot"]}|{item["name"]}'
             cached_label  = uploaded_labels.get(sha)
@@ -344,6 +371,9 @@ class SyncWorker(QThread):
             self._save_uploaded_labels_cache(uploaded_labels)
             _slog.info(f'HF Sync: backend accepted {sent}/{total_to_send} items')
 
+        if file_meta_dirty:
+            self._save_file_meta_cache(file_meta)
+
         # Update local rate limit counter (file uploads only — corrections are cheap)
         rl[today] = daily_count + uploaded
         try:
@@ -354,6 +384,21 @@ class SyncWorker(QThread):
         msg = f'Uploaded {uploaded} new crops + {corrections} corrections.'
         _slog.info(f'HF Sync: done — {uploaded} new crops, {corrections} corrections, total on HF: {len(existing_hashes)}')
         self.progress.emit(100, msg)
+
+    def _load_file_meta_cache(self) -> dict:
+        """Load per-file (mtime_ns, size) → (sha, valid) cache."""
+        cache_file = self._mgr._dir / '.sync_file_meta.json'
+        try:
+            return dict(json.loads(cache_file.read_text()))
+        except Exception:
+            return {}
+
+    def _save_file_meta_cache(self, meta: dict) -> None:
+        cache_file = self._mgr._dir / '.sync_file_meta.json'
+        try:
+            cache_file.write_text(json.dumps(meta))
+        except Exception:
+            pass
 
     def _load_uploaded_hashes_cache(self) -> set[str]:
         """Load locally cached set of already-uploaded crop sha256 hashes."""
