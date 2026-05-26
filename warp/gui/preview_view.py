@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from warp.recognition.boff_keys import group_items_by_seat
 from warp.style import BG as _THEME_BG
 from warp.warp_importer import ImportResult, RecognisedItem
 
@@ -145,10 +146,9 @@ class _ImageCanvas(QWidget):
         f.setPointSize(8)
         p.setFont(f)
 
-        # Per-bbox: rectangle + confidence number only. Slot name is
-        # rendered once per slot group as a row label below — the old
-        # per-bbox name labels overlapped each other and were illegible.
-        groups: dict[str, dict] = {}
+        # Pass 1 — per-bbox rectangle + confidence number. Labels are
+        # rendered once per group (pass 2) since per-bbox name labels
+        # overlapped each other and were illegible.
         for it in self._items:
             if not it.bbox or len(it.bbox) < 4:
                 continue
@@ -167,18 +167,36 @@ class _ImageCanvas(QWidget):
                 p.drawText(rx + 2, max(ry - 2, 10), conf_txt)
                 p.setPen(color)
                 p.drawText(rx + 2, max(ry - 2, 10), conf_txt)
-            slot = it.slot or ''
-            g = groups.setdefault(slot, {
-                'color': color, 'x0': rx, 'y0': ry,
-                'x1': rx + rw, 'y1': ry + rh,
-            })
-            g['x0'] = min(g['x0'], rx)
-            g['y0'] = min(g['y0'], ry)
-            g['x1'] = max(g['x1'], rx + rw)
-            g['y1'] = max(g['y1'], ry + rh)
 
-        # One row label per slot family. Placement:
-        #   BOFF  — centered above the row's bboxes (above the conf nums)
+        # Pass 2 — one label per physical seat (BOFF) or slot (rest).
+        # Seat-aware grouping prevents an outlier ability (e.g. a Science
+        # ability slotted into an Intel seat) from pulling the parent
+        # group's bbox extent — and therefore the label centroid —
+        # sideways into a neighbouring seat.
+        groups: list[dict] = []
+        for label, items in group_items_by_seat(self._items):
+            bboxed = [it for it in items if it.bbox and len(it.bbox) >= 4]
+            if not bboxed:
+                continue
+            rects = []
+            for it in bboxed:
+                x, y, w, h = it.bbox[:4]
+                rx = x0 + int(x * self._scale)
+                ry = y0 + int(y * self._scale)
+                rw = max(1, int(w * self._scale))
+                rh = max(1, int(h * self._scale))
+                rects.append((rx, ry, rx + rw, ry + rh))
+            groups.append({
+                'label': label,
+                'color': _color_for_slot(bboxed[0].slot),
+                'x0': min(r[0] for r in rects),
+                'y0': min(r[1] for r in rects),
+                'x1': max(r[2] for r in rects),
+                'y1': max(r[3] for r in rects),
+            })
+
+        # Placement:
+        #   BOFF  — centered above the seat's bboxes (above the conf nums)
         #   trait — to the RIGHT of the rightmost bbox, vertically centered
         #   EQ    — to the LEFT of the leftmost bbox, vertically centered
         gf = QFont('Monospace')
@@ -186,9 +204,10 @@ class _ImageCanvas(QWidget):
         gf.setBold(True)
         p.setFont(gf)
         fm = p.fontMetrics()
-        for slot, g in groups.items():
-            s = slot.lower()
-            tw = fm.horizontalAdvance(slot)
+        for g in groups:
+            label = g['label']
+            s = label.lower()
+            tw = fm.horizontalAdvance(label)
             th = fm.height()
             if s.startswith('boff'):
                 lx = (g['x0'] + g['x1']) // 2 - tw // 2
@@ -200,9 +219,9 @@ class _ImageCanvas(QWidget):
                 lx = max(g['x0'] - tw - 8, 2)
                 ly = (g['y0'] + g['y1']) // 2 + th // 3
             p.setPen(QPen(QColor(0, 0, 0, 220), 4))
-            p.drawText(lx, ly, slot)
+            p.drawText(lx, ly, label)
             p.setPen(g['color'])
-            p.drawText(lx, ly, slot)
+            p.drawText(lx, ly, label)
 
 
 class PreviewView(QWidget):

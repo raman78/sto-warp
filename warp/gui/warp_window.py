@@ -33,6 +33,7 @@ from warp.gui.progress_bar import StatusProgressBar
 from warp.style import LBG, primary_btn_style, secondary_btn_style
 
 from warp.debug import log
+from warp.recognition.boff_keys import group_items_by_seat
 from warp.warp_importer import (
     SCREENSHOT_EXTENSIONS, SLOT_ORDER, ImportResult, RecognisedItem,
     WarpImporter,
@@ -413,35 +414,53 @@ class WarpWindow(QMainWindow):
     # ── Result rendering ────────────────────────────────────────────
 
     def _populate_tree(self, result: ImportResult):
-        by_slot: dict[str, list[RecognisedItem]] = {}
-        for it in result.items:
-            by_slot.setdefault(it.slot, []).append(it)
+        # Group seat-aware: BOFF items with a seat_key collapse to one
+        # group per physical seat (with #1/#2 suffix when the same
+        # profession label repeats), so a Boff Intel seat holding a
+        # stray Science ability no longer inflates the "Boff Science"
+        # bucket across seat boundaries. Non-BOFF slots group by slot
+        # as before. Returned in spatial (Y) order — we re-arrange
+        # below to honour the canonical pipeline display order for
+        # non-BOFF sections.
+        seat_groups: list[tuple[str, list[RecognisedItem]]] = \
+            group_items_by_seat(result.items)
+        by_label: dict[str, list[RecognisedItem]] = {
+            label: items for label, items in seat_groups
+        }
+        spatial_order: list[str] = [label for label, _ in seat_groups]
 
-        # Display order: ship metadata first (the three OCR signals SETS
-        # actually needs), then the canonical pipeline order from SLOT_ORDER
-        # (equipment → BOFFs → traits → spec). Anything left over — BOFF
-        # seat keys like `Boff Seat L[T]_392`, ad-hoc labels — is appended
-        # sorted so the output stays deterministic.
+        # Display order: ship metadata → non-BOFF canonical (SLOT_ORDER)
+        # → BOFF in spatial Y order → anything else (sorted). BOFF labels
+        # like "Boff Tactical #1" can't be matched directly against
+        # SLOT_ORDER entries, so the whole BOFF block is taken from the
+        # spatial ordering returned by group_items_by_seat() — which
+        # also matches the on-screen top-to-bottom seat order.
         meta_slots = ['Ship Name', 'Ship Type', 'Ship Tier']
         canonical = [sd['name'] for sd in SLOT_ORDER.get(result.build_type, [])]
+        non_boff_canonical = [s for s in canonical if not s.startswith('Boff')]
+        boff_in_order = [lbl for lbl in spatial_order if lbl.startswith('Boff')]
         seen: set[str] = set()
-        ordered_slots: list[str] = []
-        for s in meta_slots + canonical:
-            if s in by_slot and s not in seen:
-                ordered_slots.append(s)
+        ordered_labels: list[str] = []
+        for s in meta_slots + non_boff_canonical:
+            if s in by_label and s not in seen:
+                ordered_labels.append(s)
                 seen.add(s)
-        for s in sorted(by_slot):
-            if s not in seen:
-                ordered_slots.append(s)
-                seen.add(s)
+        for lbl in boff_in_order:
+            if lbl not in seen:
+                ordered_labels.append(lbl)
+                seen.add(lbl)
+        for lbl in sorted(by_label):
+            if lbl not in seen:
+                ordered_labels.append(lbl)
+                seen.add(lbl)
 
         # Parent (slot) rows get a lighter background so the eye can find
         # the section breaks at a glance; child rows stay on the default
         # tree background. Alternating row colors are off — they made the
         # multi-row equipment slots noisy.
         parent_brush = QBrush(QColor(LBG))
-        for slot in ordered_slots:
-            entries = sorted(by_slot[slot], key=lambda it: (it.slot_index, it.name))
+        for slot in ordered_labels:
+            entries = sorted(by_label[slot], key=lambda it: (it.slot_index, it.name))
             parent = QTreeWidgetItem(self._tree)
             parent.setText(0, slot)
             parent.setText(1, str(len(entries)))

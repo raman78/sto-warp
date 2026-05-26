@@ -155,6 +155,58 @@ def is_ground_seat(slot_name: str) -> bool:
     return bool(m and m.group(2) == 'G')
 
 
+def group_items_by_seat(items):
+    """Group RecognisedItem-like objects into seat-aware display groups.
+
+    BOFF items that carry a non-empty `seat_key` (set by
+    `_remap_boff_seat_slots` when the original slot was marker-keyed)
+    group by physical seat; the group's label is the seat's profession
+    via `pretty_slot()`. Items without `seat_key` (legacy detector
+    paths) and all non-BOFF items group by `.slot` as before.
+
+    When two groups share the same base label (e.g. two Tactical
+    seats), they are numbered `#1` / `#2` by visual Y order of the
+    groups' topmost bbox so the user can distinguish them.
+
+    Returns `list[(label, [items])]` insertion-ordered by ascending Y
+    of each group's topmost bbox. Callers that want a different order
+    (e.g. canonical SLOT_ORDER for non-BOFF) should re-sort.
+    """
+    raw: dict[tuple, list] = {}
+    for it in items:
+        slot = getattr(it, 'slot', '') or ''
+        seat_key = getattr(it, 'seat_key', '') or ''
+        if slot.startswith('Boff') and seat_key and is_seat_keyed(seat_key):
+            key = ('seat', seat_key)
+            base_label = pretty_slot(seat_key)
+        else:
+            key = ('slot', slot)
+            base_label = slot
+        raw.setdefault(key, [base_label, []])[1].append(it)
+
+    def _top_y(item_list):
+        ys = [it.bbox[1] for it in item_list
+              if getattr(it, 'bbox', None) and len(it.bbox) >= 2]
+        return min(ys) if ys else 1_000_000_000
+
+    ordered = sorted(raw.values(), key=lambda v: _top_y(v[1]))
+
+    label_total: dict[str, int] = {}
+    for base_label, _ in ordered:
+        label_total[base_label] = label_total.get(base_label, 0) + 1
+
+    label_seen: dict[str, int] = {}
+    result: list[tuple[str, list]] = []
+    for base_label, item_list in ordered:
+        if label_total[base_label] > 1:
+            label_seen[base_label] = label_seen.get(base_label, 0) + 1
+            label = f'{base_label} #{label_seen[base_label]}'
+        else:
+            label = base_label
+        result.append((label, item_list))
+    return result
+
+
 def pretty_slot(slot_name: str) -> str:
     """Convert a dynamic BOFF seat key into a user-friendly label:
     - `Boff Seat L[E]_392`     → `Boff Engineering`
