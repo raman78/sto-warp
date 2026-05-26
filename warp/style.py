@@ -351,6 +351,39 @@ QToolTip {{
     border: 1px solid {LBG};
     padding: 2px;
 }}
+/* System dialogs (QFileDialog, QMessageBox, QFontDialog, QColorDialog)
+   are Qt widget trees parented under our QApplication, so they inherit
+   the global QPushButton/QToolButton rules above. That strips icons
+   from the nav-toolbar (back/forward/up/new-folder) because our
+   border+padding overrides the platform style's icon geometry. Reset
+   to palette-driven defaults so the platform style draws those buttons
+   natively (including the standard icons). */
+QFileDialog QPushButton, QMessageBox QPushButton,
+QFontDialog QPushButton, QColorDialog QPushButton {{
+    background-color: palette(button);
+    color: palette(button-text);
+    border: 1px solid palette(mid);
+    border-radius: 2px;
+    padding: 3px 8px;
+}}
+QFileDialog QPushButton:hover, QMessageBox QPushButton:hover,
+QFontDialog QPushButton:hover, QColorDialog QPushButton:hover {{
+    background-color: palette(midlight);
+}}
+QFileDialog QPushButton:disabled, QMessageBox QPushButton:disabled,
+QFontDialog QPushButton:disabled, QColorDialog QPushButton:disabled {{
+    color: palette(mid);
+}}
+QFileDialog QToolButton, QMessageBox QToolButton,
+QFontDialog QToolButton, QColorDialog QToolButton {{
+    background-color: transparent;
+    border: none;
+    padding: 2px;
+}}
+QFileDialog QToolButton:hover, QMessageBox QToolButton:hover,
+QFontDialog QToolButton:hover, QColorDialog QToolButton:hover {{
+    background-color: palette(midlight);
+}}
 """
 
 
