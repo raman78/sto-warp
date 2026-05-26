@@ -53,12 +53,15 @@ Security release.
 
 ## [1.0.4] — 2026-05-24
 
-Ground BOFF recognition overhaul. Earlier releases recognised only 6
-of 106 ground abilities; this release brings full coverage.
+Ground BOFF recognition overhaul — earlier releases recognised only
+a small fraction of ground abilities; this release brings full
+coverage.
 
 ### Added
-- All 106 ground BOFF abilities are now recognised (previously 6).
-- Space BOFF coverage extended to all 122 abilities (previously 64).
+- Ground BOFF abilities are now fully recognised (earlier releases
+  only handled a small fraction of them).
+- Space BOFF coverage has been brought up to the full set of
+  abilities as well.
 - Ground BOFF seats are now detected separately from space seats —
   ground slots only receive ground-ability suggestions.
 
