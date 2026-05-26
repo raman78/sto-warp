@@ -19,7 +19,7 @@ from __future__ import annotations
 import sys
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QSettings
+from PySide6.QtCore import Qt, QByteArray, QSettings
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
     QApplication, QMainWindow, QPushButton, QTabWidget,
@@ -196,6 +196,11 @@ def main(argv: list[str] | None = None) -> int:
     app = QApplication.instance() or QApplication(argv or sys.argv)
     QApplication.setOrganizationName('sto-warp')
     QApplication.setApplicationName('sto-warp')
+    # Force the platform-native file dialog (KDE/GNOME/portal). Our app
+    # QSS skins QToolButton globally, which inside a non-native QFileDialog
+    # mangles the nav-toolbar icons (back/up/new-folder) into empty
+    # frames. Native dialogs ignore app QSS and render correctly.
+    QApplication.setAttribute(Qt.ApplicationAttribute.AA_DontUseNativeDialogs, False)
     # Apply the active theme (warp.themes.get_active) before any window
     # is built — Qt cascades the QApplication-level palette + stylesheet
     # to every subsequently constructed widget, so WARP and WARP CORE
