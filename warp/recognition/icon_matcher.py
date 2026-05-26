@@ -172,7 +172,11 @@ class SETSIconMatcher:
                             interpolation=cv2.INTER_AREA)
         q_hist = self._hist_hsv(crop64)
 
-        # Stage 0: community pHash knowledge override (hard override)
+        # Stage 0: community pHash knowledge override (hard override).
+        # Embedder result is reused later by Stage 1, so cache it across the
+        # cross-check + main flow.
+        ml_name, ml_conf = ('', 0.0)
+        ml_computed = False
         if self._sync_client is not None:
             try:
                 from warp.knowledge.sync_client import _compute_phash
@@ -185,11 +189,32 @@ class SETSIconMatcher:
                     # leftover dev-test entry. Such entries pollute Stage 0 and
                     # used to silently turn real icons into empty slots at
                     # conf=1.0. Skip the override — fall through to ML/template.
+                    suppress = False
                     if name.startswith('__') or name == 'Test Item Name':
                         log.debug(f'WARPSync: pHash override {name!r} suppressed (virtual/test)')
+                        suppress = True
                     elif candidate_names is not None and name not in candidate_names:
                         log.debug(f'WARPSync: pHash override {name!r} rejected — not valid for slot')
+                        suppress = True
                     else:
+                        # Embedder cross-check: stale community entries from
+                        # the pre-bootstrap era mapped blank-icon pHashes to
+                        # real ability names (e.g. blanks → "Charged Particle
+                        # Burst"). The bootstrapped embedder now correctly
+                        # identifies blanks as virtual — if it says virtual
+                        # with decent confidence, refuse the override.
+                        if not self._ml_disabled:
+                            ml_name, ml_conf = self._classify_ml(crop64)
+                            ml_computed = True
+                            if (ml_name.startswith('__')
+                                    and ml_conf >= VIRTUAL_OVERRIDE_CONF):
+                                log.debug(
+                                    f'WARPSync: pHash override {name!r} rejected '
+                                    f'— embedder says {ml_name!r} '
+                                    f'(conf={ml_conf:.2f}); likely poisoned entry'
+                                )
+                                suppress = True
+                    if not suppress:
                         log.debug(f'WARPSync: knowledge override → {name!r}')
                         self._last_match_src = 'knowledge'
                         self._last_stage_scores['knowledge'] = 1.0
@@ -197,9 +222,9 @@ class SETSIconMatcher:
             except Exception as e:
                 log.debug(f'WARPSync: override lookup failed: {e}')
 
-        # Stage 1: ML classifier — always consulted (one of three signals)
-        ml_name, ml_conf = ('', 0.0)
-        if not self._ml_disabled:
+        # Stage 1: ML classifier — always consulted (one of three signals).
+        # Reuse result from Stage 0 cross-check if already computed.
+        if not self._ml_disabled and not ml_computed:
             ml_name, ml_conf = self._classify_ml(crop64)
 
         # Stage 2: template matching + histogram against wiki PNGs
