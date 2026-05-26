@@ -27,21 +27,15 @@ details live in the git history.
 
 ## [1.0.5] — 2026-05-25
 
-Security release. Removes a shared upload token that previously
-shipped with every install.
+Security release.
 
 ### Changed
-- Confirmed crops, screenshots, and anchor grids are now uploaded
-  through a server-side endpoint instead of using a token stored on
-  disk.
+- Uploads now go through a server-side endpoint, so an upload token
+  no longer needs to be stored locally.
 
 ### Removed
-- The old shared token file is automatically deleted on first launch
-  after upgrade.
-
-### Security
-- The previous token will be rotated server-side, so any copies of
-  it in old backups or support bundles will stop working.
+- The shared upload token file is automatically deleted on first
+  launch after upgrade.
 
 ## [1.0.4] — 2026-05-24
 
@@ -69,32 +63,31 @@ Trainer (WARP CORE) bug-fix round.
   clear everything, keep already-confirmed boxes, or cancel.
 
 ### Fixed
-- Clicking a **Ship Tier** or **Ship Type** row in the review list
-  now updates the matching dropdown (previously the dropdown stayed
-  on its old value).
-- Re-running Auto-Detect no longer leaves an older confirmed value
-  shadowing a fresh detection for the same slot — the fresh
-  detection wins and the row is reset to pending.
-- Confirming **Ship Type** / **Ship Tier** with an empty dropdown no
-  longer wipes the row's value.
+- The ship name and tier shown in the trainer's review panel now
+  reliably reflect what was recognised: selecting a row updates the
+  editor to match, re-running Auto-Detect applies the fresh
+  recognition instead of being overridden by an older confirmation,
+  and confirming an empty value no longer wipes the recognised one.
 
 ## [1.0.2] — 2026-05-21
 
-Progress bar and responsiveness improvements.
+Progress feedback and responsiveness improvements.
 
 ### Added
-- Single, consistent progress bar across WARP and WARP CORE with a
-  working **Cancel** button.
+- Unified progress bar across WARP and WARP CORE with a working
+  **Cancel** button for stopping a run in progress.
 - Per-stage percentage during Auto-Detect in the trainer, showing
   which slot is currently being processed.
 
 ### Changed
-- The blocking "Detecting Screen Types" / "Recognising Icons" popups
-  are gone — progress now shows in the status bar instead.
+- The blocking "Detecting Screen Types" / "Recognising Icons"
+  dialogs are gone — progress now shows in the status bar instead,
+  so the main window stays interactive while detection runs.
 
 ### Fixed
-- The window's **X** (close) button now closes the app immediately,
-  even when a sync or detection is still running in the background.
+- Closing the app while a sync or detection is in progress is now
+  immediate — the window no longer waits several seconds for the
+  background work to finish before shutting down.
 
 ## [1.0.1] — 2026-05-21
 
