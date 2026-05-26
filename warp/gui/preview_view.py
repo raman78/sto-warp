@@ -10,16 +10,32 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize
+from PySide6.QtCore import Qt, QSize, Signal
 from PySide6.QtGui import QColor, QFont, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
-    QHBoxLayout, QListWidget, QListWidgetItem, QScrollArea, QSplitter,
-    QWidget,
+    QComboBox, QHBoxLayout, QLabel, QListWidget, QListWidgetItem, QPushButton,
+    QScrollArea, QSplitter, QVBoxLayout, QWidget,
 )
 
 from warp.recognition.boff_keys import group_items_by_seat
-from warp.style import BG as _THEME_BG
+from warp.style import BG as _THEME_BG, primary_btn_style
 from warp.warp_importer import ImportResult, RecognisedItem
+
+
+# Screen types user can force per file. Mirrors warp_window.BUILD_TYPES with
+# the same ordering so the muscle memory matches between toolbar and Preview.
+_OVERRIDE_BUILD_TYPES = (
+    'SPACE_MIXED',
+    'GROUND_MIXED',
+    'SPACE',
+    'GROUND',
+    'BOFFS',
+    'SPACE_BOFFS',
+    'GROUND_BOFFS',
+    'SPACE_TRAITS',
+    'GROUND_TRAITS',
+    'SPEC',
+)
 
 
 def _color_for_slot(slot: str) -> QColor:
@@ -225,35 +241,85 @@ class _ImageCanvas(QWidget):
 
 
 class PreviewView(QWidget):
-    """Detection overlay tab — purely consumes ``ImportResult``."""
+    """Detection overlay tab — purely consumes ``ImportResult``.
+
+    Also surfaces a per-file Screen-Type override: when the autodetector
+    misclassifies a screenshot, the user can pick the correct type from a
+    dropdown and trigger a re-run via ``rerun_requested``. Overrides are
+    keyed by resolved absolute path so they survive temp-dir staging.
+    """
+
+    # Emitted when the user clicks "Rerun Recognition". Payload maps
+    # resolved-absolute-path → forced build_type. Consumer (WarpWindow)
+    # re-runs the same folder with these overrides applied.
+    rerun_requested = Signal(dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
         self._items_by_file: dict[str, list[RecognisedItem]] = {}
         self._bt_by_file:    dict[str, str] = {}
         self._keys: list[str] = []
+        # User-chosen screen type per file (resolved abs path → build_type).
+        # Only populated when the user changed the dropdown away from the
+        # autodetected value.
+        self._overrides: dict[str, str] = {}
+        # Re-entrancy guard: combo programmatic updates (e.g. when the user
+        # selects a new file row) must not be mistaken for user edits.
+        self._suppress_combo_signal = False
         self._build_ui()
 
     # ── UI ──────────────────────────────────────────────────────────
 
     def _build_ui(self):
-        root = QHBoxLayout(self)
+        root = QVBoxLayout(self)
         root.setContentsMargins(4, 4, 4, 4)
 
         split = QSplitter(Qt.Orientation.Horizontal, self)
 
-        self._list = QListWidget(self)
+        # Left pane — file list + Rerun button stacked vertically.
+        left = QWidget(self)
+        left_layout = QVBoxLayout(left)
+        left_layout.setContentsMargins(0, 0, 0, 0)
+        self._list = QListWidget(left)
         self._list.setMinimumWidth(220)
         self._list.itemSelectionChanged.connect(self._on_file_selected)
-        split.addWidget(self._list)
+        left_layout.addWidget(self._list, stretch=1)
+        self._rerun_btn = QPushButton('Rerun Recognition', left)
+        self._rerun_btn.setStyleSheet(primary_btn_style())
+        self._rerun_btn.setToolTip(
+            'Re-run recognition on the same folder, applying your per-file '
+            'screen-type overrides.')
+        self._rerun_btn.clicked.connect(self._on_rerun_clicked)
+        self._rerun_btn.setVisible(False)
+        left_layout.addWidget(self._rerun_btn)
+        split.addWidget(left)
 
-        self._scroll = QScrollArea(self)
+        # Right pane — Screen-type dropdown row above the canvas.
+        right = QWidget(self)
+        right_layout = QVBoxLayout(right)
+        right_layout.setContentsMargins(0, 0, 0, 0)
+        top_row = QHBoxLayout()
+        top_row.setContentsMargins(4, 0, 4, 4)
+        top_row.addWidget(QLabel('Screen type:', right))
+        self._type_combo = QComboBox(right)
+        self._type_combo.addItems(_OVERRIDE_BUILD_TYPES)
+        self._type_combo.setEnabled(False)
+        self._type_combo.currentTextChanged.connect(self._on_combo_changed)
+        top_row.addWidget(self._type_combo)
+        self._override_lbl = QLabel('', right)
+        self._override_lbl.setStyleSheet('color: #d4a017;')  # subtle amber
+        top_row.addWidget(self._override_lbl)
+        top_row.addStretch(1)
+        right_layout.addLayout(top_row)
+
+        self._scroll = QScrollArea(right)
         self._scroll.setWidgetResizable(True)
         self._canvas = _ImageCanvas(self._scroll)
         self._scroll.setWidget(self._canvas)
-        split.addWidget(self._scroll)
-        split.setSizes([240, 860])
+        right_layout.addWidget(self._scroll, stretch=1)
+        split.addWidget(right)
 
+        split.setSizes([240, 860])
         root.addWidget(split)
 
     # ── Public API ──────────────────────────────────────────────────
@@ -262,11 +328,19 @@ class PreviewView(QWidget):
         self._items_by_file = {}
         self._bt_by_file = {}
         self._keys = []
+        self._overrides = {}
         self._list.clear()
         self._canvas.clear()
+        self._type_combo.setEnabled(False)
+        self._override_lbl.setText('')
+        self._rerun_btn.setVisible(False)
 
     def set_result(self, result: ImportResult) -> None:
+        # Preserve user overrides across re-runs so the dropdown keeps
+        # showing the user's choice even after the importer respected it.
+        kept_overrides = dict(self._overrides)
         self.clear()
+        self._overrides = kept_overrides
         by_file: dict[str, list[RecognisedItem]] = {}
         for it in result.items:
             if not it.source_file:
@@ -285,28 +359,105 @@ class PreviewView(QWidget):
         # confirm the image actually loaded and see the picked screen type.
         self._keys = sorted(set(by_file) | set(self._bt_by_file))
         for src in self._keys:
-            items = by_file.get(src, [])
-            with_bbox = sum(1 for it in items
-                            if it.bbox and len(it.bbox) >= 4)
-            bt = self._bt_by_file.get(src, '')
-            bt_tag = f'  [{bt}]' if bt else ''
-            QListWidgetItem(
-                f'{Path(src).name}   ({with_bbox}/{len(items)}){bt_tag}',
-                self._list,
-            )
+            self._list.addItem(QListWidgetItem(self._list_label_for(src)))
         if self._list.count():
             self._list.setCurrentRow(0)
+        self._refresh_rerun_visibility()
 
     # ── Internals ───────────────────────────────────────────────────
+
+    def _list_label_for(self, src: str) -> str:
+        items = self._items_by_file.get(src, [])
+        with_bbox = sum(1 for it in items
+                        if it.bbox and len(it.bbox) >= 4)
+        bt = self._bt_by_file.get(src, '')
+        ov = self._overrides.get(src, '')
+        if ov and ov != bt:
+            bt_tag = f'  [{bt} → {ov}]'
+        elif bt:
+            bt_tag = f'  [{bt}]'
+        else:
+            bt_tag = ''
+        return f'{Path(src).name}   ({with_bbox}/{len(items)}){bt_tag}'
 
     def _on_file_selected(self):
         row = self._list.currentRow()
         if row < 0 or row >= len(self._keys):
             self._canvas.clear()
+            self._type_combo.setEnabled(False)
+            self._override_lbl.setText('')
             return
         src = self._keys[row]
+        detected = self._bt_by_file.get(src, '')
+        current = self._overrides.get(src, '') or detected
+        # Sync combo without re-triggering the user-edit path.
+        self._suppress_combo_signal = True
+        if current and current in _OVERRIDE_BUILD_TYPES:
+            self._type_combo.setCurrentText(current)
+        else:
+            # Detected type unknown / not in list — leave combo on first
+            # entry but still enable it so the user can pick something.
+            self._type_combo.setCurrentIndex(0)
+        self._suppress_combo_signal = False
+        self._type_combo.setEnabled(True)
+        if src in self._overrides and self._overrides[src] != detected:
+            self._override_lbl.setText(
+                f'(override — detected: {detected or "?"})')
+        else:
+            self._override_lbl.setText('')
         self._canvas.set_image(
             Path(src),
             self._items_by_file.get(src, []),
-            self._bt_by_file.get(src, ''),
+            self._overrides.get(src) or detected,
         )
+
+    def _on_combo_changed(self, value: str):
+        if self._suppress_combo_signal:
+            return
+        row = self._list.currentRow()
+        if row < 0 or row >= len(self._keys):
+            return
+        src = self._keys[row]
+        detected = self._bt_by_file.get(src, '')
+        if value == detected or not value:
+            # Reverting to the autodetected value clears the override so the
+            # next Rerun won't pin this file.
+            self._overrides.pop(src, None)
+            self._override_lbl.setText('')
+        else:
+            self._overrides[src] = value
+            self._override_lbl.setText(
+                f'(override — detected: {detected or "?"})')
+        # Refresh the row label so the user sees the override marker in
+        # the list without having to click away and back.
+        item = self._list.item(row)
+        if item is not None:
+            item.setText(self._list_label_for(src))
+        # Update the badge on the canvas to reflect the picked type.
+        self._canvas.set_image(
+            Path(src),
+            self._items_by_file.get(src, []),
+            self._overrides.get(src) or detected,
+        )
+        self._refresh_rerun_visibility()
+
+    def _refresh_rerun_visibility(self):
+        # Show Rerun only when there is at least one effective override —
+        # i.e. a file whose picked type differs from the autodetected one.
+        any_diff = any(
+            self._overrides.get(k, '') and
+            self._overrides[k] != self._bt_by_file.get(k, '')
+            for k in self._overrides
+        )
+        self._rerun_btn.setVisible(any_diff)
+
+    def _on_rerun_clicked(self):
+        # Only forward the effective overrides (skip entries that match the
+        # autodetected value — they're no-ops for the importer).
+        payload = {
+            k: v for k, v in self._overrides.items()
+            if v and v != self._bt_by_file.get(k, '')
+        }
+        if not payload:
+            return
+        self.rerun_requested.emit(payload)

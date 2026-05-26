@@ -84,10 +84,12 @@ class RecognitionWorker(QObject):
     finished = Signal(object)          # ImportResult
     failed   = Signal(str)
 
-    def __init__(self, folder: Path, build_type: str):
+    def __init__(self, folder: Path, build_type: str,
+                 overrides: dict[str, str] | None = None):
         super().__init__()
         self._folder     = folder
         self._build_type = build_type
+        self._overrides  = dict(overrides or {})
         self._cancelled  = False
 
     def cancel(self):
@@ -110,6 +112,7 @@ class RecognitionWorker(QObject):
                 importer = WarpImporter(
                     build_type=self._build_type,
                     progress_callback=self._stage_cb,
+                    per_file_overrides=self._overrides or None,
                 )
                 result = importer.process_folder(
                     self._folder,
@@ -143,6 +146,10 @@ class WarpWindow(QMainWindow):
         # Temp dir holds copies of single-file selections so we can reuse
         # the folder-oriented `process_folder` entry point cleanly.
         self._tmp_dir: tempfile.TemporaryDirectory | None = None
+        # Last folder processed — remembered so the Preview "Rerun
+        # Recognition" action can re-run against the same input with
+        # per-file overrides applied.
+        self._last_folder: Path | None = None
 
         self._setup_ui()
 
@@ -236,6 +243,7 @@ class WarpWindow(QMainWindow):
         self._tabs.addTab(self._tree, 'Results')
 
         self._preview = PreviewView(self._tabs)
+        self._preview.rerun_requested.connect(self._on_rerun_requested)
         self._tabs.addTab(self._preview, 'Preview')
 
         # Detection logs are scoped to WARP's own runs — live-tails the
@@ -272,7 +280,10 @@ class WarpWindow(QMainWindow):
             return
         _remember_dir(_SETTINGS_LAST_FILES_DIR, files[0].parent)
         # Stage selections into a temp dir so the importer's folder
-        # pipeline picks them up unchanged.
+        # pipeline picks them up unchanged. Retire any previous staged
+        # dir first — _cleanup_thread no longer touches it so a Rerun
+        # can find it alive.
+        self._release_tmp_dir()
         self._tmp_dir = tempfile.TemporaryDirectory(prefix='warp-gui-')
         staged = Path(self._tmp_dir.name)
         for f in files:
@@ -295,11 +306,15 @@ class WarpWindow(QMainWindow):
         if folder is None:
             return
         _remember_dir(_SETTINGS_LAST_FOLDER_DIR, folder)
+        # No staged tempdir for direct folder open — but if a previous
+        # single-file run left one around, retire it now.
+        self._release_tmp_dir()
         self._run_against(folder)
 
     # ── Pipeline plumbing ───────────────────────────────────────────
 
-    def _run_against(self, folder: Path):
+    def _run_against(self, folder: Path,
+                     overrides: dict[str, str] | None = None):
         if self._thread is not None:
             QMessageBox.information(self, 'Busy',
                                     'A recognition run is already in progress.')
@@ -307,20 +322,27 @@ class WarpWindow(QMainWindow):
 
         self.detection_started.emit()
         self._tree.clear()
-        self._preview.clear()
+        # Preserve Preview's per-file overrides across re-runs so the user
+        # doesn't have to re-pick them; the dropdown state is what drives
+        # the next Rerun. Only clear on a fresh folder open.
+        if overrides is None:
+            self._preview.clear()
+        else:
+            self._tabs.setCurrentWidget(self._preview)
         self._result = None
         self._ship_banner.setVisible(False)
         self._export_sets_btn.setEnabled(False)
         self._summary_lbl.setText(f'Recognising {folder}…')
         self._progress.start(determinate=True, maximum=100)
         self._set_controls_enabled(False)
+        self._last_folder = folder
 
         self._thread = QThread(self)
         # AUTO mode = empty string; importer derives per-image build_type
         # from ML+OCR. Forced mode = combo's current text.
         forced_bt = (self._build_combo.currentText()
                      if self._force_bt_check.isChecked() else '')
-        self._worker = RecognitionWorker(folder, forced_bt)
+        self._worker = RecognitionWorker(folder, forced_bt, overrides)
         self._worker.moveToThread(self._thread)
         self._thread.started.connect(self._worker.run)
         self._worker.progress.connect(self._on_progress)
@@ -396,9 +418,32 @@ class WarpWindow(QMainWindow):
             self._thread.deleteLater()
         self._thread = None
         self._worker = None
+        # Note: we do NOT clean up self._tmp_dir here. The Preview tab can
+        # request a Rerun against the same staged folder; the tempdir is
+        # retired the next time the user opens a new screenshot/folder
+        # (see _release_tmp_dir).
+
+    def _release_tmp_dir(self):
         if self._tmp_dir is not None:
-            self._tmp_dir.cleanup()
+            try:
+                self._tmp_dir.cleanup()
+            except OSError:
+                pass
             self._tmp_dir = None
+
+    def _on_rerun_requested(self, overrides: dict):
+        # Preview asked for a re-run with per-file build_type overrides.
+        # We point the importer at the same folder we used last time. For
+        # single-file selections that folder is the staged tempdir, which
+        # is still alive because we delay its cleanup until the next open
+        # action (see _on_open_files).
+        if not self._last_folder or not self._last_folder.is_dir():
+            QMessageBox.warning(
+                self, 'Cannot rerun',
+                'The original screenshot folder is no longer available. '
+                'Re-open the screenshots and try again.')
+            return
+        self._run_against(self._last_folder, overrides=overrides)
 
     def _on_force_bt_toggled(self, checked: bool):
         self._build_combo.setEnabled(checked)

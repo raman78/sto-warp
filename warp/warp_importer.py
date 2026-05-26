@@ -108,10 +108,38 @@ PANEL_GROUP_EXPECTED: dict[str, int] = {
 WEIGHT_GEOM    = 0.3
 WEIGHT_SIBLING = 0.3
 WEIGHT_RECOG   = 0.4
+# Additive bonus applied during merge when the source's build_type is
+# dedicated to the slot's panel group (e.g. BOFFS source providing a Boff
+# slot). Tilts ties in favour of focused captures over MIXED screens which
+# can hallucinate seats / traits in empty regions.
+WEIGHT_TYPE_DEDICATED = 0.1
+
+# Maps a panel group → build_types that are "dedicated" to it. Sources
+# whose build_type is in the set receive WEIGHT_TYPE_DEDICATED added to
+# their merge score. MIXED build types are deliberately absent because
+# they are the looser, hallucination-prone variant we want to lose ties.
+_DEDICATED_BUILD_TYPES: dict[str, frozenset[str]] = {
+    'boffs':         frozenset({'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS'}),
+    'space_traits':  frozenset({'TRAITS', 'SPACE_TRAITS'}),
+    'ground_traits': frozenset({'TRAITS', 'GROUND_TRAITS'}),
+    'space_eq':      frozenset({'SPACE'}),
+    'ground_eq':     frozenset({'GROUND'}),
+    'spec':          frozenset({'SPEC'}),
+}
 
 
 def _panel_group(slot_name: str) -> str:
     return PANEL_GROUPS.get(slot_name, '')
+
+
+def _is_dedicated_source(slot: str, build_type: str) -> bool:
+    """True when ``build_type`` is the focused capture for ``slot``'s panel
+    group. Used as a merge tiebreaker so a dedicated BOFFS screenshot
+    beats a SPACE_MIXED that incidentally also matched the same seat."""
+    pg = _panel_group(slot)
+    if not pg:
+        return False
+    return build_type in _DEDICATED_BUILD_TYPES.get(pg, frozenset())
 
 
 def _geom_score(items: list) -> float:
@@ -1095,6 +1123,7 @@ class WarpImporter:
         build_type: str = 'SPACE',
         progress_callback: Callable[[int, str], None] | None = None,
         from_trainer: bool = False,
+        per_file_overrides: dict[str, str] | None = None,
     ):
         # sto-warp is standalone: cargo data comes from `warp.data.cargo`.
         # `sets_app` is retained as an optional positional for callers that
@@ -1107,6 +1136,17 @@ class WarpImporter:
         self._build_type       = build_type
         self._from_trainer     = from_trainer
         self._progress_callback = progress_callback
+        # Per-file build_type overrides keyed by resolved absolute path —
+        # used by the Preview tab's "Rerun Recognition" action to re-classify
+        # specific screenshots without forcing the same type on the whole
+        # folder. Treated like trainer-mode: skips the AUTO ML+OCR ladder
+        # for matched files.
+        self._overrides: dict[str, str] = {}
+        for _p, _bt in (per_file_overrides or {}).items():
+            try:
+                self._overrides[str(Path(_p).resolve())] = _bt
+            except OSError:
+                self._overrides[_p] = _bt
         self._interrupt_check = None
         self._layout  = None
         self._matcher = None
@@ -1207,8 +1247,13 @@ class WarpImporter:
         # Per-source panel coverage: source → panel_group → set of slot names
         # that received >=1 item. Used for the sibling score.
         coverage: dict[str, dict[str, set]] = {}
+        # Per-source build_type so the merge can prefer dedicated captures
+        # (BOFFS / TRAITS / SPACE / GROUND) over MIXED variants when both
+        # contribute to the same (slot, seat).
+        src_bt: dict[str, str] = {}
         for src, fr in per_file:
             cov = coverage.setdefault(src, {})
+            src_bt[src] = getattr(fr, 'build_type', '') or ''
             for item in fr.items:
                 seat = getattr(item, 'seat_key', '') or ''
                 blocks.setdefault((src, item.slot, seat), []).append(item)
@@ -1238,12 +1283,17 @@ class WarpImporter:
                 else:
                     s = 1.0
                 r = _recog_score(items)
+                t_bonus = (WEIGHT_TYPE_DEDICATED
+                           if _is_dedicated_source(slot, src_bt.get(src, ''))
+                           else 0.0)
                 total = (WEIGHT_GEOM * g
                          + WEIGHT_SIBLING * s
-                         + WEIGHT_RECOG * r)
-                scored.append((total, g, s, r, src, items))
+                         + WEIGHT_RECOG * r
+                         + t_bonus)
+                scored.append((total, g, s, r, t_bonus, src, items))
             scored.sort(key=lambda t: t[0], reverse=True)
-            win_total, win_g, win_s, win_r, win_src, win_items = scored[0]
+            (win_total, win_g, win_s, win_r, win_t,
+             win_src, win_items) = scored[0]
             try:
                 losers = ', '.join(
                     f'{src}={tot:.2f}' for tot, *_ , src, _ in scored[1:])
@@ -1251,7 +1301,8 @@ class WarpImporter:
                     f'WarpImporter: merge {slot!r}'
                     f"{(' / ' + seat) if seat else ''}"
                     f' winner={win_src} score={win_total:.2f} '
-                    f'(geom={win_g:.2f} sib={win_s:.2f} recog={win_r:.2f}) '
+                    f'(geom={win_g:.2f} sib={win_s:.2f} '
+                    f'recog={win_r:.2f} type={win_t:+.2f}) '
                     f'losers={losers or "—"}')
             except Exception:
                 pass
@@ -1277,6 +1328,18 @@ class WarpImporter:
         # OCR build_type upgrades — but ship_name/type/tier from OCR still feed
         # ShipDB so profile matches the actual ship (carrier vs standard, etc.).
         _is_trainer_call = self._from_trainer
+        # Per-file user override (set via Preview tab dropdown + Rerun). When
+        # the current source's resolved path is in the override map, we
+        # treat the chosen build_type as authoritative — same effect as
+        # trainer-mode: skip the AUTO ladder so OCR/ML can't second-guess
+        # the user's explicit choice.
+        _user_override_bt = ''
+        if self._overrides:
+            try:
+                _user_override_bt = self._overrides.get(
+                    str(Path(source).resolve()), '')
+            except OSError:
+                _user_override_bt = self._overrides.get(source, '')
         _emit_stage(0.02, 'OCR…')
         _text = self._get_text()
         text_info = _text.extract_ship_info(img)
@@ -1311,7 +1374,11 @@ class WarpImporter:
         # SPACE_EQ screen no longer drags trait/rep slot processing onto
         # itself (which used to pollute cross-image merges with false
         # `__empty__` hits at conf=0.99+).
-        if self._build_type == '':
+        if _user_override_bt:
+            _caller_bt = _user_override_bt
+            _slog.info(f'WarpImporter: user override → build_type={_caller_bt!r} '
+                       f'(ml_stype={_ml_stype!r}, ml={_ml_bt!r}, ocr={_ocr_bt!r})')
+        elif self._build_type == '':
             # ML's generic 'TRAITS' class can't distinguish space vs ground
             # (7-class model: BOFFS, GROUND_EQ, GROUND_MIXED, SPACE_EQ,
             # SPACE_MIXED, SPECIALIZATIONS, TRAITS). When OCR found an
@@ -1329,9 +1396,10 @@ class WarpImporter:
         else:
             _caller_bt = self._build_type
 
-        if _is_trainer_call:
-            # WARP CORE: user explicitly selected screen type in dropdown — that
-            # is a stronger signal than OCR build_type. Skip the OCR upgrade step.
+        if _is_trainer_call or _user_override_bt:
+            # WARP CORE (trainer combo) or WARP Preview-tab user override:
+            # both are explicit human picks — stronger signal than OCR or
+            # ML. Skip the OCR/ML upgrade ladder so they can't override us.
             build_type = _caller_bt
         elif _caller_bt in ('SPACE', 'GROUND', 'TRAITS', 'SPACE_TRAITS',
                             'GROUND_TRAITS', 'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
@@ -1345,8 +1413,21 @@ class WarpImporter:
                 build_type = 'SPACE_MIXED'
                 _slog.info('WarpImporter: upgraded SPACE → SPACE_MIXED (OCR detected richer screen)')
             elif build_type == 'SPACE' and _ocr_bt in ('BOFFS', 'SPACE_BOFFS') and text_info.get('scan_scope') == 'full':
-                build_type = _ocr_bt  # SPACE_BOFFS preferred over generic BOFFS
-                _slog.info(f'WarpImporter: upgraded SPACE → {build_type} (dedicated BOFFS screen, full scan only)')
+                # OCR thinks BOFFS but ML is confident SPACE_EQ — almost
+                # always a tooltip / popup overlay floating over the
+                # equipment grid (e.g. hovering on a slot surfaces BOFF
+                # ability text and "Active Space Duty" labels). Staying on
+                # SPACE avoids the BOFF layout detector hallucinating
+                # seats in empty equipment regions. Genuine broadside
+                # Stations screens with a real BOFF panel are rare and
+                # the user can force SPACE_MIXED via the Preview override.
+                if _ml_stype == 'SPACE_EQ' and _ml_conf >= 0.80:
+                    _slog.info(f'WarpImporter: kept SPACE (OCR={_ocr_bt} '
+                               f'but ML SPACE_EQ conf={_ml_conf:.2f} — '
+                               f'likely tooltip overlay, not BOFFS panel)')
+                else:
+                    build_type = _ocr_bt  # SPACE_BOFFS preferred over generic BOFFS
+                    _slog.info(f'WarpImporter: upgraded SPACE → {build_type} (dedicated BOFFS screen, full scan only)')
             elif build_type == 'SPACE' and _ocr_bt == 'GROUND_BOFFS':
                 build_type = 'GROUND_BOFFS'
                 _slog.info('WarpImporter: upgraded SPACE → GROUND_BOFFS (OCR detected ground boff screen)')
