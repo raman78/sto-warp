@@ -13,11 +13,9 @@ details live in the git history.
 ### Changed
 - Startup synchronisation of community-shared icon crops is now
   much faster. The mirror is checked against the upstream revision
-  first, and only crops that are actually missing locally get
-  downloaded — instead of re-walking all ~7500 files every cycle.
-  Typical startup with an unchanged upstream drops from over two
-  minutes to about one second; when upstream has new crops, only
-  the deltas are pulled.
+  first, and only the crops that are actually missing locally get
+  downloaded — instead of re-walking the whole file list every
+  cycle.
 
 ### Fixed
 - Crops that were removed from the shared dataset are now also
