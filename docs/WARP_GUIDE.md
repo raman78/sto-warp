@@ -326,6 +326,7 @@ Displays the current screenshot with coloured bounding boxes drawn over each det
 | Red          | `pending`         | Detected but not yet reviewed — needs your attention |
 | Green        | `confirmed (user)`| Accepted by you (Enter / autocomplete pick / Accept button) |
 | Yellow/gold  | `confirmed (auto)`| Auto-accepted by the program because confidence ≥ Auto threshold (default 0.75). Persists across restarts so you can tell at a glance what *you* confirmed vs what the program did. Editing the name re-flags it as user-confirmed (green). |
+| Orange       | `community conflict` | You previously confirmed this slot as one item, but the current community model now proposes a different name. The bbox waits for you to re-verify instead of being silently overwritten. See [Community conflicts](#community-conflicts) in section 6. |
 | Cyan         | `text slot`       | Ship Name / Ship Type / Ship Tier — read by OCR, no icon matching, no confidence score |
 | Grey (empty name) | `pending, no match` | The grid found this slot but the icon matcher had low confidence (< 0.35) or the match name had the wrong type for the slot. The bbox is kept so you can correct it manually — type the right name and Accept. |
 | Gold crosshair | (drawing)       | While Alt+LMB drag is in progress — the bbox you're currently drawing |
@@ -339,11 +340,11 @@ Diagram:
    │░░░ (red)  ░░░│   │██ (green)  ██│   │▓▓ (yellow) ▓▓│
    └──────────────┘   └──────────────┘   └──────────────┘
 
-   ┌──────────────┐   ┌──────────────┐
-   │░░░░░░░░░░░░░░│   │┄┄┄┄┄┄┄┄┄┄┄┄┄┄│
-   │░ text slot ░│   │  no match    │
-   │░░░ (cyan) ░░│   │  (grey)      │
-   └──────────────┘   └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘
+   ┌──────────────┐   ┌──────────────┐   ┌──────────────┐
+   │░░░░░░░░░░░░░░│   │┄┄┄┄┄┄┄┄┄┄┄┄┄┄│   │▒▒▒▒▒▒▒▒▒▒▒▒▒▒│
+   │░ text slot ░│   │  no match    │   │▒▒ conflict ▒▒│
+   │░░░ (cyan) ░░│   │  (grey)      │   │▒▒ (orange) ▒▒│
+   └──────────────┘   └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘   └──────────────┘
 ```
 
 #### Ship Name / Ship Type / Ship Tier bboxes
@@ -555,6 +556,40 @@ Choosing an item from the autocomplete dropdown confirms it immediately — no E
 
 If you confirm an item into a slot that already has a confirmed item at the same position (>70% overlap), WARP CORE shows a warning. This prevents accidentally confirming the same physical slot twice.
 
+### Community conflicts
+
+The community model occasionally disagrees with an item you have
+already confirmed locally — usually because a hard-to-tell pair of
+icons looks almost identical to the embedder, or because the community
+vote count for that crop tilts the other way.
+
+When this happens, the affected slot is **not** silently overwritten.
+It appears in the review panel as:
+
+```
+⚠ Tactical Consoles  ->  [CONFLICT] disk: Covert Warhead Module | community: Crystalline Absorption Matrix  [100%]
+```
+
+with an **orange** bounding box on the canvas and an orange row label.
+Auto-accept skips conflicted rows even at 100 % confidence, so the
+program never decides this one on its own.
+
+**What to do:**
+
+1. Open the screenshot in WARP CORE and look at the icon.
+2. If the community proposal is correct, pick that name and **Accept**
+   — the slot turns green and the community gets one extra vote in
+   that direction.
+3. If your previous confirmation was correct, leave it as is and
+   **Accept** — the slot turns green and WARP CORE remembers that you
+   already rejected this specific community proposal for this bbox.
+
+After step 3, the next Auto-Detect will silently keep your name and
+*not* flag the conflict again, as long as the community keeps
+proposing the same (rejected) name. If the community later changes
+its mind to a *different* name, a fresh conflict appears so you can
+re-verify against the new proposal.
+
 ---
 
 ## 7. Detection logs / System logs tabs
@@ -663,6 +698,7 @@ and never uploaded — ship names are treated as personal data.
 | Red | Pending — awaiting your review |
 | Green | User-confirmed (Enter / autocomplete pick / Accept) |
 | Yellow / gold | Auto-confirmed by program (conf ≥ Auto threshold). Persists across restarts. |
+| Orange | Community conflict — community model disagrees with your earlier confirmation. Re-verify and Accept. |
 | Cyan | Text slot (Ship Name / Type / Tier) — OCR, no icon matching |
 | Grey (empty name) | Detected bbox without a usable match — type the name and Accept |
 | Gold crosshair | Currently being drawn (Alt + LMB drag in progress) |
