@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.8] — 2026-05-28
+
+### Added
+- Icons that were previously confirmed by the user but disagree
+  with the current community recognition are now flagged as a
+  "community conflict" (orange) in the trainer's review panel,
+  instead of being silently overwritten on the next auto-detect.
+  Re-confirming the icon records the rejection so the same
+  community proposal stops nagging on later restarts — unless the
+  community changes its pick to something new.
+
+### Fixed
+- Active equipment icons can no longer be auto-confirmed as empty
+  or inactive slots based on earlier mistakes that had been saved
+  as training examples. This stops the cycle where one wrong
+  "empty" tag would re-poison itself across later sessions.
+
 ## [1.0.7] — 2026-05-26
 
 ### Changed
