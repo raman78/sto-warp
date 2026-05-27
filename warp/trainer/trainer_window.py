@@ -590,7 +590,8 @@ class RecognitionWorker(QThread):
             items.append({'name': ri.name, 'slot': ri.slot, 'conf': ri.confidence, 'bbox': ri.bbox,
                           'state': 'pending', 'thumb': ri.thumbnail, 'crop_bgr': crop_bgr,
                           'orig_name': ri.name, 'ship_name': result.ship_name,
-                          'cross_check_failed': cross_check})
+                          'cross_check_failed': cross_check,
+                          'src': getattr(ri, 'src', '')})
         # Summary table: per-stage scores + Δ vs previous run for this image.
         try:
             _log_match_summary(self._path.name, getattr(importer, 'match_log', []))
@@ -1657,6 +1658,7 @@ class WarpCoreWindow(QMainWindow):
                     'name': ann.name, 'slot': ann.slot, 'bbox': ann.bbox,
                     'state': 'confirmed',
                     'auto_confirmed': ann.auto_confirmed,
+                    'community_rejected': ann.community_rejected,
                     'conf': ann.ml_conf,          # real ML confidence, 0.0 if unknown
                     'orig_name': ann.ml_name or ann.name,  # what ML originally saw
                     'thumb': None, 'crop_bgr': None, 'ship_name': '', 'ann_id': ann.ann_id,
@@ -1680,16 +1682,50 @@ class WarpCoreWindow(QMainWindow):
                     # shadow a freshly-detected T6-X2 because ann_id is
                     # hash(bbox+slot) and ignores name.
                     if fresh_name and saved_name and fresh_name != saved_name:
-                        log.info(
-                            f'populate: fresh recognition disagrees with '
-                            f'confirmed annotation — slot={ri.get("slot")!r} '
-                            f'bbox={bbox} disk={saved_name!r} fresh={fresh_name!r} '
-                            f'→ using fresh, state=pending'
-                        )
-                        ri = dict(ri)
-                        ri['state'] = 'pending'
-                        ri['auto_confirmed'] = False
-                        ri['ann_id'] = confirmed.get('ann_id', aid)
+                        was_user_confirmed = not bool(confirmed.get('auto_confirmed', False))
+                        already_rejected = (confirmed.get('community_rejected', '') or '').strip()
+                        if was_user_confirmed and already_rejected and already_rejected == fresh_name:
+                            # User has previously resolved a conflict against
+                            # exactly this community proposal — silently keep
+                            # the user's pick. The community DB hasn't changed
+                            # its mind, so there's nothing new to verify.
+                            log.info(
+                                f'populate: community proposes {fresh_name!r} again — '
+                                f'previously rejected by user for slot={ri.get("slot")!r} '
+                                f'bbox={bbox}; keeping disk={saved_name!r} silently'
+                            )
+                            ri = dict(confirmed)
+                        elif was_user_confirmed:
+                            # User confirmed this bbox manually, but the
+                            # current detection (knowledge / embedder /
+                            # session) disagrees. Don't silently overwrite
+                            # the user's vote and don't silently keep it
+                            # either — surface as 'community_conflict' so
+                            # the user re-verifies. On Accept this rejoins
+                            # the normal save path (which contributes a
+                            # community vote), strengthening signal.
+                            log.info(
+                                f'populate: COMMUNITY CONFLICT — '
+                                f'slot={ri.get("slot")!r} bbox={bbox} '
+                                f'disk(user)={saved_name!r} '
+                                f'community={fresh_name!r} → state=community_conflict'
+                            )
+                            ri = dict(ri)
+                            ri['state'] = 'community_conflict'
+                            ri['auto_confirmed'] = False
+                            ri['disk_name'] = saved_name
+                            ri['ann_id'] = confirmed.get('ann_id', aid)
+                        else:
+                            log.info(
+                                f'populate: fresh recognition disagrees with '
+                                f'auto-confirmed annotation — slot={ri.get("slot")!r} '
+                                f'bbox={bbox} disk={saved_name!r} fresh={fresh_name!r} '
+                                f'→ using fresh, state=pending'
+                            )
+                            ri = dict(ri)
+                            ri['state'] = 'pending'
+                            ri['auto_confirmed'] = False
+                            ri['ann_id'] = confirmed.get('ann_id', aid)
                     else:
                         ri = dict(confirmed)
                 seen_ids.add(aid)
@@ -1704,7 +1740,8 @@ class WarpCoreWindow(QMainWindow):
         self._review_summary.setText('')
         self._set_review_buttons_enabled(False)
         for ri in self._recognition_items:
-            self._add_review_row(ri['name'], ri['slot'], ri.get('conf', 0.0), confirmed=(ri.get('state') == 'confirmed'), cross_check_failed=ri.get('cross_check_failed', False), auto_confirmed=ri.get('auto_confirmed', False))
+            _conflict = ri.get('disk_name', '') if ri.get('state') == 'community_conflict' else ''
+            self._add_review_row(ri['name'], ri['slot'], ri.get('conf', 0.0), confirmed=(ri.get('state') == 'confirmed'), cross_check_failed=ri.get('cross_check_failed', False), auto_confirmed=ri.get('auto_confirmed', False), conflict_disk_name=_conflict)
         self._ann_widget.set_review_items(self._recognition_items)
         self._ann_widget.set_selected_row(-1)
         n = len(self._recognition_items)
@@ -1722,10 +1759,14 @@ class WarpCoreWindow(QMainWindow):
         # before OCR finished), re-run OCR now so the name is filled in.
         self._ocr_empty_non_icon_items()
 
-    def _add_review_row(self, name: str, slot: str, conf: float, confirmed: bool = False, cross_check_failed: bool = False, auto_confirmed: bool = False):
+    def _add_review_row(self, name: str, slot: str, conf: float, confirmed: bool = False, cross_check_failed: bool = False, auto_confirmed: bool = False, conflict_disk_name: str = ''):
         is_virtual = name in VIRTUAL_ITEM_NAMES
         slot_disp = _pretty_slot(slot)
-        if confirmed:
+        is_conflict = bool(conflict_disk_name)
+        if is_conflict:
+            label = (f'⚠ {slot_disp}  ->  [CONFLICT] disk: {conflict_disk_name or "—"} '
+                     f'| community: {name or "—"}  [{conf:.0%}]')
+        elif confirmed:
             tag = 'auto' if auto_confirmed else 'confirmed'
             if conf > 0.0:
                 label = f'{slot_disp}  ->  {name or "—"}  [{tag} {conf:.0%}]'
@@ -1739,6 +1780,16 @@ class WarpCoreWindow(QMainWindow):
         else:
             label = f'{slot_disp}  ->  {name or "— unmatched —"}  [{conf:.0%}]'
         item = QListWidgetItem(label)
+        if is_conflict:
+            tooltip = (f'Slot: {slot_disp}\n'
+                       f'Disk (your previous confirmation): {conflict_disk_name}\n'
+                       f'Community / current detector: {name or "—"}\n\n'
+                       f'These disagree. Re-verify the icon and Accept the '
+                       f'correct name to cast another community vote.')
+            item.setToolTip(tooltip)
+            item.setForeground(QColor('#ff9a3c'))  # orange — between green and yellow
+            self._review_list.addItem(item)
+            return
         if confirmed:
             status = 'auto-confirmed by detector' if auto_confirmed else 'confirmed by user'
             if conf > 0.0:  # real confidence saved
@@ -2102,7 +2153,7 @@ class WarpCoreWindow(QMainWindow):
 
     def _advance_to_next_unconfirmed(self, current_row: int):
         for i in range(current_row + 1, len(self._recognition_items)):
-            if self._recognition_items[i]['state'] == 'pending':
+            if self._recognition_items[i]['state'] in ('pending', 'community_conflict'):
                 self._review_list.setCurrentRow(i)
                 return
 
@@ -2470,7 +2521,8 @@ class WarpCoreWindow(QMainWindow):
                 self._ocr_workers.append(worker)
                 return
 
-            ri.update({'name': name, 'conf': conf, 'thumb': thumb, 'crop_bgr': crop, 'cross_check_failed': _cross_check})
+            ri.update({'name': name, 'conf': conf, 'thumb': thumb, 'crop_bgr': crop,
+                       'cross_check_failed': _cross_check, 'src': src})
             self._name_edit.setText(name)
             litem = self._review_list.item(row)
             if litem:
@@ -2921,6 +2973,13 @@ class WarpCoreWindow(QMainWindow):
         accepted = 0
         path = self._screenshots[self._current_idx] if self._current_idx >= 0 else None
         for ri in self._recognition_items:
+            if ri.get('state') == 'community_conflict':
+                _sl.info(
+                    f"auto-accept: SKIP community_conflict slot={ri.get('slot')!r} "
+                    f"disk={ri.get('disk_name')!r} community={ri.get('name')!r} "
+                    f"— requires manual re-verification"
+                )
+                continue
             if ri.get('state') != 'pending': continue
             slot = ri.get('slot', '')
             conf = ri.get('conf', 0.0)
@@ -2930,6 +2989,18 @@ class WarpCoreWindow(QMainWindow):
             # to auto-confirm (OCR found the anchor). Other NON_ICON_SLOTS need a name.
             if not slot: continue
             if slot != 'Ship Name' and not name: continue
+            # Poison guard: never auto-accept a virtual label (__empty__/
+            # __inactive__) that came from session. Session-virtual at high
+            # conf is the self-poisoning vector — a real virtual gets
+            # written, becomes a session example, and self-matches forever.
+            # User must confirm virtuals manually.
+            if name in VIRTUAL_ITEM_NAMES and ri.get('src') == 'session':
+                _sl.info(
+                    f"auto-accept: SKIP poison vector slot={slot!r} "
+                    f"name={name!r} conf={conf:.2f} src='session' — "
+                    f"virtual labels from session require manual confirmation"
+                )
+                continue
             ri['state'] = 'confirmed'
             ri['auto_confirmed'] = True
             if ri.get('bbox') and path:
@@ -3038,10 +3109,28 @@ class WarpCoreWindow(QMainWindow):
                             return
                         break
             prev_name = ri.get('name', '')
+            was_conflict = ri.get('state') == 'community_conflict'
+            # Community proposal to remember as rejected: only when user is
+            # resolving a conflict AND picks a name different from what
+            # community proposed (prev_name is the community-pushed value at
+            # the moment the conflict surfaced). If they pick the community
+            # value after all, the conflict resolves naturally — nothing to
+            # mark as rejected.
+            community_rejected = ''
+            if was_conflict:
+                log.info(
+                    f'accept: resolving community conflict slot={slot!r} '
+                    f'bbox={ri.get("bbox")} disk={ri.get("disk_name")!r} '
+                    f'community={prev_name!r} → user picked {name!r}'
+                )
+                ri.pop('disk_name', None)
+                if prev_name and prev_name != name:
+                    community_rejected = prev_name
             ri['name'] = name
             ri['slot'] = slot
             ri['state'] = 'confirmed'
             ri['auto_confirmed'] = False  # user override → green, not yellow
+            ri['community_rejected'] = community_rejected
             if ri.get('bbox') and self._current_idx >= 0:
                 path = self._screenshots[self._current_idx]
                 log.debug(f'accept: row={row} slot={slot!r} name={name!r} bbox={ri["bbox"]}')
@@ -3051,6 +3140,7 @@ class WarpCoreWindow(QMainWindow):
                     ml_conf=ri.get('conf', 0.0),
                     ml_name=ri.get('ocr_raw', '') or ri.get('orig_name', ''),
                     auto_confirmed=False,
+                    community_rejected=community_rejected,
                 )
                 ri['ann_id'] = saved.ann_id  # track for future edits on this bbox
                 self._ann_widget.refresh_annotations(path)
@@ -3503,14 +3593,28 @@ class WarpCoreWindow(QMainWindow):
             return
         if self._completer_model.rowCount() == 0:
             self._populate_name_completer(slot)
-        if self._completer_model.rowCount():
-            self._completer.complete()
+        if not self._completer_model.rowCount():
+            return
+        # PopupCompletion + MatchContains can silently skip showing the popup
+        # when the field is empty (e.g. right after selecting an unmatched
+        # item). Switch to Unfiltered for the empty case so the full slot
+        # list always appears on click; _on_name_edited flips back to
+        # PopupCompletion as soon as the user starts typing.
+        if self._name_edit.text():
+            self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
+            self._completer.setCompletionPrefix(self._name_edit.text())
+        else:
+            self._completer.setCompletionMode(QCompleter.CompletionMode.UnfilteredPopupCompletion)
+        self._completer.complete()
 
     def _on_name_edited(self, text: str):
         slot = self._slot_combo.currentText()
         if slot in NON_ICON_SLOTS:
             self._completer_model.clear()
             return
+        # User started typing — restore filtered popup mode (Unfiltered was
+        # set in _show_name_dropdown for empty-field clicks).
+        self._completer.setCompletionMode(QCompleter.CompletionMode.PopupCompletion)
         query = text.strip().lower()
         all_names = self._build_search_candidates(slot)
         if not query:

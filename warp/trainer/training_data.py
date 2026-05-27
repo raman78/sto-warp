@@ -80,6 +80,13 @@ class Annotation:
     ml_name:  str  = ""       # what ML originally recognised (may differ from confirmed name)
     crop_name: str = ""       # relative path of saved crop PNG (set by _export_crop)
     auto_confirmed: bool = False  # True if confirmed by auto-accept threshold (yellow), False if user-confirmed (green)
+    # Community name the user rejected when resolving a community_conflict on
+    # this annotation. Persists across restarts so the same community proposal
+    # doesn't keep nagging the user — until the community DB flips to a
+    # different name (or to the user's pick, in which case the field becomes
+    # irrelevant because there's no conflict). Empty = no conflict ever
+    # resolved here.
+    community_rejected: str = ""
 
     def __post_init__(self):
         if not self.ann_id:
@@ -158,6 +165,7 @@ class TrainingDataManager:
         ml_conf: float = 0.0,
         ml_name: str = "",
         auto_confirmed: bool = False,
+        community_rejected: str = "",
     ) -> Annotation:
         """Add or update annotation, treating the same bbox as the same annotation.
 
@@ -171,7 +179,8 @@ class TrainingDataManager:
         """
         ann = Annotation(bbox=bbox, slot=slot, name=name, state=state,
                          ml_conf=ml_conf, ml_name=ml_name,
-                         auto_confirmed=auto_confirmed)
+                         auto_confirmed=auto_confirmed,
+                         community_rejected=community_rejected)
         key = image_path.name
         if key not in self._annotations:
             self._annotations[key] = []
@@ -774,4 +783,5 @@ class TrainingDataManager:
             ml_conf=float(d.get("ml_conf", 0.0)),
             ml_name=d.get("ml_name", ""),
             auto_confirmed=bool(d.get("auto_confirmed", False)),
+            community_rejected=d.get("community_rejected", ""),
         )

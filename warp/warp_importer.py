@@ -994,6 +994,11 @@ class RecognisedItem:
     # Consumers that need seat-level info (warp_dialog cluster→seat matching)
     # should prefer `seat_key` when non-empty.
     seat_key:    str   = ''
+    # Recognition source — one of '', 'embed', 'soft', 'session',
+    # 'template', 'knowledge', 'none'. Surfaced so the trainer can
+    # apply src-aware policy (e.g. block auto-accept of virtual labels
+    # that came from session — the self-poisoning vector).
+    src:         str   = ''
 
 
 @dataclass
@@ -1964,6 +1969,7 @@ class WarpImporter:
                     thumbnail   = thumb,
                     source_file = source,
                     bbox        = bbox,
+                    src         = getattr(matcher, '_last_match_src', '') or '',
                 )
                 result.items.append(_new_item)
                 # Capture U-seat items for post-pass refinement (skip virtuals).

@@ -291,6 +291,9 @@ class AnnotationWidget(QWidget):
     # Auto-confirmed (computer-confirmed via auto-accept threshold) — yellow
     # so the user can distinguish them at a glance from green user-confirmed.
     _AUTO_CONFIRMED_COLOR = QColor(255, 200, 0, 220)
+    # Community conflict — orange. User confirmed locally, but current
+    # detector disagrees; needs re-verification before becoming confirmed again.
+    _CONFLICT_COLOR = QColor(255, 154,  60, 220)
     # Text/fixed-value slots (Ship Name/Type/Tier) use cyan — visually distinct
     # from icon slots; signals "bbox saved for layout learning, no ML crop"
     _TEXT_SLOT_COLOR = QColor(0, 200, 220, 220)
@@ -304,6 +307,8 @@ class AnnotationWidget(QWidget):
             is_text_slot = False
         if is_text_slot:
             base_color = self._TEXT_SLOT_COLOR
+        elif state == 'community_conflict':
+            base_color = self._CONFLICT_COLOR
         elif state == 'confirmed' and auto_confirmed:
             base_color = self._AUTO_CONFIRMED_COLOR
         else:

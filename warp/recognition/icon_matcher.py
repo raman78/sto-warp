@@ -47,6 +47,21 @@ ML_PRIMARY_THRESHOLD= 0.50   # ML conf >= this → ML is the source of truth
 VIRTUAL_OVERRIDE_CONF = 0.40 # when ML returns a real icon with conf >= this,
                              # suppress virtual (__empty__/__inactive__)
                              # session/template candidates
+# Poison-guard for virtual labels (__empty__/__inactive__): a session crop
+# that matches a query pixel-perfectly almost certainly IS the same crop
+# (self-match against a mislabeled training entry). When the embedder
+# disagrees by returning any real icon at conf >= POISON_GUARD_ML_MIN, treat
+# the session-virtual win as poison and suppress it. Numbers calibrated on
+# the tactical-console / Kentari-launcher cases (sess=1.000, embed=0.33).
+SESSION_PIXEL_PERFECT       = 0.95
+POISON_GUARD_ML_MIN         = 0.15
+# Visual sanity for virtual-labeled session crops: a real __empty__ /
+# __inactive__ is uniformly dim, so a crop that is both bright AND colour-
+# rich cannot be a real virtual. Thresholds match warp.tools.scrub_training_data
+# (real-virtual p90 = 2.7% bright / 6.8% rich → 0.07 leaves wide margin).
+VIRTUAL_SEED_BRIGHT_RATIO   = 0.07
+VIRTUAL_SEED_RICH_RATIO     = 0.07
+VIRTUAL_LABELS              = frozenset({'__empty__', '__inactive__'})
 ML_TRIGGER_THRESHOLD= 0.50   # if combined conf below this, try ML stage (legacy)
 FUSION_THRESHOLD    = 0.75   # P8: run ML and fuse scores when template < this (legacy)
 HIST_BINS           = [18, 16] # H×S bins for _hist_hsv — must match everywhere
@@ -59,6 +74,24 @@ HF_LABELS_FILE      = 'label_map.json'
 HF_UNAVAILABLE_FILE = 'model_unavailable.flag'
 # How many hours to wait before retrying after a failed check
 HF_RETRY_HOURS      = 24
+
+
+def _virtual_crop_looks_real(crop_bgr) -> bool:
+    """Visual sanity check for a virtual-labeled crop (__empty__/__inactive__).
+    Returns True when the crop is too bright AND too colour-rich to be a real
+    empty / inactive slot — i.e. it is almost certainly mislabeled poison.
+    Mirrors warp.tools.scrub_training_data heuristic so the seed-time filter
+    and the offline scrub agree."""
+    try:
+        hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
+        s = hsv[:, :, 1]
+        v = hsv[:, :, 2]
+        bright = float((v > 150).mean())
+        rich   = float(((s > 100) & (v > 100)).mean())
+        return (bright > VIRTUAL_SEED_BRIGHT_RATIO
+                and rich > VIRTUAL_SEED_RICH_RATIO)
+    except Exception:
+        return False
 
 
 class SETSIconMatcher:
@@ -268,10 +301,56 @@ class SETSIconMatcher:
         # histogram bias of dim cells. ML is still NOT mandatory to win;
         # template/session with a real icon name can outscore it.
         ml_real = bool(ml_name) and not ml_name.startswith('__')
-        suppress_virtual = ml_real and ml_conf >= VIRTUAL_OVERRIDE_CONF
 
         def _virtual(n: str) -> bool:
             return bool(n) and n.startswith('__')
+
+        # Query-side visual sanity: is the input crop itself bright + colour-
+        # rich? Real __empty__/__inactive__ slots in STO are uniformly dim.
+        # If the QUERY looks like a real icon, no virtual label can be
+        # correct — regardless of session/template scores. Same heuristic
+        # and thresholds as the seed-time filter / scrub tool.
+        q_hsv  = cv2.cvtColor(crop64, cv2.COLOR_BGR2HSV)
+        q_s    = q_hsv[:, :, 1]
+        q_v    = q_hsv[:, :, 2]
+        q_bright = float((q_v > 150).mean())
+        q_rich   = float(((q_s > 100) & (q_v > 100)).mean())
+        query_looks_real = (q_bright > VIRTUAL_SEED_BRIGHT_RATIO
+                            and q_rich > VIRTUAL_SEED_RICH_RATIO)
+
+        # Anti-virtual-bias suppression (three rules):
+        #   (a) ML returned a real icon with conf >= VIRTUAL_OVERRIDE_CONF (0.40)
+        #   (b) Session returned a virtual at pixel-perfect score (>= 0.95)
+        #       AND ML disagrees by returning ANY real icon at conf >= 0.15
+        #       → almost certainly a self-match against a poison crop, even
+        #       if the embedder lacks confidence.
+        #   (c) Query crop is itself bright + colour-rich AND session OR
+        #       template returned a virtual label → the input cannot be
+        #       __empty__/__inactive__, kill the virtual win.
+        sess_virtual_perfect = (
+            _virtual(sess_name) and sess_score >= SESSION_PIXEL_PERFECT
+        )
+        sess_or_tmpl_virtual = _virtual(sess_name) or _virtual(auto_name)
+        suppress_virtual = (
+            (ml_real and ml_conf >= VIRTUAL_OVERRIDE_CONF)
+            or (ml_real and ml_conf >= POISON_GUARD_ML_MIN and sess_virtual_perfect)
+            or (query_looks_real and sess_or_tmpl_virtual)
+        )
+        if (sess_virtual_perfect and ml_real and ml_conf >= POISON_GUARD_ML_MIN
+                and ml_conf < VIRTUAL_OVERRIDE_CONF):
+            log.warning(
+                f"WARP: poison-guard fired — session={sess_name!r} "
+                f"score={sess_score:.3f} but embed top-1={ml_name!r} "
+                f"conf={ml_conf:.2f} → suppressing virtual session win"
+            )
+        if query_looks_real and sess_or_tmpl_virtual and not (
+                ml_real and ml_conf >= VIRTUAL_OVERRIDE_CONF):
+            log.warning(
+                f"WARP: query-sanity guard fired — query bright={q_bright:.1%} "
+                f"rich={q_rich:.1%} (real icon), but session={sess_name!r}@"
+                f"{sess_score:.2f} tmpl={auto_name!r}@{auto_score:.2f} → "
+                f"suppressing virtual"
+            )
 
         candidates = []
         if sess_name and not (suppress_virtual and _virtual(sess_name)):
@@ -741,6 +820,17 @@ class SETSIconMatcher:
                 img = cv2.imread(str(crop_path))
                 if img is None:
                     continue
+                # Poison guard: virtual label but colourful crop → skip.
+                # Prevents self-matching session pixel-perfectly on a real icon
+                # that was mislabeled __empty__/__inactive__ by auto-accept.
+                if name in VIRTUAL_LABELS and _virtual_crop_looks_real(img):
+                    log.warning(
+                        f'WARP: training-seed POISON skip — '
+                        f'{crop_path.name} labeled {name!r} but looks colourful '
+                        f'(run `python -m warp.tools.scrub_training_data --review` '
+                        f'to clean)'
+                    )
+                    continue
                 cls.add_session_example(img, name)
                 count += 1
 
@@ -818,6 +908,13 @@ class SETSIconMatcher:
                 continue
             img = cv2.imread(str(p))
             if img is None:
+                continue
+            # Poison guard: virtual label but colourful crop → skip.
+            if name in VIRTUAL_LABELS and _virtual_crop_looks_real(img):
+                syslog.warning(
+                    f'CommunitySeed: POISON skip — {sha[:10]} labeled {name!r} '
+                    f'but looks colourful'
+                )
                 continue
             cls.add_session_example(img, name)
             count += 1
