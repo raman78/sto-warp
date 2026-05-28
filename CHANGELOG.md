@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.9] — 2026-05-28
+
+### Added
+- Icon equivalence classes. When two STO items share visually
+  identical icon art (Mk variants, faction reskins, vanity
+  duplicates), the trainer no longer raises a community-conflict
+  prompt between them — there is nothing to disambiguate from the
+  crop. The curated list is mirrored from the community dataset, so
+  updates reach every install automatically.
+
+### Changed
+- Auto-Detect no longer clears the trainer's review list at the start
+  of a run. Confirmed and pending rows survive, and re-running
+  recognition only spends time on positions that aren't already
+  tracked, so a second pass is much faster.
+- Auto-detected items (yellow rows) are no longer treated as
+  confirmed training data. They have to be explicitly accepted before
+  they are added to the local training set or uploaded to the
+  community dataset.
+
+### Fixed
+- Auto-detected items in the review panel now render in yellow as
+  intended; some used to show green even though they had not been
+  accepted.
+- **Mark Done** / **Alt+D** no longer lets a session be finished
+  while yellow auto-detected items are still pending; the status bar
+  reports how many are blocking.
+- Re-running Auto-Detect no longer creates duplicate side-by-side
+  rows when a fresh detection drifts a pixel or two from an existing
+  one.
+
 ## [1.0.8] — 2026-05-28
 
 ### Added
