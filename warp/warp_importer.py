@@ -1315,8 +1315,35 @@ class WarpImporter:
         return winners
 
     def _process_image(self, img: np.ndarray, source: str, profile_override: dict | None = None,
-                       _base_pct: int = 0, _end_pct: int = 90) -> ImportResult:
+                       _base_pct: int = 0, _end_pct: int = 90,
+                       skip_bboxes: list | None = None) -> ImportResult:
         _slog.info(f'####### WARP: {Path(source).name} | {self._build_type} #######')
+        # Trainer-only optimisation: bboxes the caller already has in its
+        # review list (confirmed + pending). For each such bbox, skip the
+        # per-icon ML match — the caller will reinstate the row from its
+        # preserved list. Big win when the user has already confirmed most
+        # of a screenshot. Empty/None → no skipping (regular WARP path).
+        _skip_bboxes = list(skip_bboxes) if skip_bboxes else []
+        _skip_hits = 0
+        def _is_skip_bbox(b4: tuple) -> bool:
+            if not _skip_bboxes:
+                return False
+            bx, by, bw, bh = b4
+            ba = bw * bh
+            if ba <= 0:
+                return False
+            for sb in _skip_bboxes:
+                sx, sy, sw, sh = sb[0], sb[1], sb[2], sb[3]
+                ix1 = max(bx, sx); iy1 = max(by, sy)
+                ix2 = min(bx + bw, sx + sw); iy2 = min(by + bh, sy + sh)
+                iw = ix2 - ix1; ih = iy2 - iy1
+                if iw <= 0 or ih <= 0:
+                    continue
+                inter = iw * ih
+                union = ba + sw * sh - inter
+                if union > 0 and inter / union >= 0.3:
+                    return True
+            return False
         # Sub-stage progress: split per-image range into ~45% for OCR/classify/
         # layout-detect and ~55% for the per-slot icon-matching loop. Each
         # stage emits a single pct/label so the UI advances steadily on
@@ -1837,6 +1864,14 @@ class WarpImporter:
                         continue
                     bbox = bbox4
 
+                # Trainer skip: caller already owns this bbox in its review
+                # list — drop without running the matcher. The caller
+                # reinstates the row from its preserved list, so we save the
+                # most expensive part of detection (per-icon ML).
+                if _is_skip_bbox(bbox if len(bbox) == 4 else (bbox[0], bbox[1], bbox[2], bbox[3])):
+                    _skip_hits += 1
+                    continue
+
                 # Apply current dynamic Y-offset (P5)
                 bx, by, bw, bh = bbox
                 crop = self._crop(img, (bx, by + current_dy, bw, bh))
@@ -2011,6 +2046,9 @@ class WarpImporter:
             bboxes_found= sum(len(v) for v in layout.values()),
             per_slot    = _stat_per_slot,
         )
+        if _skip_hits:
+            _slog.info(f'WarpImporter: trainer-skip saved {_skip_hits} '
+                       f'per-icon ML match(es) on already-tracked bboxes')
         _slog.info(f'####### WARP: {Path(source).name} done #######')
         return result
 

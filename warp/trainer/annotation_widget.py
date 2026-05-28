@@ -136,7 +136,7 @@ class AnnotationWidget(QWidget):
         self._eq_geom = geom
         # Diagnostic dump: log each review item's bbox alongside expected geom
         # cell so a shifted/wrong-size canvas display can be traced back to its
-        # source (detection / confirmed merge / preserve_confirmed).
+        # source (detection / preserve_existing merge).
         if geom is not None and getattr(geom, 'row_cys', None):
             try:
                 from warp.debug import log as _slog

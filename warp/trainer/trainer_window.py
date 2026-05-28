@@ -497,11 +497,12 @@ class RecognitionWorker(QThread):
     # in WARP so both tools surface the same progress breakdown.
     progress = Signal(int, str)
 
-    def __init__(self, path, stype: str, sets_app, parent=None):
+    def __init__(self, path, stype: str, sets_app, parent=None, skip_bboxes: list | None = None):
         super().__init__(parent)
         self._path = path
         self._stype = stype
         self._sets_app = sets_app
+        self._skip_bboxes = list(skip_bboxes) if skip_bboxes else []
         # EQ panel geometry captured during detection; consumed by _on_recognition_done
         self.eq_geom = None
 
@@ -546,7 +547,8 @@ class RecognitionWorker(QThread):
                 sets_app=self._sets_app, build_type=importer_type,
                 from_trainer=True, progress_callback=self._stage_cb,
             )
-            result = importer._process_image(img, str(self._path))
+            result = importer._process_image(img, str(self._path),
+                                              skip_bboxes=self._skip_bboxes or None)
             _slog.info(f'RecognitionWorker: pipeline done — {len(result.items)} items found')
             # Capture EQ geometry from the layout detector's per-image cache so
             # the canvas can overlay the 6×N grid that detection actually used.
@@ -1485,11 +1487,13 @@ class WarpCoreWindow(QMainWindow):
         # so Auto-Detect benefits from what the user has already confirmed
         self._seed_matcher_from_confirmed(path)
 
-        # Remove only non-confirmed items from cache; keep confirmed intact
-        existing = self._recognition_cache.get(path.name, [])
-        confirmed_items = [ri for ri in existing if ri.get('state') == 'confirmed']
+        # Preserve every existing row (confirmed AND pending) — auto-detect is
+        # "find what's not on screen yet", not "rebuild from scratch". The
+        # recognition_done merge drops new items that overlap existing bboxes
+        # (IoU) or duplicate a SINGLE_INSTANCE_SLOTS row.
+        existing = list(self._recognition_cache.get(path.name, []))
         self._recognition_cache.pop(path.name, None)
-        self._start_recognition(path, stype, preserve_confirmed=confirmed_items)
+        self._start_recognition(path, stype, preserve_existing=existing)
 
     def _on_detect_screen_types(self):
         if not self._screenshots: return
@@ -1525,12 +1529,12 @@ class WarpCoreWindow(QMainWindow):
         sites (e.g. picking a default write target downstream)."""
         return stype
 
-    def _start_recognition(self, path: Path, stype: str, preserve_confirmed: list | None = None):
+    def _start_recognition(self, path: Path, stype: str, preserve_existing: list | None = None):
         if self._recog_worker and self._recog_worker.isRunning():
             self._recog_worker.requestInterruption()
             self._recog_worker.wait(2000)
-        self._recognition_items = []
-        self._review_list.clear()
+        # Keep the existing list visible while detection runs — _populate_review_panel
+        # rebuilds it once results arrive (merged list = preserve_existing + new).
         self._review_summary.setText('Running recognition...')
         self._set_review_buttons_enabled(False)
         # Determinate bar driven by importer's per-stage progress callback
@@ -1543,11 +1547,14 @@ class WarpCoreWindow(QMainWindow):
         self.statusBar().showMessage(
             f'Matching icons against SETS library —  {icon} {label}   {path.name}'
         )
-        self._recog_worker = RecognitionWorker(path, stype, self._sets, parent=self)
+        skip_bboxes = [ri.get('bbox') for ri in (preserve_existing or [])
+                       if ri.get('bbox')]
+        self._recog_worker = RecognitionWorker(path, stype, self._sets, parent=self,
+                                                skip_bboxes=skip_bboxes)
         self._recog_worker.progress.connect(self._on_recognition_progress)
         self._recog_worker.finished.connect(
             lambda items: self._on_recognition_done(path.name, stype, items,
-                                                    preserve_confirmed=preserve_confirmed))
+                                                    preserve_existing=preserve_existing))
         self._recog_worker.error.connect(self._on_recognition_error)
         self._recog_worker.start()
 
@@ -1557,19 +1564,65 @@ class WarpCoreWindow(QMainWindow):
         self._status_progress.set_progress(pct)
         self.statusBar().showMessage(label)
 
+    @staticmethod
+    def _bbox_iou(a: tuple, b: tuple) -> float:
+        ax, ay, aw, ah = a
+        bx, by, bw, bh = b
+        ix1 = max(ax, bx); iy1 = max(ay, by)
+        ix2 = min(ax + aw, bx + bw); iy2 = min(ay + ah, by + bh)
+        iw = max(0, ix2 - ix1); ih = max(0, iy2 - iy1)
+        inter = iw * ih
+        if inter <= 0:
+            return 0.0
+        union = aw * ah + bw * bh - inter
+        return inter / union if union > 0 else 0.0
+
+    def _merge_recognition(self, existing: list, new: list) -> list:
+        """Add only new detections that neither overlap existing bboxes nor
+        duplicate a SINGLE_INSTANCE_SLOTS row. NON_ICON_SLOTS pairs (Ship Tier
+        / Ship Type) are exempt from the IoU rule — they legitimately sit in
+        the same image strip and may touch."""
+        IOU_THRESHOLD = 0.3
+        single_taken = {ri.get('slot') for ri in existing
+                        if ri.get('slot') in SINGLE_INSTANCE_SLOTS}
+        existing_boxes = [(ri.get('bbox'), ri.get('slot', '')) for ri in existing
+                          if ri.get('bbox')]
+        kept_new: list = []
+        for ri in new:
+            slot = ri.get('slot', '')
+            bbox = ri.get('bbox')
+            if slot in SINGLE_INSTANCE_SLOTS and slot in single_taken:
+                log.debug(f'merge: drop {slot!r} — single-instance already taken')
+                continue
+            if bbox is not None:
+                overlaps = False
+                for ebbox, eslot in existing_boxes:
+                    if ebbox is None:
+                        continue
+                    if slot in NON_ICON_SLOTS and eslot in NON_ICON_SLOTS:
+                        continue
+                    if self._bbox_iou(bbox, ebbox) >= IOU_THRESHOLD:
+                        overlaps = True
+                        log.debug(f'merge: drop {slot!r} bbox={bbox} — '
+                                  f'IoU overlap with existing {eslot!r} bbox={ebbox}')
+                        break
+                if overlaps:
+                    continue
+            kept_new.append(ri)
+            if slot in SINGLE_INSTANCE_SLOTS:
+                single_taken.add(slot)
+            if bbox is not None:
+                existing_boxes.append((bbox, slot))
+        log.info(f'merge: preserved {len(existing)}, kept {len(kept_new)}/{len(new)} new')
+        return existing + kept_new
+
     def _on_recognition_done(self, filename: str, stype: str, items: list,
-                             preserve_confirmed: list | None = None):
+                             preserve_existing: list | None = None):
         if self._recog_dlg:
             self._status_progress.finish()
             self._recog_dlg = None
             self.statusBar().showMessage(f'Recognition done — {len(items)} item(s).')
-        # Merge: keep confirmed items, add new detections that don't overlap
-        if preserve_confirmed:
-            confirmed_bboxes = {ri['bbox'] for ri in preserve_confirmed if ri.get('bbox')}
-            new_items = [ri for ri in items if ri.get('bbox') not in confirmed_bboxes]
-            merged = preserve_confirmed + new_items
-        else:
-            merged = items
+        merged = self._merge_recognition(preserve_existing or [], items)
         self._recognition_cache[filename] = merged
         if self._current_idx >= 0 and self._screenshots[self._current_idx].name == filename:
             self._populate_review_panel(merged, stype)
