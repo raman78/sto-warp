@@ -439,11 +439,16 @@ class TrainingDataManager:
             except Exception as e:
                 logger.warning(f'_sync_crop_index: export failed: {e}')
 
-        # Update index entry with current state/name/slot
+        # Update index entry with current state/name/slot.
+        # auto_confirmed=True means the detector accepted on a confidence
+        # threshold without user verification — keep crop_index PENDING so
+        # get_confirmed_crops() does not upload it as ground truth. User accept
+        # flips auto_confirmed=False, which lets the state promote to CONFIRMED.
+        _idx_state = AnnotationState.PENDING if ann.auto_confirmed else ann.state
         entry: dict = {
             'slot':   ann.slot,
             'name':   ann.name,
-            'state':  ann.state,
+            'state':  _idx_state,
             'source': image_path.name,
         }
         if ann.slot in TEXT_LEARNING_SLOTS:
@@ -541,7 +546,8 @@ class TrainingDataManager:
                     _repair_entry: dict = {
                         'slot':   ann.slot,
                         'name':   ann.name,
-                        'state':  AnnotationState.CONFIRMED,
+                        'state':  (AnnotationState.PENDING if ann.auto_confirmed
+                                   else AnnotationState.CONFIRMED),
                         'source': image_name,
                     }
                     if ann.slot in TEXT_LEARNING_SLOTS:

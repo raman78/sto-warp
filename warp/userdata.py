@@ -102,6 +102,19 @@ def knowledge_cache_file() -> Path:
     return cache_dir() / 'knowledge_cache.json'
 
 
+def icon_equivalence_cache_file() -> Path:
+    """Curated icon-equivalence classes mirrored from HF.
+
+    Maintainer-curated JSON (see ``warp.tools.icon_equivalence``) that
+    lists groups of STO item names sharing identical icon art. The
+    trainer reads this to suppress community-conflict prompts between
+    items whose icons are visually indistinguishable — otherwise the
+    user would be asked to disambiguate the same identical-icon pair on
+    every restart and never get a stable answer.
+    """
+    return cache_dir() / 'icon_equivalence.json'
+
+
 def rate_limit_file() -> Path:
     return cache_dir() / 'contribute_rate_limit.json'
 

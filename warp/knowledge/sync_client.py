@@ -47,7 +47,33 @@ DEFAULT_BACKEND_URL       = 'https://sets-sto-warp-backend.hf.space'
 MAX_CONTRIBUTIONS_PER_DAY = 200    # per installation, per day
 KNOWLEDGE_MAX_AGE_HOURS   = 24     # re-download knowledge base after this
 
-WARP_VERSION = '1.0b'
+# Icon-equivalence is a small admin-curated JSON. We bypass the backend
+# and read it straight from the HF dataset repo where it ships next to
+# `data/crops/`. Keeping it out of the backend means a curated update
+# reaches every client without redeploying the Space.
+ICON_EQUIVALENCE_HF_REPO   = 'sets-sto/sto-icon-dataset'
+ICON_EQUIVALENCE_HF_FILE   = 'icon_equivalence.json'
+ICON_EQUIVALENCE_MAX_AGE_HOURS = 24
+
+def _resolve_warp_version() -> str:
+    """Best-effort sto-warp version for the ``WARP/<ver>`` User-Agent and
+    the ``warp_version`` upload field. Tries installed package metadata
+    first (pipx / PyPI installs); falls back to ``warp/_version.py``
+    written by the build-time vcs-versioning hook (dev checkouts);
+    finally ``'unknown'`` so we never crash on import."""
+    try:
+        from importlib.metadata import version
+        return version('sto-warp')
+    except Exception:
+        pass
+    try:
+        from warp._version import __version__
+        return __version__
+    except Exception:
+        return 'unknown'
+
+
+WARP_VERSION = _resolve_warp_version()
 
 
 class _ContributeQueue:
@@ -278,6 +304,14 @@ class WARPSyncClient:
         self._install_id = self._get_or_create_install_id()
         self._knowledge: dict[str, str] = {}   # phash_hex → item_name
         self._knowledge_lock = threading.Lock()
+
+        # Icon equivalence classes (admin-curated). Each entry is a
+        # frozenset of item names that share identical icon art. The
+        # trainer consults `are_equivalent()` before raising a
+        # community-conflict between two names — same icon ⇒ no nag.
+        self._icon_equiv_classes: list[frozenset[str]] = []
+        self._icon_equiv_index: dict[str, int] = {}   # name → class index
+        self._icon_equiv_lock = threading.Lock()
         self._backend_unavailable_until: float = 0.0   # epoch seconds
         # True between the first WARN of an outage and the next successful
         # send. Suppresses repeat WARNs every backoff window — log noise
@@ -300,6 +334,12 @@ class WARPSyncClient:
             target=self._download_knowledge_bg,
             daemon=True, name='warp-knowledge-dl'
         ).start()
+        # Same for the icon-equivalence JSON (independent endpoint, no
+        # ordering between the two).
+        threading.Thread(
+            target=self._download_icon_equivalence_bg,
+            daemon=True, name='warp-icon-equiv-dl'
+        ).start()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -310,6 +350,32 @@ class WARPSyncClient:
         """
         with self._knowledge_lock:
             return dict(self._knowledge)
+
+    def get_icon_equivalence_classes(self) -> list[frozenset[str]]:
+        """Snapshot of the curated equivalence classes.
+
+        Each frozenset is a group of STO item names that share identical
+        icon art. Empty list = file not yet downloaded or repo missing
+        the file. Always returns instantly (in-memory copy).
+        """
+        with self._icon_equiv_lock:
+            return list(self._icon_equiv_classes)
+
+    def are_equivalent(self, name_a: str, name_b: str) -> bool:
+        """True when both names belong to the same equivalence class.
+
+        Used by the trainer to skip community-conflict prompts when the
+        on-disk label and the fresh community proposal point at items
+        that look identical. Returns False if either name is unknown or
+        if the equivalence file hasn't downloaded yet — the safe default
+        is to keep the conflict UI behaviour intact.
+        """
+        if not name_a or not name_b or name_a == name_b:
+            return name_a == name_b and bool(name_a)
+        with self._icon_equiv_lock:
+            idx_a = self._icon_equiv_index.get(name_a)
+            idx_b = self._icon_equiv_index.get(name_b)
+        return idx_a is not None and idx_a == idx_b
 
     def backend_status(self) -> str:
         """One-line snapshot of the circuit-breaker state for log/UI display.
@@ -463,6 +529,85 @@ class WARPSyncClient:
                     with self._knowledge_lock:
                         self._knowledge = data.get('knowledge', {})
                     log.debug('WARPSync: using stale cache as fallback')
+                except Exception:
+                    pass
+
+    def _apply_icon_equivalence(self, payload: dict) -> None:
+        """Parse a curated icon_equivalence.json payload and publish the
+        new in-memory snapshot. Tolerates either ``classes`` (a list of
+        lists of names) or an absent / malformed payload (treated as
+        "no classes")."""
+        raw = payload.get('classes') if isinstance(payload, dict) else None
+        classes: list[frozenset[str]] = []
+        index: dict[str, int] = {}
+        if isinstance(raw, list):
+            for entry in raw:
+                if not isinstance(entry, list):
+                    continue
+                names = {str(x) for x in entry if isinstance(x, str) and x}
+                if len(names) < 2:
+                    continue
+                ci = len(classes)
+                classes.append(frozenset(names))
+                for n in names:
+                    # First occurrence wins on duplicates across classes.
+                    index.setdefault(n, ci)
+        with self._icon_equiv_lock:
+            self._icon_equiv_classes = classes
+            self._icon_equiv_index = index
+
+    def _download_icon_equivalence_bg(self, force: bool = False) -> None:
+        """Mirror ``icon_equivalence.json`` from the HF dataset repo.
+
+        Same cache-then-fetch policy as `_download_knowledge_bg`, but
+        bypasses the WARP backend and hits the HF resolve URL directly
+        because the file is small, public, and shouldn't depend on the
+        Space being awake.
+        """
+        cache_path = userdata.icon_equivalence_cache_file()
+        if not force and cache_path.exists():
+            try:
+                mtime = cache_path.stat().st_mtime
+                age_h = (time.time() - mtime) / 3600
+                if age_h < ICON_EQUIVALENCE_MAX_AGE_HOURS:
+                    self._apply_icon_equivalence(
+                        json.loads(cache_path.read_text(encoding='utf-8')))
+                    log.debug(
+                        f'WARPSync: loaded '
+                        f'{len(self._icon_equiv_classes)} icon-equivalence '
+                        f'classes from cache')
+                    return
+            except Exception as e:
+                log.debug(f'WARPSync: icon-equiv cache read failed: {e}')
+
+        url = (f'https://huggingface.co/datasets/{ICON_EQUIVALENCE_HF_REPO}'
+               f'/resolve/main/{ICON_EQUIVALENCE_HF_FILE}')
+        try:
+            import urllib.request
+            req = urllib.request.Request(
+                url, headers={'User-Agent': f'WARP/{WARP_VERSION}'})
+            with urllib.request.urlopen(
+                    req,
+                    timeout=config.SYNC_CONNECT_TIMEOUT
+                            + config.SYNC_READ_TIMEOUT) as resp:
+                raw = resp.read().decode('utf-8')
+            payload = json.loads(raw)
+            self._apply_icon_equivalence(payload)
+            cache_path.parent.mkdir(parents=True, exist_ok=True)
+            cache_path.write_text(raw, encoding='utf-8')
+            log.info(
+                f'WARPSync: downloaded {len(self._icon_equiv_classes)} '
+                f'icon-equivalence classes from HF')
+        except Exception as e:
+            # 404 = file not yet uploaded by admin — that's fine,
+            # equivalence is opt-in. Anything else is just network noise.
+            log.debug(f'WARPSync: icon-equiv download failed: {e}')
+            if cache_path.exists():
+                try:
+                    self._apply_icon_equivalence(json.loads(
+                        cache_path.read_text(encoding='utf-8')))
+                    log.debug(
+                        'WARPSync: using stale icon-equiv cache as fallback')
                 except Exception:
                     pass
 

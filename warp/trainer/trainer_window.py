@@ -1684,7 +1684,27 @@ class WarpCoreWindow(QMainWindow):
                     if fresh_name and saved_name and fresh_name != saved_name:
                         was_user_confirmed = not bool(confirmed.get('auto_confirmed', False))
                         already_rejected = (confirmed.get('community_rejected', '') or '').strip()
-                        if was_user_confirmed and already_rejected and already_rejected == fresh_name:
+                        # Equivalence-class shortcut: when both names share
+                        # the same icon art (admin-curated list mirrored from
+                        # HF, see warp.tools.icon_equivalence), no human can
+                        # disambiguate them from a crop — so we silently keep
+                        # the user's disk choice without raising a conflict.
+                        equivalent = False
+                        if was_user_confirmed and self._sync_client is not None:
+                            try:
+                                equivalent = self._sync_client.are_equivalent(
+                                    saved_name, fresh_name)
+                            except Exception as e:
+                                log.debug(f'populate: are_equivalent failed: {e}')
+                        if equivalent:
+                            log.info(
+                                f'populate: community proposes {fresh_name!r} '
+                                f'but it shares icon art with disk={saved_name!r} '
+                                f'(equivalence class) — keeping disk silently '
+                                f'for slot={ri.get("slot")!r} bbox={bbox}'
+                            )
+                            ri = dict(confirmed)
+                        elif was_user_confirmed and already_rejected and already_rejected == fresh_name:
                             # User has previously resolved a conflict against
                             # exactly this community proposal — silently keep
                             # the user's pick. The community DB hasn't changed
@@ -2383,7 +2403,8 @@ class WarpCoreWindow(QMainWindow):
                 from warp.recognition.icon_matcher import SETSIconMatcher
                 SETSIconMatcher.add_session_example(crop_bgr, name)
             self._data_mgr.save()
-        self._add_review_row(name, slot, conf, confirmed=_auto, cross_check_failed=_cross_check)
+        self._add_review_row(name, slot, conf, confirmed=_auto, cross_check_failed=_cross_check,
+                             auto_confirmed=_auto_conf_flag)
         new_row = len(self._recognition_items) - 1
         self._review_list.setCurrentRow(new_row)
         self._set_review_buttons_enabled(True)
@@ -3729,6 +3750,20 @@ class WarpCoreWindow(QMainWindow):
             return
         path = self._screenshots[self._current_idx]
         if checked:
+            pending_auto = [
+                a for a in self._data_mgr.get_annotations(path)
+                if a.state == AnnotationState.CONFIRMED and a.auto_confirmed
+            ]
+            if pending_auto:
+                self._btn_done.blockSignals(True)
+                self._btn_done.setChecked(False)
+                self._btn_done.blockSignals(False)
+                msg = (f'Mark Done blocked: {len(pending_auto)} auto-detected '
+                       f'item(s) still yellow — confirm them first.')
+                self.statusBar().showMessage(msg, 6000)
+                log.info(f'mark_done: blocked for {path.name} — '
+                         f'{len(pending_auto)} auto_confirmed item(s) unverified')
+                return
             self._screenshots_done.add(path.name)
             self._learn_layout_for(path)
             self._btn_done.setText('↩ Back to Edit')
@@ -3756,7 +3791,7 @@ class WarpCoreWindow(QMainWindow):
         try:
             anns = self._data_mgr.get_annotations(path)
             confirmed = [{'bbox': a.bbox, 'slot': a.slot} for a in anns
-                         if a.state == AnnotationState.CONFIRMED]
+                         if a.state == AnnotationState.CONFIRMED and not a.auto_confirmed]
             if not confirmed:
                 return False
             stype = self._screen_types.get(path.name, 'UNKNOWN')
@@ -3786,7 +3821,7 @@ class WarpCoreWindow(QMainWindow):
         for path in self._screenshots:
             anns = self._data_mgr.get_annotations(path)
             confirmed = [{'bbox': a.bbox, 'slot': a.slot} for a in anns
-                         if a.state == AnnotationState.CONFIRMED]
+                         if a.state == AnnotationState.CONFIRMED and not a.auto_confirmed]
             if not confirmed:
                 continue
             stype = self._screen_types.get(path.name, 'UNKNOWN')
