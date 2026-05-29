@@ -18,6 +18,11 @@ details live in the git history.
 - The Screenshots list in WARP CORE has a new **Filter by filename**
   box above the list. Typing narrows the visible files in real time;
   the ✕ button clears the filter.
+- The WARP Results tree now has a right-click menu on every row:
+  **Copy filename**, **Copy full path** and (in the launcher window)
+  **Open in WARP CORE** — the last action jumps straight to the
+  WARP CORE tab with the chosen screenshot loaded, ready to be
+  corrected.
 - Confirmed corrections are now fed back into the recognition pipeline
   immediately, in the same session. A misrecognised icon that was
   just fixed will match correctly the next time it appears, without

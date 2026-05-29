@@ -211,6 +211,16 @@ else sorted alphabetically. A bold ship banner appears above the tree with
 the recognised name / type / tier so you can sanity-check OCR at a glance
 before exporting.
 
+#### Right-click — quick actions on a Results row
+
+Right-clicking any row in the Results tree (slot row or individual item) opens a small popup menu that operates on the source screenshot of that row:
+
+- **Copy filename** — copies just the screenshot's filename (e.g. *Screenshot_4.png*) to the clipboard.
+- **Copy full path** — copies the absolute path to the screenshot, ready to paste into a file manager or another tool.
+- **Open in WARP CORE** — only shown when WARP is running inside the launcher window (not in standalone `sto-warp gui`). Jumps straight to the WARP CORE tab with the screenshot pre-selected so a correction can be made without scrolling through the file list.
+
+The clicked filename is shown as a disabled header at the top of the menu, so it is always clear which file the action will affect — useful when the same slot has children from several different screenshots.
+
 ### Preview tab — bbox overlay
 
 The **Preview** tab visualises *what WARP saw*. The left pane lists every
@@ -233,8 +243,13 @@ gets the same hue across screenshots in a batch:
 | Everything else | Stable hashed hue derived from the slot string |
 
 Use Preview to spot mis-aligned bboxes (wrong row, off-by-one column) at a
-glance, then jump into WARP CORE to correct them. The preview is read-only —
-it never re-runs detection.
+glance, then jump into WARP CORE to correct them.
+
+#### Per-file screen-type override + Rerun Recognition
+
+Above the canvas a **Screen type:** dropdown lets the detected type of the currently-selected screenshot be overridden. When at least one file has been changed, a **Rerun Recognition** button appears at the bottom of the file list — clicking it re-processes the affected files with the corrected types, without touching the rest of the batch. Useful when WARP misclassified a single screenshot (e.g. mistook a *Boffs* screen for *Specialisations*) and only that one needs a second pass.
+
+A small amber label next to the dropdown indicates when the current file is using an override rather than the auto-detected type.
 
 ### Export to SETS JSON
 
@@ -414,6 +429,7 @@ Lists all items detected in the current screenshot, one row per slot. Each row s
 At the bottom:
 - **Add BBox** — enter draw mode to add a missing box (Alt+A)
 - **Remove** — delete the selected box (Alt+R or Del)
+- **Clear All BBoxes** — remove every bbox on the current screenshot at once. A confirmation dialog offers the option to spare boxes that are already marked confirmed, so the destructive action does not wipe accepted work by accident. Useful when Auto-Detect placed a row in the wrong family and the whole image needs to be re-detected from a clean slate.
 - **Auto ≥ [threshold]** — automatically accept items above the threshold; adjust the spinner to change it (default 0.75)
 
 <!-- screenshot: WARP CORE window with a loaded screenshot and mixed confirmed/pending items -->
