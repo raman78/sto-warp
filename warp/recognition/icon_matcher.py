@@ -107,7 +107,17 @@ class SETSIconMatcher:
 
     # Session examples: confirmed crops added by user during this session.
     # Shared across all instances so every match() call benefits.
-    _session_examples: list[dict] = []   # {name, tmpl64, hist_hsv, orig}
+    # Entry origin tags (live-seed support):
+    #   'user'       — user clicked Accept in WARP CORE this process; passes
+    #                  through reset_ml_session() filtering so WARP detection
+    #                  can use it immediately. Single bbox at a time, in-memory
+    #                  only — does NOT count as reading annotations.json from
+    #                  disk, so the CLAUDE.md WARP-vs-CORE rule still holds.
+    #   'community'  — HF-mirrored approved-truth (allowed in WARP).
+    #   'trainer_td' — seed_from_training_data bulk seed (WARP CORE path only;
+    #                  dropped from the pool whenever WARP runs).
+    #   'session'    — generic / legacy (treated as user-equivalent).
+    _session_examples: list[dict] = []   # {name, tmpl64, hist_hsv, orig, origin, crop_hash}
 
     # Guard: prevent re-seeding from training data on every new matcher instance.
     _seeded_from_training_data: bool = False
@@ -140,6 +150,11 @@ class SETSIconMatcher:
         # 'none' (no signal above threshold), '' (no match attempted).
         # Read by warp_importer to expose match source in autodetect logs.
         self._last_match_src: str = ''
+        # When _last_match_src == 'session', this carries the winning entry's
+        # `origin` tag ('user', 'community', 'trainer_td', or 'session'). Lets
+        # warp_importer tag user-aided matches as [USER] in autodetect logs so
+        # they're visibly distinguished from autonomous detection.
+        self._last_match_origin: str = ''
         # Per-stage raw scores from the most recent match() call. Filled in
         # before every return path (knowledge / no-candidates / final winner).
         # Consumed by RecognitionWorker to build the per-image match summary
@@ -190,6 +205,7 @@ class SETSIconMatcher:
         """
         if crop_bgr is None or crop_bgr.size == 0:
             self._last_match_src = ''
+            self._last_match_origin = ''
             self._last_stage_scores = {'embed': 0.0, 'soft': 0.0,
                                        'session': 0.0, 'template': 0.0,
                                        'knowledge': 0.0}
@@ -197,6 +213,7 @@ class SETSIconMatcher:
 
         import cv2
         self._last_match_src = ''
+        self._last_match_origin = ''
         self._last_stage_scores = {'embed': 0.0, 'soft': 0.0,
                                    'session': 0.0, 'template': 0.0,
                                    'knowledge': 0.0}
@@ -371,6 +388,8 @@ class SETSIconMatcher:
             self._last_match_src = 'soft'
         else:
             self._last_match_src = src
+        if src == 'session' and entry is not None:
+            self._last_match_origin = entry.get('origin', 'session')
         if entry is not None:
             thumb = self._bgr_to_qimage(entry.get('orig'))
         else:
@@ -734,25 +753,67 @@ class SETSIconMatcher:
             self._ml_disabled = True
             return None
 
+    @staticmethod
+    def _crop_hash(crop_bgr: 'np.ndarray') -> str:
+        """Stable content hash for dedup / remove_session_example lookup."""
+        import hashlib
+        return hashlib.sha1(crop_bgr.tobytes()).hexdigest()
+
     @classmethod
-    def add_session_example(cls, crop_bgr: 'np.ndarray', name: str) -> None:
+    def add_session_example(cls, crop_bgr: 'np.ndarray', name: str,
+                            origin: str = 'session') -> None:
         """
         Add a user-confirmed crop to the in-memory session index.
         Immediately improves recognition for the rest of this session
         without any retraining.
+
+        `origin` tags the source so reset_ml_session() can keep user / community
+        seeds while dropping bulk training-data seeds when WARP takes over.
+
+        Dedup rule: a new (origin='user') entry with the same crop hash REPLACES
+        any prior 'user' entry on the same crop — covers the unconfirm/relabel
+        case where the user changes their mind about a bbox.
         """
         import cv2
         if crop_bgr is None or crop_bgr.size == 0 or not name.strip():
             return
+        crop_hash = cls._crop_hash(crop_bgr)
+        if origin == 'user':
+            cls._session_examples = [
+                e for e in cls._session_examples
+                if not (e.get('origin') == 'user'
+                        and e.get('crop_hash') == crop_hash)
+            ]
         tmpl64 = cv2.resize(crop_bgr, (MATCH_SIZE, MATCH_SIZE),
                              interpolation=cv2.INTER_AREA)
         hist = cls._hist_hsv(tmpl64)
         cls._session_examples.append({
-            'name':     name,
-            'tmpl64':   tmpl64,
-            'hist_hsv': hist,
-            'orig':     crop_bgr,
+            'name':      name,
+            'tmpl64':    tmpl64,
+            'hist_hsv':  hist,
+            'orig':      crop_bgr,
+            'origin':    origin,
+            'crop_hash': crop_hash,
         })
+
+    @classmethod
+    def remove_session_example(cls, crop_bgr: 'np.ndarray',
+                               origin: str = 'user') -> int:
+        """Drop session entries matching this crop with the given origin.
+        Called by trainer when user unconfirms / relabels a previously
+        accepted bbox, so the stale entry stops leaking into WARP matches.
+        Returns the number of entries removed.
+        """
+        if crop_bgr is None or crop_bgr.size == 0:
+            return 0
+        crop_hash = cls._crop_hash(crop_bgr)
+        before = len(cls._session_examples)
+        cls._session_examples = [
+            e for e in cls._session_examples
+            if not (e.get('origin') == origin
+                    and e.get('crop_hash') == crop_hash)
+        ]
+        return before - len(cls._session_examples)
 
     @classmethod
     def seed_from_training_data(cls, training_data_dir) -> int:
@@ -786,9 +847,17 @@ class SETSIconMatcher:
         })
         crops_dir = training_data_dir / 'crops'
         count = 0
+        skipped_auto = 0
         for _fname, annotations in data.items():
             for ann in annotations:
                 if ann.get('state') != 'confirmed':
+                    continue
+                # Skip auto-accepted entries: they're the detector's own
+                # guesses, not user-verified ground truth. Seeding from them
+                # creates a self-amplification loop (today's high-conf match
+                # becomes tomorrow's perfect session-example match).
+                if ann.get('auto_confirmed'):
+                    skipped_auto += 1
                     continue
                 name = ann.get('name', '').strip()
                 slot = ann.get('slot', '')
@@ -831,12 +900,12 @@ class SETSIconMatcher:
                         f'to clean)'
                     )
                     continue
-                cls.add_session_example(img, name)
+                cls.add_session_example(img, name, origin='trainer_td')
                 count += 1
 
         cls._seeded_from_training_data = True
         log.info(f'WARP: training data seed: {count} session examples from {len(data)} screenshots '
-                 f'(path: {training_data_dir})')
+                 f'(skipped {skipped_auto} auto_confirmed) (path: {training_data_dir})')
         return count
 
     @classmethod
@@ -916,7 +985,7 @@ class SETSIconMatcher:
                     f'but looks colourful'
                 )
                 continue
-            cls.add_session_example(img, name)
+            cls.add_session_example(img, name, origin='community')
             count += 1
 
         cls._seeded_from_community = True
@@ -926,19 +995,38 @@ class SETSIconMatcher:
         return count
 
     @classmethod
-    def reset_ml_session(cls):
+    def reset_ml_session(cls, keep_origins: set[str] | None = None):
         """
         Force reload of the ML model on next inference call.
-        Called after local training completes.
+        Called after local training completes, and by WARP's `_get_matcher`
+        to clear bulk trainer seeds before each run.
+
+        `keep_origins`: entries whose `origin` is in this set survive the
+        reset. Used by WARP path with {'user', 'community'} to preserve
+        the live-seed pipeline (user's own confirmed crops + community
+        approved truth) while dropping any 'trainer_td' seed that a prior
+        WARP CORE session may have loaded from annotations.json.
+
+        `None` (default) is a hard reset — wipes everything. Used by the
+        model updater after a fresh model is installed.
         """
         # New SETSIconMatcher() instances will reload fresh from disk.
         # Existing instances keep their old model until garbage-collected.
         # (_shared_* attributes don't exist; instance attrs are _ml_session etc.)
-        cls._session_examples         = []
+        if keep_origins is None:
+            cls._session_examples = []
+        else:
+            cls._session_examples = [
+                e for e in cls._session_examples
+                if e.get('origin', 'session') in keep_origins
+            ]
         cls._seeded_from_training_data = False
-        cls._seeded_from_community     = False
-        cls._seeded_community_mtime    = 0.0
-        log.info('WARP: ML session reset -- will reload on next match')
+        if keep_origins is None or 'community' not in keep_origins:
+            cls._seeded_from_community  = False
+            cls._seeded_community_mtime = 0.0
+        log.info(f'WARP: ML session reset -- '
+                 f'kept_origins={sorted(keep_origins) if keep_origins else "[]"}, '
+                 f'pool_size={len(cls._session_examples)}')
 
     def _check_repo_exists(self) -> bool:
         """

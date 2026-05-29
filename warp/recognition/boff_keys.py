@@ -214,6 +214,13 @@ def group_items_by_seat(items):
     for it in items:
         slot = getattr(it, 'slot', '') or ''
         seat_key = getattr(it, 'seat_key', '') or ''
+        # Fallback: when remap left the item with a seat-keyed `slot` and
+        # no `seat_key` (e.g. ground ability unknown to boff_abilities cache
+        # so the profession remap didn't fire), use `slot` itself as the
+        # seat key so the row gets a pretty 'Boff Ground'/'Boff Universal'
+        # label via _seat_label_from_items instead of leaking the raw key.
+        if not seat_key and is_seat_keyed(slot):
+            seat_key = slot
         if slot.startswith('Boff') and seat_key and is_seat_keyed(seat_key):
             key = ('seat', seat_key)
         else:

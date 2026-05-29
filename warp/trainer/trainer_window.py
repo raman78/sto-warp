@@ -766,6 +766,11 @@ class WarpCoreWindow(QMainWindow):
         lbl = QLabel('Screenshots')
         lbl.setFont(QFont('', 10, QFont.Weight.Bold))
         ll.addWidget(lbl)
+        self._file_filter = QLineEdit()
+        self._file_filter.setPlaceholderText('Filter by filename…')
+        self._file_filter.setClearButtonEnabled(True)
+        self._file_filter.textChanged.connect(self._apply_file_filter)
+        ll.addWidget(self._file_filter)
         self._file_list = QListWidget()
         self._file_list.setItemDelegate(_ColorPreservingDelegate(self._file_list))
         self._file_list.currentRowChanged.connect(self._load_screenshot)
@@ -990,6 +995,8 @@ class WarpCoreWindow(QMainWindow):
             tb.addAction(a)
             tb.addSeparator()
             return a
+        act('Open Screenshot', 'Open a single screenshot (loads its parent folder and selects the file)',
+            self._on_open_screenshot)
         act('Open Folder', 'Open screenshots folder', self._on_open)
         act('Detect Screen Types', 'Re-classify screen types', self._on_detect_screen_types)
         act('Auto-Detect Slots', 'Auto-detect icons', self._on_auto_detect)
@@ -1002,6 +1009,82 @@ class WarpCoreWindow(QMainWindow):
             return
         self._settings.setValue(_KEY_LAST_DIR, str(folder))
         self._load_folder(folder)
+
+    def _on_open_screenshot(self):
+        from warp.folder_picker import pick_files, DEFAULT_IMAGE_FILTERS
+        last = self._settings.value(_KEY_LAST_DIR, '') or str(Path.home())
+        files = pick_files(
+            self,
+            title='Open screenshot',
+            start_dir=last,
+            image_filters=DEFAULT_IMAGE_FILTERS,
+            multi=False,
+        )
+        if not files:
+            return
+        self._settings.setValue(_KEY_LAST_DIR, str(files[0].parent))
+        self.open_screenshot(files[0])
+
+    def open_screenshot(self, path):
+        """Load `path`'s parent folder (if not already loaded) and select
+        the matching row in the file list. Public entry point used by the
+        toolbar's "Open Screenshot" action and by the launcher when WARP
+        hands off via the Results-row "Open in WARP CORE" menu.
+        """
+        # Resolve symlinks so launcher hand-offs from WARP single-file
+        # selections (staged through a temp dir) land on the original
+        # screenshot's real folder, not the temp staging dir.
+        try:
+            p = Path(path).resolve()
+        except Exception:
+            p = Path(path)
+        if not p.is_file():
+            QMessageBox.warning(self, 'Open Screenshot',
+                                f'File not found:\n{p}')
+            return
+        folder = p.parent
+        current_folder = self._screenshots[0].parent if self._screenshots else None
+        if current_folder != folder:
+            self._settings.setValue(_KEY_LAST_DIR, str(folder))
+            self._load_folder(folder)
+        if self._file_filter.text():
+            self._file_filter.clear()
+        # Defer selection one event-loop tick: `_load_folder` triggers
+        # async screen-type detection which can race with `setCurrentRow`
+        # and leave the row unhighlighted. A single-shot timer lets the
+        # list finish laying out before we move the cursor.
+        target = p.name
+        def _select_now():
+            for i, sp in enumerate(self._screenshots):
+                if sp.name == target:
+                    self._file_list.setCurrentRow(i)
+                    it = self._file_list.item(i)
+                    if it is not None:
+                        self._file_list.scrollToItem(
+                            it,
+                            QAbstractItemView.ScrollHint.PositionAtCenter,
+                        )
+                    self._file_list.setFocus()
+                    break
+        QTimer.singleShot(0, _select_now)
+
+    def _apply_file_filter(self, text: str):
+        """Hide file-list rows that don't contain `text` (case-insensitive
+        substring). Empty `text` reveals all rows.
+        """
+        needle = (text or '').strip().lower()
+        for row in range(self._file_list.count()):
+            item = self._file_list.item(row)
+            if not item:
+                continue
+            if not needle:
+                item.setHidden(False)
+                continue
+            # Each file-list item is rendered as "<icon> <label>\n  <name>"
+            # (see `_make_file_list_item`); the filename lives on the
+            # second line. Match against the whole item text so users can
+            # also filter by screen-type label.
+            item.setHidden(needle not in item.text().lower())
 
     def _load_folder(self, folder: Path):
         exts = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
@@ -1028,6 +1111,8 @@ class WarpCoreWindow(QMainWindow):
             elif saved:
                 self._screen_types_ml_auto.add(p.name)
             self._file_list.addItem(self._make_file_list_item(p, self._screen_types[p.name]))
+        # Re-apply any active filter so freshly added items honor it.
+        self._apply_file_filter(self._file_filter.text())
         self._start_screen_type_detection("open_folder")
 
     def _start_screen_type_detection(self, trigger: str = 'unknown', max_iter: int = 1):
@@ -3089,6 +3174,15 @@ class WarpCoreWindow(QMainWindow):
             # NON_ICON_SLOTS (Ship Name/Type/Tier) are text, not classifiable icons.
             if ri.get('crop_bgr') is not None and slot not in NON_ICON_SLOTS:
                 from warp.recognition.icon_matcher import SETSIconMatcher
+                # Default 'session' origin (NOT 'user'): auto-accept is the
+                # model trusting itself above a threshold the user once set,
+                # not an explicit human review. Tagging as 'user' would
+                # (a) propagate model errors into WARP with a ✓ user badge
+                # that claims "you confirmed this" when you didn't, and
+                # (b) create a self-amplification loop where a wrong
+                # auto-confirm becomes pixel-perfect session ground truth
+                # for the next slot the same icon appears in. Only manual
+                # _on_accept clicks earn the 'user' tag.
                 SETSIconMatcher.add_session_example(ri['crop_bgr'], name)
             accepted += 1
         if accepted:
@@ -3229,7 +3323,10 @@ class WarpCoreWindow(QMainWindow):
                 litem.setForeground(QColor('#7effc8'))
             if name and ri.get('crop_bgr') is not None and slot not in NON_ICON_SLOTS:
                 from warp.recognition.icon_matcher import SETSIconMatcher
-                SETSIconMatcher.add_session_example(ri['crop_bgr'], name)
+                # origin='user' lets the entry survive WARP's reset_ml_session
+                # filter so a subsequent WARP detection run picks it up.
+                SETSIconMatcher.add_session_example(
+                    ri['crop_bgr'], name, origin='user')
                 self._contribute(ri, name)
             elif name and slot in TEXT_LEARNING_SLOTS:
                 ocr_raw = ri.get('ocr_raw', '')

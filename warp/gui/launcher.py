@@ -95,6 +95,13 @@ class LauncherWindow(QMainWindow):
         if not _core_icon.isNull():
             self._tabs.setTabIcon(core_idx, _core_icon)
 
+        # WARP Results "Open in WARP CORE" context-menu action — switch
+        # to the trainer tab and select the matching file. Wiring it here
+        # (rather than in WarpWindow) keeps WARP free of any direct
+        # reference to the trainer module.
+        self._warp_win.open_in_warp_core.connect(self._on_open_in_warp_core)
+        self._warp_win._has_warp_core_handler = True
+
         # Main-thread detection-log routing follows the active tab so any
         # synchronous `log.info(...)` from a UI callback lands in the
         # tool the user is currently looking at. Worker threads override
@@ -155,6 +162,13 @@ class LauncherWindow(QMainWindow):
             set_main_detection_channel('detection_core')
         else:
             set_main_detection_channel('detection')
+
+    def _on_open_in_warp_core(self, path: str):
+        self._tabs.setCurrentIndex(self._core_idx)
+        try:
+            self._core_win.open_screenshot(path)
+        except Exception as e:
+            log.warning(f'Launcher: open_screenshot({path!r}) failed: {e}')
 
     def _on_refresh_clicked(self):
         self._coord.request_refresh(force=True)

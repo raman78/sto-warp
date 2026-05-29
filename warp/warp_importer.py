@@ -999,6 +999,14 @@ class RecognisedItem:
     # apply src-aware policy (e.g. block auto-accept of virtual labels
     # that came from session — the self-poisoning vector).
     src:         str   = ''
+    # When `src == 'session'`, the origin of the winning entry:
+    # 'user' (live-seeded from WARP CORE Accept this process),
+    # 'community' (HF-mirrored approved truth), 'trainer_td' (bulk seed
+    # from annotations.json — trainer path only), or '' / 'session' for
+    # legacy entries. UI shows a `✓ user` badge in the Source column for
+    # match_origin=='user' so it's visually distinct from autonomous
+    # detection that just happened to use a generic session example.
+    match_origin: str  = ''
 
 
 @dataclass
@@ -1787,11 +1795,19 @@ class WarpImporter:
         found_anchor = False
         _gear_type = build_type in ('SPACE', 'SPACE_MIXED')
 
-        # Recognition stats counters (autodetect vs WARP CORE fallback)
-        _stat_auto_n    = 0   # items recognized by ML pipeline
-        _stat_core_n    = 0   # items recognized via WARP CORE session examples
-        _stat_auto_conf = 0.0
-        _stat_core_conf = 0.0
+        # Recognition stats counters — split session-origin buckets so the
+        # report distinguishes live-seed (user), community-seed, trainer
+        # bulk seed, and untagged session matches from pure autodetect.
+        _stat_auto_n         = 0   # ML pipeline (no session example won)
+        _stat_user_n         = 0   # live-seed from this process's WARP CORE Accept
+        _stat_community_n    = 0   # HF-mirrored approved-truth crops
+        _stat_coreseed_n     = 0   # seed_from_training_data bulk seed (trainer path)
+        _stat_session_n      = 0   # legacy / untagged session example
+        _stat_auto_conf      = 0.0
+        _stat_user_conf      = 0.0
+        _stat_community_conf = 0.0
+        _stat_coreseed_conf  = 0.0
+        _stat_session_conf   = 0.0
         _stat_skip_conf = 0   # skipped due to low confidence
         _stat_skip_type = 0   # skipped due to wrong type for slot
         _stat_per_slot: dict[str, dict] = {}  # per-slot hit/skip counters
@@ -1930,7 +1946,24 @@ class WarpImporter:
                         # Already a solid match at current_dy=0, lock it as anchor!
                         found_anchor = True
                 
-                _tag = '[P5 Anchored]' if found_anchor and current_dy != 0 else ('[WARP CORE]' if used_session else '[Autodetect]')
+                _origin = getattr(matcher, '_last_match_origin', '') or ''
+                # Four session-origin tags so logs don't lump everything as
+                # `[WARP CORE]`. The legacy tag meant "session example won";
+                # after adding community-seed and live-seed, session can mean
+                # any of four very different things. Honest tagging — same
+                # principle as not labeling auto-accept matches as 'user'.
+                if found_anchor and current_dy != 0:
+                    _tag = '[P5 Anchored]'
+                elif used_session and _origin == 'user':
+                    _tag = '[USER]'        # live-seed from this process's Accept
+                elif used_session and _origin == 'community':
+                    _tag = '[COMMUNITY]'   # HF-mirrored approved truth
+                elif used_session and _origin == 'trainer_td':
+                    _tag = '[WARP CORE]'   # bulk seed_from_training_data (trainer path)
+                elif used_session:
+                    _tag = '[SESSION]'     # legacy / untagged
+                else:
+                    _tag = '[Autodetect]'
                 _src = getattr(matcher, '_last_match_src', '') or '-'
                 _slog.debug(f'  {_tag} [{slot_name}][{idx}] dy={current_dy:+} bbox={bbox} crop={crop.shape[1]}x{crop.shape[0]} → {name!r} conf={conf:.2f} src={_src}')
                 
@@ -1988,23 +2021,36 @@ class WarpImporter:
                     continue
                 final_slot_name = slot_name
 
-                # Track recognition stats
+                # Track recognition stats — origin-aware so [WARP CORE] no
+                # longer lumps community + live-seed + bulk seed together.
                 _stat_per_slot.setdefault(final_slot_name, {'ok': 0, 'skip': 0})['ok'] += 1
                 if used_session:
-                    _stat_core_n    += 1
-                    _stat_core_conf += conf
+                    _o = getattr(matcher, '_last_match_origin', '') or ''
+                    if _o == 'user':
+                        _stat_user_n         += 1
+                        _stat_user_conf      += conf
+                    elif _o == 'community':
+                        _stat_community_n    += 1
+                        _stat_community_conf += conf
+                    elif _o == 'trainer_td':
+                        _stat_coreseed_n     += 1
+                        _stat_coreseed_conf  += conf
+                    else:
+                        _stat_session_n      += 1
+                        _stat_session_conf   += conf
                 else:
                     _stat_auto_n    += 1
                     _stat_auto_conf += conf
                 _new_item = RecognisedItem(
-                    slot        = final_slot_name,
-                    slot_index  = idx,
-                    name        = name,
-                    confidence  = conf,
-                    thumbnail   = thumb,
-                    source_file = source,
-                    bbox        = bbox,
-                    src         = getattr(matcher, '_last_match_src', '') or '',
+                    slot         = final_slot_name,
+                    slot_index   = idx,
+                    name         = name,
+                    confidence   = conf,
+                    thumbnail    = thumb,
+                    source_file  = source,
+                    bbox         = bbox,
+                    src          = getattr(matcher, '_last_match_src', '') or '',
+                    match_origin = getattr(matcher, '_last_match_origin', '') or '',
                 )
                 result.items.append(_new_item)
                 # Capture U-seat items for post-pass refinement (skip virtuals).
@@ -2035,16 +2081,22 @@ class WarpImporter:
         self._remap_boff_seat_slots(result, _stat_per_slot)
 
         self._log_recognition_stats(
-            build_type  = build_type,
-            auto_n      = _stat_auto_n,
-            auto_conf   = _stat_auto_conf,
-            core_n      = _stat_core_n,
-            core_conf   = _stat_core_conf,
-            skip_conf   = _stat_skip_conf,
-            skip_type   = _stat_skip_type,
-            slots_found = len(layout),
-            bboxes_found= sum(len(v) for v in layout.values()),
-            per_slot    = _stat_per_slot,
+            build_type     = build_type,
+            auto_n         = _stat_auto_n,
+            auto_conf      = _stat_auto_conf,
+            user_n         = _stat_user_n,
+            user_conf      = _stat_user_conf,
+            community_n    = _stat_community_n,
+            community_conf = _stat_community_conf,
+            coreseed_n     = _stat_coreseed_n,
+            coreseed_conf  = _stat_coreseed_conf,
+            session_n      = _stat_session_n,
+            session_conf   = _stat_session_conf,
+            skip_conf      = _stat_skip_conf,
+            skip_type      = _stat_skip_type,
+            slots_found    = len(layout),
+            bboxes_found   = sum(len(v) for v in layout.values()),
+            per_slot       = _stat_per_slot,
         )
         if _skip_hits:
             _slog.info(f'WarpImporter: trainer-skip saved {_skip_hits} '
@@ -2382,8 +2434,14 @@ class WarpImporter:
         build_type: str,
         auto_n: int,
         auto_conf: float,
-        core_n: int,
-        core_conf: float,
+        user_n: int = 0,
+        user_conf: float = 0.0,
+        community_n: int = 0,
+        community_conf: float = 0.0,
+        coreseed_n: int = 0,
+        coreseed_conf: float = 0.0,
+        session_n: int = 0,
+        session_conf: float = 0.0,
         skip_conf: int = 0,
         skip_type: int = 0,
         slots_found: int = 0,
@@ -2393,13 +2451,23 @@ class WarpImporter:
         """Log per-session recognition stats with per-slot breakdown and trend analysis."""
         import datetime, json as _json
 
+        # Aggregate session-origin buckets for "core_n" (kept for backward
+        # compat in persisted JSON / trend code).
+        core_n    = user_n + community_n + coreseed_n + session_n
+        core_conf = user_conf + community_conf + coreseed_conf + session_conf
         total = auto_n + core_n
         attempted = total + skip_conf + skip_type
 
         auto_pct      = 100.0 * auto_n / total if total else 0.0
         avg_auto_conf = auto_conf / auto_n if auto_n else 0.0
         avg_core_conf = core_conf / core_n if core_n else 0.0
+        avg_user_conf      = user_conf      / user_n      if user_n      else 0.0
+        avg_community_conf = community_conf / community_n if community_n else 0.0
+        avg_coreseed_conf  = coreseed_conf  / coreseed_n  if coreseed_n  else 0.0
+        avg_session_conf   = session_conf   / session_n   if session_n   else 0.0
         hit_rate      = 100.0 * total / attempted if attempted else 0.0
+
+        def _pct(n): return (100.0 * n / total) if total else 0.0
 
         # ── Summary table ─────────────────────────────────────────────────
         _slog.info(f'┌── Recognition Report [{build_type}] ──────────────────────')
@@ -2407,8 +2475,14 @@ class WarpImporter:
         _slog.info(f'│ Matched:   {total}/{attempted}  hit rate {hit_rate:.0f}%')
         if total:
             _slog.info(f'│   Autodetect: {auto_n} ({auto_pct:.0f}%)  avg conf {avg_auto_conf:.2f}')
-        if core_n:
-            _slog.info(f'│   WARP CORE:  {core_n} ({100-auto_pct:.0f}%)  avg conf {avg_core_conf:.2f}')
+        if user_n:
+            _slog.info(f'│   USER:       {user_n} ({_pct(user_n):.0f}%)  avg conf {avg_user_conf:.2f}')
+        if community_n:
+            _slog.info(f'│   Community:  {community_n} ({_pct(community_n):.0f}%)  avg conf {avg_community_conf:.2f}')
+        if coreseed_n:
+            _slog.info(f'│   WARP CORE:  {coreseed_n} ({_pct(coreseed_n):.0f}%)  avg conf {avg_coreseed_conf:.2f}')
+        if session_n:
+            _slog.info(f'│   Session:    {session_n} ({_pct(session_n):.0f}%)  avg conf {avg_session_conf:.2f}')
         if skip_conf:
             _slog.info(f'│ Skipped (low conf): {skip_conf}')
         if skip_type:
@@ -2468,13 +2542,21 @@ class WarpImporter:
             'total':        total,
             'attempted':    attempted,
             'auto_n':       auto_n,
-            'core_n':       core_n,
+            'core_n':       core_n,    # kept for trend backward-compat
+            'user_n':       user_n,
+            'community_n':  community_n,
+            'coreseed_n':   coreseed_n,
+            'session_n':    session_n,
             'skip_conf':    skip_conf,
             'skip_type':    skip_type,
             'hit_rate':     round(hit_rate, 1),
             'auto_pct':     round(auto_pct, 1),
-            'avg_auto_conf': round(avg_auto_conf, 3),
-            'avg_core_conf': round(avg_core_conf, 3),
+            'avg_auto_conf':      round(avg_auto_conf, 3),
+            'avg_core_conf':      round(avg_core_conf, 3),
+            'avg_user_conf':      round(avg_user_conf, 3),
+            'avg_community_conf': round(avg_community_conf, 3),
+            'avg_coreseed_conf':  round(avg_coreseed_conf, 3),
+            'avg_session_conf':   round(avg_session_conf, 3),
             'slots_found':  slots_found,
             'bboxes_found': bboxes_found,
         }
@@ -2825,9 +2907,14 @@ class WarpImporter:
                 if td.exists():
                     SETSIconMatcher.seed_from_training_data(td)
             else:
-                # WARP path: clear any session examples a prior trainer run left in the
-                # class-level state, so WARP sees pristine detection quality.
-                SETSIconMatcher.reset_ml_session()
+                # WARP path: drop bulk trainer_td seeds (those came from
+                # reading annotations.json on disk — not allowed in WARP per
+                # the CLAUDE.md WARP-vs-CORE rule). Keep 'user' (live-seeded
+                # via WARP CORE Accept callbacks this process — in-memory
+                # signal, not a disk lookup) and 'community' (HF-mirrored
+                # approved truth — explicitly allowed in WARP).
+                SETSIconMatcher.reset_ml_session(
+                    keep_origins={'user', 'community'})
             # The HF-mirrored approved-truth pool IS allowed on both paths — it's
             # maintainer-reviewed shared knowledge, not user-confirmed ground
             # truth for the current screenshot, so it gives every install the
