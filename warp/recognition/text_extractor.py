@@ -325,14 +325,51 @@ class TextExtractor:
 
     @classmethod
     def load_corrections(cls, path) -> None:
-        """Load ship_type_corrections.json from the given path."""
+        """Load ship_type_corrections.json from the given path.
+
+        Sanitizes the map at load time: drops any entry where the key is
+        already a canonical tier (e.g. 'T6-X2' -> 'T1'), where the key
+        is a canonical-tier-shaped synonym that maps to another valid
+        tier (valid→valid swap), and where the key looks like a tier
+        but its target is not a tier. These come from misannotated Ship
+        Tier crops getting voted into the global map by the central
+        trainer — they used to be blocked only at apply-time, but that
+        still let the poison sit in memory and survive future updates.
+        """
         import json
         from pathlib import Path
         try:
             data = json.loads(Path(path).read_text(encoding='utf-8'))
-            if isinstance(data, dict):
-                cls._corrections = data
-                log.debug(f'TextExtractor: loaded {len(data)} OCR corrections from {path}')
+            if not isinstance(data, dict):
+                return
+            valid_tiers = set(SHIP_TIER_VALUES)
+            clean: dict[str, str] = {}
+            dropped = 0
+            for raw, corrected in data.items():
+                if not isinstance(raw, str) or not isinstance(corrected, str):
+                    dropped += 1
+                    continue
+                if raw in valid_tiers:
+                    log.warning(
+                        f'TextExtractor: dropping poison correction '
+                        f'{raw!r} → {corrected!r} (key is already a valid tier)')
+                    dropped += 1
+                    continue
+                # If target is a tier, the source must look tier-shaped
+                # (short, no spaces). Anything else (e.g. ship-type→tier)
+                # would be a category cross-over and is rejected.
+                if corrected in valid_tiers and (
+                        ' ' in raw or len(raw) > 12):
+                    log.warning(
+                        f'TextExtractor: dropping poison correction '
+                        f'{raw!r} → {corrected!r} (non-tier key → tier value)')
+                    dropped += 1
+                    continue
+                clean[raw] = corrected
+            cls._corrections = clean
+            log.debug(
+                f'TextExtractor: loaded {len(clean)} OCR corrections '
+                f'from {path} (dropped {dropped} poison)')
         except Exception as e:
             log.warning(f'TextExtractor: could not load corrections from {path}: {e}')
 
