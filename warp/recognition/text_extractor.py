@@ -610,20 +610,50 @@ class TextExtractor:
                 return False
 
             # ── Anchor 1: tier token ──────────────────────────────────────────
+            # Two strategies per token, tried in this order:
+            #   (a) bracket-fuzzy — if the token contains '[...]', that block
+            #       is an explicit tier delimiter from the game UI. Fuzzy-snap
+            #       its content against SHIP_TIER_VALUES so OCR misreads like
+            #       'T6-Xz' (z↔2) or 'TB-X2' (B↔6) recover the full suffix.
+            #       Plain RE_TIER_LOOSE would only catch the leading 'T6' and
+            #       silently demote a T6-X2 ship to bare T6.
+            #   (b) loose regex — for non-bracketed tokens (most cases).
+            import difflib as _df
             tier_row = None
             tier_tok = None
             for r in rows:
                 for tok in r['tokens']:
-                    m = RE_TIER_LOOSE.search(tok['text'])
-                    if not m:
-                        continue
+                    matched_via_bracket = False
+                    tier_value: str | None = None
+                    consume_start = -1
+                    m_br = re.search(r'\[([A-Za-z0-9\- ]{2,8})\]', tok['text'])
+                    if m_br:
+                        cand = m_br.group(1).upper().replace(' ', '')
+                        matches = _df.get_close_matches(
+                            cand, SHIP_TIER_VALUES, n=1, cutoff=0.5)
+                        if matches:
+                            tier_value = matches[0]
+                            consume_start = m_br.start()
+                            matched_via_bracket = True
+                    if tier_value is None:
+                        m = RE_TIER_LOOSE.search(tok['text'])
+                        if not m:
+                            continue
+                        tier_value = m.group(1).upper().replace(' ', '')
+                        consume_start = m.start()
                     tier_tok = tok
                     tier_row = r
-                    result['ship_tier'] = m.group(1).upper().replace(' ', '')
+                    result['ship_tier'] = tier_value
                     result['ship_tier_bbox'] = (tok['x'], tok['y'], tok['w'], tok['h'])
-                    _slog.info(f'TextExtractor: tier={result["ship_tier"]!r} from {tok["text"]!r}')
-                    # Same-token prefix.
-                    prefix = tok['text'][:m.start()].strip().rstrip(' [')
+                    if matched_via_bracket:
+                        _slog.info(
+                            f'TextExtractor: tier={tier_value!r} from '
+                            f'bracket {m_br.group(1)!r} in {tok["text"]!r}')
+                    else:
+                        _slog.info(
+                            f'TextExtractor: tier={tier_value!r} from '
+                            f'{tok["text"]!r}')
+                    prefix = tok['text'][:consume_start].strip().rstrip(' [')
                     if len(prefix) > 4 and not _is_blacklisted(prefix):
                         result['ship_type'] = prefix
                         result['ship_type_bbox'] = (tok['x'], tok['y'], tok['w'], tok['h'])
