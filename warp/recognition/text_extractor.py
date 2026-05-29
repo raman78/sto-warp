@@ -98,6 +98,32 @@ SHIP_TIER_VALUES: list[str] = [
     'T6', 'T6-X', 'T6-X2',
 ]
 
+
+def _fuzzy_tier(cand: str) -> str | None:
+    """Fuzzy-snap an OCR token to a canonical SHIP_TIER_VALUES entry.
+
+    Returns the best canonical tier, with a "prefer higher tier" tiebreaker:
+    when several candidates score within 0.10 of the best ratio and the
+    pool's best is ≥0.6 (i.e. not pure noise), pick the canonical entry
+    with the highest list index. This rescues `'T6-XZ'` (z↔2 OCR slip)
+    from being demoted to `'T6-X'` when the user really has a `'T6-X2'`
+    ship — both score high, and erring upward matches how STO lists tier
+    upgrades. Clean inputs (`'T6'`, `'T6-X'`) score a perfect 1.0 and the
+    runner-up sits well below the 0.10 buffer, so they stay put.
+    """
+    import difflib as _df
+    scored = sorted(
+        ((v, _df.SequenceMatcher(None, cand, v).ratio()) for v in SHIP_TIER_VALUES),
+        key=lambda kv: kv[1], reverse=True,
+    )
+    if not scored or scored[0][1] < 0.5:
+        return None
+    best_ratio = scored[0][1]
+    if best_ratio < 0.6:
+        return scored[0][0]
+    pool = [v for v, r in scored if r >= best_ratio - 0.10]
+    return max(pool, key=SHIP_TIER_VALUES.index)
+
 # ROI for ship name/type block (top-left, fraction of image)
 SHIP_INFO_ROI = (0.0, 0.0, 0.34, 0.28)
 
@@ -618,7 +644,6 @@ class TextExtractor:
             #       Plain RE_TIER_LOOSE would only catch the leading 'T6' and
             #       silently demote a T6-X2 ship to bare T6.
             #   (b) loose regex — for non-bracketed tokens (most cases).
-            import difflib as _df
             tier_row = None
             tier_tok = None
             for r in rows:
@@ -629,10 +654,9 @@ class TextExtractor:
                     m_br = re.search(r'\[([A-Za-z0-9\- ]{2,8})\]', tok['text'])
                     if m_br:
                         cand = m_br.group(1).upper().replace(' ', '')
-                        matches = _df.get_close_matches(
-                            cand, SHIP_TIER_VALUES, n=1, cutoff=0.5)
-                        if matches:
-                            tier_value = matches[0]
+                        snapped = _fuzzy_tier(cand)
+                        if snapped:
+                            tier_value = snapped
                             consume_start = m_br.start()
                             matched_via_bracket = True
                     if tier_value is None:
@@ -668,20 +692,18 @@ class TextExtractor:
             # malformed inner tier. Pull bracket content out and fuzzy-snap
             # against SHIP_TIER_VALUES; treat the prefix as ship_type.
             if tier_tok is None:
-                import difflib as _df
                 for r in rows:
                     for tok in r['tokens']:
                         m_br = re.search(r'\[([A-Za-z0-9\- ]{2,8})\]', tok['text'])
                         if not m_br:
                             continue
                         cand = m_br.group(1).upper().replace(' ', '')
-                        matches = _df.get_close_matches(
-                            cand, SHIP_TIER_VALUES, n=1, cutoff=0.5)
-                        if not matches:
+                        snapped = _fuzzy_tier(cand)
+                        if not snapped:
                             continue
                         tier_tok = tok
                         tier_row = r
-                        result['ship_tier'] = matches[0]
+                        result['ship_tier'] = snapped
                         result['ship_tier_bbox'] = (
                             tok['x'], tok['y'], tok['w'], tok['h'])
                         prefix = tok['text'][:m_br.start()].strip().rstrip(' [')
@@ -691,7 +713,7 @@ class TextExtractor:
                                 tok['x'], tok['y'], tok['w'], tok['h'])
                         _slog.info(
                             f'TextExtractor: bracket-tier fuzzy '
-                            f'{m_br.group(1)!r} → {matches[0]!r} '
+                            f'{m_br.group(1)!r} → {snapped!r} '
                             f'(from {tok["text"]!r})')
                         break
                     if tier_tok:
