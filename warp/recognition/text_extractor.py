@@ -45,13 +45,15 @@ RE_NAME_PREFIX = re.compile(
 def _is_name_prefix_alone(text: str) -> bool:
     """
     Match a standalone prefix-only OCR token like 'U.S.S.', 'I.K.S.',
-    'U.s.5_', 'L.KS:', 'Z.l.KS:'. Short, no spaces, starts with a letter,
-    contains 2+ non-alphanumeric chars (dots/colons/underscores).
+    'U.s.5_', 'L.KS:', 'Z.l.KS:'. Short, no spaces, starts with a letter
+    or digit (OCR sometimes misreads 'U.S.S.' as '1.8.8.' / '0.S.S.' when
+    the ship-name font is thin), contains 2+ non-alphanumeric chars
+    (dots/colons/underscores).
     """
     s = text.strip()
     if not s or len(s) > 10 or ' ' in s:
         return False
-    if not s[0].isalpha():
+    if not s[0].isalnum():
         return False
     non_alnum = sum(1 for c in s if not c.isalnum())
     return non_alnum >= 2

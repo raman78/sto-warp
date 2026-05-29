@@ -565,6 +565,28 @@ def _parse_tier_num(tier_str: str) -> int:
     return int(m.group(1)) if m else 0
 
 
+# Token weights for ShipDB.find_class_by_token_overlap. The "strong" set is
+# what makes a ship class identifiable at a glance — every entry in
+# ship_list.json carries one of these. "Medium" tokens narrow the match
+# (faction / mission role) but on their own do not identify a class.
+_STRONG_TYPE_TOKENS: frozenset[str] = frozenset({
+    # Sourced from ship_list.json — every word that terminates a canonical
+    # class name with at least 3 occurrences. These are the "what kind of
+    # ship" anchors that locate a class in the DB.
+    'cruiser', 'battlecruiser', 'escort', 'carrier', 'dreadnought',
+    'dreadnaught', 'destroyer', 'warbird', 'raider', 'frigate',
+    'gunship', 'vessel', 'flight-deck', 'bird-of-prey', 'raptor',
+    'warship', 'juggernaut', 'spearhead', 'fighter', 'explorer',
+    'shuttle', 'runabout', 'shuttlecraft', 'freighter', 'interceptor',
+})
+_MEDIUM_TYPE_TOKENS: frozenset[str] = frozenset({
+    'fleet', 'federation', 'klingon', 'romulan', 'dominion',
+    'discovery', 'terran', 'temporal', 'intel', 'command', 'pilot',
+    'science', 'engineering', 'tactical', 'support', 'strike',
+    'heavy', 'light', 'recon', 'patrol',
+})
+
+
 def _apply_ship_and_tier_bonuses(
     profile: dict[str, int],
     ship_entry: dict | None,
@@ -668,7 +690,12 @@ class ShipDB:
                         disp_parts.append(str(v))
                 if name:
                     disp_parts.append(name)
-                disp_words = frozenset(' '.join(disp_parts).lower().split())
+                # Strip punctuation so tokens like '(T6)' match cleaned OCR 't6'.
+                disp_words = frozenset(
+                    t for t in (w.strip('.,;:()[]')
+                                for w in ' '.join(disp_parts).lower().split())
+                    if t
+                )
                 try:
                     tier = int(ship.get('tier') or 0)
                 except (TypeError, ValueError):
@@ -790,10 +817,141 @@ class ShipDB:
                             self.last_match_strategy = 'fuzzy-display'
                             return self._entry_to_profile(ship, ship_tier)
 
+        # 2e. Token-overlap fallback — handles OCR contaminated by ship_name
+        # or junk tokens (e.g. '1.8.8. Midgardsormr Personal Styx Terran
+        # Dreadnought Cruiser') where neither ocr⊆db nor db⊆ocr holds, but
+        # the tail of the OCR string still strongly identifies a class.
+        overlap_hit = self.find_class_by_token_overlap(st, ship_tier)
+        if overlap_hit:
+            entry, score, matched = overlap_hit
+            log.debug(f'ShipDB token-overlap: {ship_type!r} → '
+                      f'{entry.get("name")!r} (score={score:.1f}, '
+                      f'matched={matched})')
+            self.last_match = entry
+            self.last_match_strategy = 'token-overlap'
+            return self._entry_to_profile(entry, ship_tier)
+
         # 3. Keyword fallback from type string
         log.debug(f'ShipDB: type {ship_type!r} not found — using keyword fallback')
         self.last_match_strategy = 'keyword-fallback'
         return _type_keyword_profile(ship_type, ship_tier)
+
+    def find_class_by_token_overlap(
+        self, ship_type: str, ship_tier: str = '',
+        min_strong: int = 1, min_score: float = 3.0,
+        min_specific: int = 1,
+    ) -> tuple[dict, float, list[str]] | None:
+        """Weighted token-overlap match against the display-word index.
+
+        ShipDB is the source of truth: we score each ship by how many of
+        its display tokens appear in the OCR string. Strong type words
+        (Cruiser, Escort, Carrier, Dreadnought, …) count 3×, mid-tier
+        words (Federation, Terran, Fleet, faction tokens) count 2×, the
+        rest 1×. The last 3 OCR tokens get a 1.5× tail bonus — class /
+        type tokens cluster at the end of the in-game string, so this
+        encodes the user-stated "build from the tail" heuristic without
+        constraining word order.
+
+        Returns (entry, score, matched_tokens) when the best candidate
+        clears min_strong + min_score; otherwise None.
+        """
+        raw = (ship_type or '').lower().strip()
+        if not raw or not self._display_index:
+            return None
+        tokens = [t for t in raw.split() if t]
+        n = len(tokens)
+        if n == 0:
+            return None
+
+        # Per-token weights against position. Strip surrounding punctuation
+        # so 'Cruiser.' / 'Cruiser,' still register; reject tokens whose
+        # alphabetic body is empty (e.g. '1.8.8.' from OCR misreading USS).
+        weighted: list[tuple[str, float]] = []
+        for pos, tok in enumerate(tokens):
+            clean = tok.strip('.,;:()[]')
+            # Accept ≥2 chars — STO has 2-char class designators (D9, NX).
+            # Reject pure-numeric so OCR junk like '1.8.8.' / '188' is gone.
+            if len(clean) < 2:
+                continue
+            if not any(ch.isalpha() for ch in clean):
+                continue
+            if clean in _STRONG_TYPE_TOKENS:
+                base = 3.0
+            elif clean in _MEDIUM_TYPE_TOKENS:
+                base = 2.0
+            else:
+                base = 1.0
+            if pos >= n - 3:
+                base *= 1.5
+            weighted.append((clean, base))
+        if not weighted:
+            return None
+
+        tier_num = _parse_tier_num(ship_tier)
+        # Collect all qualifying candidates. Gates `min_strong` and
+        # `min_specific` are relaxed per-candidate: when the candidate's
+        # own disp_words contain zero strong (e.g. 'Aetherian Salvation')
+        # or zero specific tokens (e.g. 'Fleet Dreadnought Cruiser',
+        # 'Light Escort'), the corresponding OCR-side gate is dropped —
+        # otherwise the algorithm refuses to identify ships that have no
+        # token of that category in their canonical name.
+        # cand tuple: (score, strong, tier_match, -unmatched_db, matched, ship)
+        # The 4th key (negative unmatched DB tokens) prefers the candidate
+        # closest to the OCR — picks base `Sech Strike Wing Escort` over
+        # `Fleet Sech …` when OCR has no 'fleet'.
+        candidates: list[tuple[float, int, int, int, list[str], dict]] = []
+        for disp_words, dtier, ship in self._display_index:
+            score = 0.0
+            strong = 0
+            specific = 0
+            matched: list[str] = []
+            for tok, w in weighted:
+                if tok in disp_words:
+                    score += w
+                    matched.append(tok)
+                    if tok in _STRONG_TYPE_TOKENS:
+                        strong += 1
+                    elif tok not in _MEDIUM_TYPE_TOKENS:
+                        specific += 1
+            # Gates count over the ship's `name` tokens only — display
+            # metadata like `displayclass='Galaxy'` or `'NX'` is not part
+            # of the in-game string the OCR can ever read, so it must not
+            # drive specificity requirements. Strip parens/brackets to
+            # match OCR tokenization — '(T6)' in name → 't6' token.
+            raw_name = ship.get('name') or ''
+            if isinstance(raw_name, list):
+                raw_name = ' '.join(raw_name)
+            name_words = {w.strip('.,;:()[]')
+                          for w in raw_name.lower().split()}
+            name_words.discard('')
+            name_strong = sum(
+                1 for w in name_words if w in _STRONG_TYPE_TOKENS)
+            name_specific = sum(
+                1 for w in name_words
+                if w not in _STRONG_TYPE_TOKENS
+                and w not in _MEDIUM_TYPE_TOKENS)
+            need_strong   = min_strong   if name_strong   > 0 else 0
+            need_specific = min_specific if name_specific > 0 else 0
+            if (strong < need_strong or score < min_score
+                    or specific < need_specific):
+                continue
+            tier_match = 1 if (tier_num and dtier == tier_num) else 0
+            unmatched_db = len(disp_words) - len(matched)
+            candidates.append(
+                (score, strong, tier_match, -unmatched_db, matched, ship))
+
+        if not candidates:
+            return None
+        candidates.sort(key=lambda c: c[:4], reverse=True)
+        best = candidates[0]
+        if len(candidates) >= 2:
+            # Tie = identical (score, strong, tier_match, unmatched_db).
+            # All four ranking keys equal → genuine ambiguity in the DB
+            # (e.g. multiple 'Dyson Science Destroyer' variants); refuse
+            # so keyword-fallback emits a generic type profile.
+            if best[:4] == candidates[1][:4]:
+                return None
+        return best[5], best[0], best[4]
 
     def find_class_by_candidates(
         self, candidates: list[str], cutoff: float = 0.85,
