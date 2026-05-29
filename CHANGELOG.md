@@ -15,6 +15,14 @@ details live in the git history.
   the in-game class list using token overlap. A name garbled by OCR
   artefacts (extra symbols, missing letters) can still resolve to
   the right class as long as enough significant words survive.
+- A Start Menu entry is now created on Windows on the first launch,
+  matching the behaviour that already existed on Linux. The bundled
+  icon is converted into a Windows `.ico` and the shortcut is
+  placed under *Start ▸ Programs ▸ sto-warp*, where it can be pinned
+  to the taskbar or searched for from the Start menu.
+- The Windows installer script now installs Python 3.14 (which
+  sto-warp requires) instead of 3.12, so a fresh winget-driven
+  install completes without a Python-version error.
 
 ### Changed
 - Ship Tier OCR is more forgiving with misread bracket contents.

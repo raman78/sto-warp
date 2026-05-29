@@ -59,14 +59,21 @@ def _install_id() -> str:
 
 
 def install_desktop_entry(force: bool = False) -> Path | None:
-    """Install (or refresh) the .desktop file. Returns the path written, or None.
+    """Install (or refresh) the menu entry. Returns the path written, or None.
+
+    On Linux, drops a `.desktop` file in the XDG applications folder.
+    On Windows, delegates to `windows_shortcut.install_windows_shortcut`
+    to drop a Start Menu `.lnk`.
 
     Silent no-op when:
-      - we're not on Linux
+      - we're on an unsupported platform (macOS, BSD, …)
       - the `sto-warp` binary cannot be located (e.g. running directly via
         `python -m warp.cli` without installing the project)
-      - the file already exists and `force=False`
+      - the entry already exists and `force=False`
     """
+    if sys.platform == 'win32':
+        from warp.gui.windows_shortcut import install_windows_shortcut
+        return install_windows_shortcut(force=force)
     if sys.platform != 'linux':
         return None
 

@@ -25,7 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser('launcher', help='Launch the combined WARP + WARP CORE tabbed window (default).')
     sub.add_parser('gui', help='Launch the standalone WARP recognition window.')
     sub.add_parser('warp-core', help='Launch the WARP CORE trainer window.')
-    sub.add_parser('install-desktop', help='Install or refresh the Linux .desktop entry.')
+    sub.add_parser('install-desktop',
+                   help='Install or refresh the menu entry '
+                        '(Linux .desktop / Windows Start Menu .lnk).')
 
     p_mig = sub.add_parser(
         'migrate-from-sets-warp',
@@ -63,8 +65,9 @@ def main(argv: list[str] | None = None) -> int:
         from warp.gui.desktop_install import install_desktop_entry
         path = install_desktop_entry(force=True)
         if path is None:
-            print('install-desktop: no .desktop file written '
-                  '(non-Linux, or `sto-warp` not on PATH).')
+            print('install-desktop: no menu entry written '
+                  '(unsupported platform, `sto-warp` not on PATH, or '
+                  'shortcut creation blocked).')
             return 1
         print(f'install-desktop: wrote {path}')
         return 0

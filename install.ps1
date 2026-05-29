@@ -22,8 +22,8 @@ if (-not $pythonInstalled) {
         Write-Host "Error: winget is not installed. Please install Python manually from python.org" -ForegroundColor Red
         exit 1
     }
-    # Install Python (latest 3.x)
-    winget install --id Python.Python.3.12 --source winget --accept-package-agreements --accept-source-agreements
+    # Install Python 3.14 (sto-warp requires >=3.14)
+    winget install --id Python.Python.3.14 --source winget --accept-package-agreements --accept-source-agreements
     
     # Reload environment variables so Python is available in current session
     $env:Path = [System.Environment]::GetEnvironmentVariable("Path","Machine") + ";" + [System.Environment]::GetEnvironmentVariable("Path","User")

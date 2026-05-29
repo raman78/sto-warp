@@ -29,9 +29,35 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/raman78/sto-warp/main/
 ```
 
 **What this does:**
-1. Checks if Python is installed. If not, installs it via Windows Package Manager (`winget`).
+1. Checks if Python is installed. If not, installs **Python 3.14** via Windows Package Manager (`winget`).
 2. Checks if `pipx` is installed. If not, installs it.
 3. Installs `sto-warp` globally so you can launch it from anywhere.
+
+**Windows tips and common issues**
+
+- **PowerShell execution policy.** If running `install.ps1` fails
+  with *"running scripts is disabled on this system"*, run the
+  install line from an elevated PowerShell as
+  `PowerShell -ExecutionPolicy Bypass -File install.ps1` instead.
+  The policy only blocks the local script — pipx itself is not
+  affected.
+- **`sto-warp` not recognised after install.** pipx places the
+  shim in `%USERPROFILE%\.local\bin\sto-warp.exe`. The installer
+  runs `pipx ensurepath`, but the new `PATH` only takes effect
+  in **a freshly opened terminal** — close and reopen PowerShell
+  or Windows Terminal.
+- **Python version mismatch.** sto-warp requires Python 3.14+.
+  If an older Python is already on the system, winget may install
+  3.14 side-by-side. Verify with `py -3.14 --version`. If `pipx`
+  picked the wrong interpreter, force the right one with
+  `pipx install --python python3.14 sto-warp`.
+- **Start Menu shortcut.** sto-warp adds itself to the Start Menu
+  on first launch — see the *Desktop launcher icon* section below.
+  No extra step is needed.
+- **Windows Defender / SmartScreen on first launch.** Because
+  `sto-warp.exe` is generated locally by pipx (not code-signed by
+  Microsoft), SmartScreen may show *"Windows protected your PC"*.
+  Click **More info → Run anyway**. This appears once.
 
 ---
 
@@ -67,34 +93,46 @@ places its shims) is probably missing from `PATH`. Run
 
 ---
 
-## 🖥️ Desktop launcher icon (Linux)
+## 🖥️ Desktop launcher icon
 
-On Linux, sto-warp adds a clickable menu entry for itself so it can
-be launched from KDE Plasma, GNOME Activities, KRunner, XFCE and any
-other XDG-compliant menu — no terminal needed once it's there.
+sto-warp adds a clickable menu entry for itself so it can be
+launched from a graphical menu instead of the terminal.
 
-**When it's created:** the first time the application is started
-from the terminal (`sto-warp` or `sto-warp launcher`), the program
-writes a `.desktop` entry to
-`~/.local/share/applications/` and copies its icon to
-`~/.local/share/icons/sto-warp.png`. From then on, the menu entry
-**"sto-warp"** is available in your application launcher.
+**Linux.** The first time the application is started from the
+terminal (`sto-warp` or `sto-warp launcher`), the program writes a
+`.desktop` entry to `~/.local/share/applications/` and copies its
+icon to `~/.local/share/icons/sto-warp.png`. From then on, the entry
+**"sto-warp"** appears in KDE Plasma, GNOME Activities, KRunner,
+XFCE and any other XDG-compliant menu.
+
+**Windows.** The first time `sto-warp` is started from a terminal,
+a Start Menu shortcut is written to
+`%APPDATA%\Microsoft\Windows\Start Menu\Programs\sto-warp-*.lnk`
+and the bundled PNG icon is converted to a multi-size `.ico` cached
+in `%APPDATA%\warp\icons\sto-warp.ico`. The shortcut shows up in
+the Start menu and in Windows search, and can be pinned to the
+taskbar from there. PowerShell is required for shortcut creation;
+if it is blocked by a corporate execution policy the launcher logs
+a warning and continues without the shortcut — a shortcut can then
+be created manually (right-click `sto-warp.exe` in
+`%USERPROFILE%\.local\bin\` → **Send to → Desktop (create shortcut)**,
+then move the resulting `.lnk` into the Start Menu Programs folder
+above).
 
 **Refreshing or re-installing the entry.** If the menu entry was
 deleted, the icon vanished after a theme change, or sto-warp was
-moved to a different Python environment and the old `Exec=` path
+moved to a different Python environment and the old target path
 became stale, run:
 
 ```bash
 sto-warp install-desktop
 ```
 
-This rewrites the `.desktop` file with the current binary path and
-re-copies the icon. It is also safe to run after a `pipx upgrade`.
+This rewrites the entry with the current binary path and refreshes
+the icon. It is safe to re-run after every `pipx upgrade`.
 
-**macOS and Windows.** The Linux `.desktop` mechanism does not apply
-on macOS or Windows; on those systems sto-warp is launched from the
-terminal or the Windows Start menu shortcut that `pipx` creates.
+**macOS.** No native menu entry is created on macOS yet. Launch
+from the terminal with `sto-warp`.
 
 ---
 
