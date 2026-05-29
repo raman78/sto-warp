@@ -24,7 +24,10 @@ from PySide6.QtGui import QFont, QAction, QColor, QIcon, QStandardItemModel, QSt
 
 from warp import userdata
 from warp.trainer.annotation_widget import AnnotationWidget
-from warp.trainer.training_data      import TrainingDataManager, AnnotationState
+from warp.trainer.training_data      import (
+    TrainingDataManager, AnnotationState, NON_ICON_SLOTS, SINGLE_INSTANCE_SLOTS,
+    TEXT_LEARNING_SLOTS, VIRTUAL_ITEM_NAMES,
+)
 from warp.style import (
     apply_dark_style, primary_btn_style, secondary_btn_style,
     warning_btn_style, danger_btn_style, toggle_yellow_btn_style,
