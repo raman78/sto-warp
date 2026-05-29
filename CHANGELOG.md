@@ -8,6 +8,56 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [Unreleased]
+
+### Added
+- Ship-class matching now compares the OCR-cleaned ship type against
+  the in-game class list using token overlap. A name garbled by OCR
+  artefacts (extra symbols, missing letters) can still resolve to
+  the right class as long as enough significant words survive.
+
+### Changed
+- Ship Tier OCR is more forgiving with misread bracket contents.
+  When the tier reads as something like `[T6-Xz]` (a `2` misread as
+  `z`) or `[TB-X2]` (a `6` misread as `B`), the result is now snapped
+  to the closest real tier, preferring the higher tier when two
+  canonical values are equally plausible. Clean tier readings are
+  unaffected.
+- Tier corrections that would silently demote a higher tier to a
+  lower one (for example `T6-X2 → T1`) are now rejected both when
+  the community model is downloaded and when it is loaded locally.
+  Previous releases caught these only at apply time, which still
+  let them pollute the in-memory correction map.
+- Decisions made during the training-data review are remembered.
+  After running the cleanup tool (see below), pressing **N (keep)**
+  on a flagged crop marks that crop as user-reviewed in the local
+  training data, so the same warning will not be raised again on
+  the next start.
+
+### Fixed
+- Several crashes on startup that surfaced after the recent
+  internal trainer rework — missing shortcuts for slot lists, ship
+  tier values and the bridge-officer label helper. The trainer now
+  opens cleanly on a fresh install.
+- A long-standing dormant bug in the **bright-and-colourful poison
+  guard** that protects training data: the guard was silently
+  returning false in some configurations because of a missing
+  import. Detection of mislabelled empty/inactive slots that
+  actually contain colourful equipment now works again.
+
+### Tools
+- New utility for cleaning the local training data:
+
+  ```
+  python -m warp.tools.scrub_training_data --review
+  ```
+
+  Walks through every confirmed crop that is labelled
+  **empty / inactive** but visually looks like a real, colourful
+  icon. Each crop is shown 6× scaled with **Y = delete**,
+  **N = keep**, **Q = quit**. Kept crops are persistently marked as
+  user-reviewed so they will not show up on later runs.
+
 ## [1.0.9] — 2026-05-28
 
 ### Added

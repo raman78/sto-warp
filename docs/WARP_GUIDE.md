@@ -376,6 +376,8 @@ Example:
 
 If both bboxes are confirmed correctly, WARP will extract the ship class from Ship Type and the upgrade tier from Ship Tier independently.
 
+Tier OCR is tolerant of common misreads in the bracket. Variants such as `[T6-Xz]` (the `2` misread as `z`) or `[TB-X2]` (the `6` misread as `B`) are snapped to the closest real tier. When two tiers are equally plausible, the higher one is preferred — a single missing character in the OCR will not silently demote a `T6-X2` ship to plain `T6`. Clean readings are left untouched.
+
 | Action | How |
 |--------|-----|
 | Zoom in / out | **Ctrl + scroll wheel** (1× – 6×, anchored to cursor) |
@@ -752,4 +754,29 @@ This appears when two confirmed items overlap by more than 70% in the same scree
 - Make sure you have confirmed items from multiple different screenshots, not just one.
 - If you only have a handful of unique items, accuracy metrics may fluctuate — this is normal with small datasets.
 - More data always helps. Confirm items from 5–10 screenshots before training for the best results.
+
+### Repeated "POISON skip" or "looks colourful" warnings at startup
+
+On every start, sto-warp inspects the local training data and flags
+crops that are labelled **empty** or **inactive** but visually look
+like a real, colourful icon. These are usually genuine mistakes
+left over from earlier auto-accepts, but a few real icons (rare
+console arts, bright vanity items) can trip the heuristic.
+
+To go through the flagged crops one by one:
+
+```
+python -m warp.tools.scrub_training_data --review
+```
+
+Each crop is shown 6× scaled with the current label. Press **Y** to
+delete a real mistake, **N** to keep a crop that is correct as
+labelled, or **Q** to quit. Crops kept with **N** are remembered —
+the same crop will not appear in the warnings or in the next review
+run.
+
+If the noise should be gone for good without inspecting anything,
+re-run the tool with `--apply` to delete every flagged crop in one
+pass. This is destructive, so prefer the interactive `--review` flow
+when in doubt.
 
