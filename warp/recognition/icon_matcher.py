@@ -893,7 +893,12 @@ class SETSIconMatcher:
                 # Poison guard: virtual label but colourful crop → skip.
                 # Prevents self-matching session pixel-perfectly on a real icon
                 # that was mislabeled __empty__/__inactive__ by auto-accept.
-                if name in VIRTUAL_LABELS and _virtual_crop_looks_real(img):
+                # `poison_reviewed=True` means the user already inspected the
+                # crop via `scrub_training_data --review` and confirmed the
+                # virtual label is correct — trust them and load it.
+                if (name in VIRTUAL_LABELS
+                        and not ann.get('poison_reviewed')
+                        and _virtual_crop_looks_real(img)):
                     log.warning(
                         f'WARP: training-seed POISON skip — '
                         f'{crop_path.name} labeled {name!r} but looks colourful '

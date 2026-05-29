@@ -146,6 +146,9 @@ def find_virtual_label_poison(training_dir: Path,
             name = (ann.get('name') or '').strip()
             if name not in VIRTUAL_LABELS:
                 continue
+            # Skip entries the user already inspected and confirmed OK.
+            if ann.get('poison_reviewed'):
+                continue
             crop_path = _crop_path_for_ann(training_dir, ann)
             if crop_path is None:
                 continue
@@ -213,13 +216,20 @@ def find_pixel_conflicts(training_dir: Path, data: dict) -> list[dict]:
     return suspects
 
 
-def review_suspects(suspects: list[dict]) -> list[dict]:
+def review_suspects(suspects: list[dict],
+                    training_dir: Path | None = None,
+                    data: dict | None = None) -> list[dict]:
     """Interactive per-crop review using PySide6 (pipx venv ships headless
     OpenCV, so cv2.imshow is unavailable). Shows each crop scaled 6× with
     label + reason; user presses Y=delete, N=keep, Q/Esc=quit. Returns the
-    subset marked for deletion."""
+    subset marked for deletion.
+
+    When `training_dir` and `data` are provided, kept (N) entries are
+    persistently marked with `poison_reviewed=True` in annotations.json
+    so the runtime poison guard and future scrub runs ignore them."""
     if not suspects:
         return []
+    kept_ann_ids: list[str] = []
 
     from PySide6.QtCore import Qt
     from PySide6.QtGui import QImage, QPixmap, QKeyEvent
@@ -293,10 +303,25 @@ def review_suspects(suspects: list[dict]) -> list[dict]:
         if d == 'y':
             to_delete.append(s); print('  → marked for DELETE\n')
         elif d == 'n':
-            print('  → keep\n')
+            if s.get('ann_id'):
+                kept_ann_ids.append(s['ann_id'])
+            print('  → keep (marked poison_reviewed)\n')
         else:
             print('  → quit review (decisions so far retained)\n')
             break
+
+    if kept_ann_ids and training_dir is not None and data is not None:
+        kept_set = set(kept_ann_ids)
+        touched = 0
+        for anns in data.values():
+            for ann in anns:
+                if ann.get('ann_id') in kept_set and not ann.get('poison_reviewed'):
+                    ann['poison_reviewed'] = True
+                    touched += 1
+        if touched:
+            _save_annotations(training_dir, data)
+            print(f'Persisted poison_reviewed=True on {touched} annotation(s).')
+
     return to_delete
 
 
@@ -393,7 +418,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.review:
         print('\nEntering interactive review — y=DELETE  n=keep  q=quit')
-        suspects = review_suspects(suspects)
+        suspects = review_suspects(suspects, training_dir=training_dir, data=data)
         print(f'\nReview done — {len(suspects)} crop(s) marked for deletion.')
         if not suspects:
             return 0
