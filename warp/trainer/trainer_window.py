@@ -49,6 +49,7 @@ from warp.trainer.workers import (
     ScreenTypeDetectorWorker, OCRWorker, MatchWorker, RecognitionWorker,
 )
 from warp.recognition.text_extractor import SHIP_TIER_VALUES
+from warp.recognition.boff_keys      import pretty_slot as _pretty_slot
 
 log = logging.getLogger(__name__)
 

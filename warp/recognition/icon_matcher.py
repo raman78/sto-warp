@@ -83,6 +83,7 @@ def _virtual_crop_looks_real(crop_bgr) -> bool:
     Mirrors warp.tools.scrub_training_data heuristic so the seed-time filter
     and the offline scrub agree."""
     try:
+        import cv2
         hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
         s = hsv[:, :, 1]
         v = hsv[:, :, 2]
