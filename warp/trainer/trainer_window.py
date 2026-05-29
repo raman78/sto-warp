@@ -45,6 +45,7 @@ from warp.trainer._ui_utils import (
 from warp.trainer.workers import (
     ScreenTypeDetectorWorker, OCRWorker, MatchWorker, RecognitionWorker,
 )
+from warp.recognition.text_extractor import SHIP_TIER_VALUES
 
 log = logging.getLogger(__name__)
 
