@@ -8,22 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [Unreleased]
+## [1.0.10] — 2026-05-30
 
 ### Added
-- Ship-class matching now compares the OCR-cleaned ship type against
-  the in-game class list using token overlap. A name garbled by OCR
-  artefacts (extra symbols, missing letters) can still resolve to
-  the right class as long as enough significant words survive.
-- The Screenshots list in WARP CORE has a new **Filter by filename**
-  box above the list. Typing narrows the visible files in real time;
-  the ✕ button clears the filter.
-- The WARP Results tree now has a right-click menu on every row:
-  **Copy filename**, **Copy full path** and (in the launcher window)
-  **Open in WARP CORE** — the last action jumps straight to the
-  WARP CORE tab with the chosen screenshot loaded, ready to be
-  corrected.
-- Confirmed corrections are now fed back into the recognition pipeline
+- A Start Menu entry is now created on Windows on the first launch,
+  matching the behaviour that already existed on Linux. The shortcut
+  is placed under *Start ▸ Programs ▸ sto-warp*, where it can be
+  pinned to the taskbar or searched for from Start.
+- Confirmed corrections are fed back into the recognition pipeline
   immediately, in the same session. A misrecognised icon that was
   just fixed will match correctly the next time it appears, without
   waiting for the next community-model download.
@@ -32,56 +24,38 @@ details live in the git history.
   training set) or **[SESSION]** (matches accumulated during the
   current run) — so it is easier to see which source carried a
   given result.
-- A Start Menu entry is now created on Windows on the first launch,
-  matching the behaviour that already existed on Linux. The bundled
-  icon is converted into a Windows `.ico` and the shortcut is
-  placed under *Start ▸ Programs ▸ sto-warp*, where it can be pinned
-  to the taskbar or searched for from the Start menu.
-- The Windows installer script now installs Python 3.14 (which
-  sto-warp requires) instead of 3.12, so a fresh winget-driven
-  install completes without a Python-version error.
+- The Screenshots list in WARP CORE has a new **Filter by filename**
+  box above the list. Typing narrows the visible files in real time;
+  the ✕ button clears the filter.
+- The WARP Results tree has a right-click menu on every row:
+  **Copy filename**, **Copy full path** and (in the launcher window)
+  **Open in WARP CORE**, which jumps straight to the trainer tab
+  with the chosen screenshot loaded.
+- Ship-class matching tolerates OCR-garbled type names. A class name
+  with extra symbols or missing letters still resolves to the right
+  in-game class as long as enough significant words survive.
 
 ### Changed
 - Ship Tier OCR is more forgiving with misread bracket contents.
   When the tier reads as something like `[T6-Xz]` (a `2` misread as
-  `z`) or `[TB-X2]` (a `6` misread as `B`), the result is now snapped
+  `z`) or `[TB-X2]` (a `6` misread as `B`), the result is snapped
   to the closest real tier, preferring the higher tier when two
   canonical values are equally plausible. Clean tier readings are
   unaffected.
 - Tier corrections that would silently demote a higher tier to a
   lower one (for example `T6-X2 → T1`) are now rejected both when
   the community model is downloaded and when it is loaded locally.
-  Previous releases caught these only at apply time, which still
-  let them pollute the in-memory correction map.
-- Decisions made during the training-data review are remembered.
-  After running the cleanup tool (see below), pressing **N (keep)**
-  on a flagged crop marks that crop as user-reviewed in the local
-  training data, so the same warning will not be raised again on
-  the next start.
-
-### Fixed
-- Several crashes on startup that surfaced after the recent
-  internal trainer rework — missing shortcuts for slot lists, ship
-  tier values and the bridge-officer label helper. The trainer now
-  opens cleanly on a fresh install.
-- A long-standing dormant bug in the **bright-and-colourful poison
-  guard** that protects training data: the guard was silently
-  returning false in some configurations because of a missing
-  import. Detection of mislabelled empty/inactive slots that
-  actually contain colourful equipment now works again.
-
-### Tools
-- New utility for cleaning the local training data:
-
-  ```
-  python -m warp.tools.scrub_training_data --review
-  ```
-
-  Walks through every confirmed crop that is labelled
-  **empty / inactive** but visually looks like a real, colourful
-  icon. Each crop is shown 6× scaled with **Y = delete**,
-  **N = keep**, **Q = quit**. Kept crops are persistently marked as
-  user-reviewed so they will not show up on later runs.
+  A bad correction can no longer slip in and pollute the running
+  session.
+- Decisions made in the training-data cleanup tool are remembered.
+  Pressing **N (keep)** on a flagged crop during a
+  `python -m warp.tools.scrub_training_data --review` session
+  persistently marks that crop as reviewed, so the matching startup
+  warning will not appear again.
+- The Windows installer script installs Python 3.14 (which sto-warp
+  requires) instead of an older version, so a fresh winget-driven
+  install completes without a Python-version error on a clean
+  Windows box.
 
 ## [1.0.9] — 2026-05-28
 
