@@ -2416,6 +2416,11 @@ class WarpCoreWindow(QMainWindow):
                     
                     crop = img[y:y+h, x:x+w]
                     if crop.size > 0:
+                        # Refresh the cached crop so a later _on_accept (or the
+                        # _contribute below for already-confirmed rows) sends
+                        # the corrected crop to the backend, not the stale
+                        # pre-edit one.
+                        ri['crop_bgr'] = crop.copy()
                         old_name = ri.get('name', '')
                         old_conf = ri.get('conf', 0.0)
                         # Constrain matcher to names valid for the current slot
@@ -2451,7 +2456,12 @@ class WarpCoreWindow(QMainWindow):
                             # Refresh visual row but keep confirmed status and user-selected name
                             self._review_list.takeItem(row)
                             self._add_review_row(ri['name'], ri['slot'], conf, confirmed=True)
-                            
+                            # Bbox-only correction on a confirmed row: resend
+                            # the (better) crop with the user-confirmed name
+                            # so the backend gets the improved training signal.
+                            if ri.get('slot', '') not in NON_ICON_SLOTS and ri.get('name'):
+                                self._contribute(ri, ri['name'])
+
                         self._review_list.insertItem(row, self._review_list.takeItem(self._review_list.count()-1))
                         self._review_list.setCurrentRow(row)
             except Exception as e:
