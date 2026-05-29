@@ -286,6 +286,8 @@ The **WARP CORE — Trainer** tab in the launcher has three panels.
 
 ### Left panel — Screenshots list
 
+Above the list, a **Filter by filename…** field narrows the list in real time. Typing a few letters of a filename hides everything that does not match — useful when an import folder holds dozens of screenshots and only one needs revisiting. The little ✕ inside the field clears the filter.
+
 Lists every screenshot file in the folder. Each entry shows the detected screen type (e.g. *Space Equipment*, *Traits*, *Boffs*) and a **checkbox**:
 
 - **Checked (✓)** — screen type confirmed by you; Detect Screen Types will not overwrite it
@@ -298,6 +300,10 @@ Lists every screenshot file in the folder. Each entry shows the detected screen 
 Auto-detected types start unchecked. If the classifier guesses wrong, change the type in the dropdown and it will be confirmed immediately. Un-ticking a checkbox removes the manual override so the classifier can re-classify that file next time.
 
 Click a filename to load it into the canvas.
+
+#### Right-click — change screen type
+
+Right-clicking a filename in the list opens a popup menu with every supported screen type (*Space Equipment*, *Ground Equipment*, *Space Traits*, *Ground Traits*, *Bridge Officers*, *Specialisations*, *Unknown*). The current type is shown as ticked. Picking a different one immediately reclassifies that screenshot, ticks the confirmation checkbox and clears the cached recognition so the next Auto-Detect runs against the corrected type. Faster than reaching for the Screen Type dropdown above the canvas when several files need re-typing in a row.
 
 #### Screenshot colour coding
 
@@ -389,6 +395,11 @@ Below the canvas is the **Annotate panel**:
 - **Slot** — dropdown to select the slot type for the current box
 - **Item** — text field with autocomplete; type the item name
 - **Accept** — confirms the item (also triggered by Enter)
+
+The **Item** input adapts to the slot:
+- **Ship Tier** — the field becomes a dropdown limited to the canonical tier values (*T1, T2, … T6-X, T6-X2*). Picking one accepts the bbox in one click.
+- **Ship Type** — the field becomes a searchable dropdown of every ship class in the in-game roster. Type any fragment of the name (case-insensitive, matches anywhere in the string — e.g. *"intel"* finds every Intelligence ship) and pick from the popup, or finish typing and press Enter to accept. Useful when the exact ship class is hard to recall.
+- **All other slots** — plain text input with item-name autocomplete scoped to the slot type.
 
 ### Right panel — Recognition Review
 
@@ -538,6 +549,8 @@ With an item selected:
 - Click **Accept** in the right panel or bottom panel.
 
 A confirmed item turns green in the review list and on the canvas.
+
+Each confirmation also feeds the recognition pipeline **immediately**, before the crop has been uploaded to the community dataset. The next Auto-Detect run — even on a different screenshot in the same session — already benefits from the correction: a misrecognised icon that has just been fixed will match correctly the second time it appears. The Detection logs tag each match with its origin (**[USER]** for the just-confirmed correction, **[COMMUNITY]** for the shared model, **[WARP CORE]** for the local training set, **[SESSION]** for matches accumulated during the current run), so it is easy to see which sources carried a given result.
 
 ### Auto-accept
 
@@ -725,6 +738,14 @@ when the name is a near-miss (e.g. *"Legondary Bortasqu'"* instead of
 *"Legendary Bortasqu'"*). Open the screenshot in WARP CORE and confirm a
 **Ship Name / Ship Type / Ship Tier** bbox manually; on the next recognition
 run the confirmed text wins.
+
+A ship class with noisy OCR (extra symbols, dropped letters, suffix garbage)
+no longer has to match the class list character-for-character. The matcher
+compares the significant words from the OCR text against every known class
+name and picks the one with the strongest word overlap, so a partial read
+like *"Flet Tempral Sci Vssel"* still resolves to *"Fleet Temporal Science
+Vessel"*. If the result is still wrong, the Ship Type field in the Annotate
+panel offers a searchable dropdown over the full roster (see section 4).
 
 ### Recognition accuracy is low on first use
 

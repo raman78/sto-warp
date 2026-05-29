@@ -15,6 +15,18 @@ details live in the git history.
   the in-game class list using token overlap. A name garbled by OCR
   artefacts (extra symbols, missing letters) can still resolve to
   the right class as long as enough significant words survive.
+- The Screenshots list in WARP CORE has a new **Filter by filename**
+  box above the list. Typing narrows the visible files in real time;
+  the ✕ button clears the filter.
+- Confirmed corrections are now fed back into the recognition pipeline
+  immediately, in the same session. A misrecognised icon that was
+  just fixed will match correctly the next time it appears, without
+  waiting for the next community-model download.
+- The Detection logs now tag each recognised item with its match
+  origin — **[USER]**, **[COMMUNITY]**, **[WARP CORE]** (local
+  training set) or **[SESSION]** (matches accumulated during the
+  current run) — so it is easier to see which source carried a
+  given result.
 - A Start Menu entry is now created on Windows on the first launch,
   matching the behaviour that already existed on Linux. The bundled
   icon is converted into a Windows `.ico` and the shortcut is
