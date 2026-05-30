@@ -288,9 +288,15 @@ class AnnotationWidget(QWidget):
         'confirmed': QColor( 60, 220, 100, 220),
         'new':       QColor(220,  80,  80, 220),
     }
-    # Auto-confirmed (computer-confirmed via auto-accept threshold) — yellow
-    # so the user can distinguish them at a glance from green user-confirmed.
-    _AUTO_CONFIRMED_COLOR = QColor(255, 200, 0, 220)
+    # Auto-confirmed (computer-confirmed via auto-accept threshold) — light
+    # blue so the user can distinguish them at a glance from green user-
+    # confirmed without competing visually with the yellow (ACCENT)
+    # selection highlight.
+    _AUTO_CONFIRMED_COLOR = QColor(92, 191, 255, 220)
+    # Selection highlight — ACCENT (#c59129) matches the Export to SETS JSON
+    # button and the review-list selected-row background so the picked
+    # bbox stands out from per-state colors below.
+    _SELECTED_COLOR = QColor(0xc5, 0x91, 0x29, 230)
     # Community conflict — orange. User confirmed locally, but current
     # detector disagrees; needs re-verification before becoming confirmed again.
     _CONFLICT_COLOR = QColor(255, 154,  60, 220)
@@ -313,10 +319,14 @@ class AnnotationWidget(QWidget):
             base_color = self._AUTO_CONFIRMED_COLOR
         else:
             base_color = self._STATE_COLOR.get(state, QColor(200, 200, 200, 180))
-        if highlighted and not selected:
+        if selected:
+            # Selected bbox overrides per-state color with ACCENT (yellow)
+            # so the active pick is unmistakable next to neighboring rows.
+            color = self._SELECTED_COLOR
+            pw    = SELECTED_PEN_WIDTH + 1
+            style = Qt.PenStyle.DashLine
+        elif highlighted:
             color = base_color; pw = SELECTED_PEN_WIDTH + 1; style = Qt.PenStyle.DashLine
-        elif selected:
-            color = base_color; pw = SELECTED_PEN_WIDTH; style = Qt.PenStyle.DashLine
         else:
             color = base_color; pw = DRAW_PEN_WIDTH; style = Qt.PenStyle.SolidLine
         pen = QPen(color, pw, style); painter.setPen(pen); painter.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 25))); rect = self._img_to_screen_rect(bbox); painter.drawRect(rect)

@@ -16,10 +16,10 @@ from PySide6.QtWidgets import (
     QProgressBar, QToolBar, QStatusBar, QMessageBox,
     QInputDialog, QSizePolicy, QFrame, QScrollArea,
     QAbstractItemView, QCompleter, QMenu, QPlainTextEdit,
-    QCheckBox, QDoubleSpinBox, QTabWidget,
+    QCheckBox, QDoubleSpinBox, QTabWidget, QTreeWidgetItem,
 )
 from PySide6.QtCore import Qt, QSettings, QSortFilterProxyModel, QSize, QTimer, Signal
-from PySide6.QtGui import QFont, QAction, QColor, QIcon, QStandardItemModel, QStandardItem, QKeySequence, QShortcut
+from PySide6.QtGui import QFont, QAction, QBrush, QColor, QIcon, QStandardItemModel, QStandardItem, QKeySequence, QShortcut
 
 
 from warp import userdata
@@ -43,7 +43,8 @@ from warp.trainer.constants import (
     FIXED_VALUE_SLOTS, ALL_SLOTS, SPECIALIZATION_NAMES, _SHIP_INFO_SLOTS,
 )
 from warp.trainer._ui_utils import (
-    _ColorPreservingDelegate, _get_user_icon, _get_ml_icon, _log_match_summary,
+    _ColorPreservingDelegate, _ReviewListAdapter,
+    _get_user_icon, _get_ml_icon, _log_match_summary,
 )
 from warp.trainer.workers import (
     ScreenTypeDetectorWorker, OCRWorker, MatchWorker, RecognitionWorker,
@@ -365,13 +366,26 @@ class WarpCoreWindow(QMainWindow):
         sep.setFrameShape(QFrame.Shape.HLine)
         sep.setStyleSheet(f'color:{BC};')
         pl.addWidget(sep)
-        self._review_list = QListWidget()
+        # 5-column flat tree (Slot / Idx / Item / Conf [%] / Status) wearing
+        # a QListWidget-compatible API so the dozens of `_review_list.item(N)`,
+        # `setCurrentRow`, `takeItem` call sites scattered through this
+        # window keep working unchanged.
+        self._review_list = _ReviewListAdapter()
         self._review_list.setItemDelegate(_ColorPreservingDelegate(self._review_list))
-        self._review_list.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Selected row picks up the amber accent (matches WARP's Results
+        # view + Export to SETS JSON button) so the user can spot the
+        # active row at a glance regardless of per-state foreground.
+        self._review_list.setStyleSheet(
+            f'QTreeWidget::item:selected {{ '
+            f'background-color: {ACCENT}; color: #1a1a1a; }}'
+        )
         self._review_list.currentRowChanged.connect(self._on_review_row_changed)
         self._review_list.installEventFilter(self)
-        # ann_widget event filter set after creation in _make_center_panel
-        self._review_list.itemClicked.connect(self._on_review_item_clicked)
+        # ann_widget event filter set after creation in _make_center_panel.
+        # QTreeWidget.itemClicked passes (item, col); the old handler only
+        # cares about the item — wrap to drop the column.
+        self._review_list.itemClicked.connect(
+            lambda it, _col: self._on_review_item_clicked(it))
         pl.addWidget(self._review_list, 1)
         self._review_summary = QLabel('')
         self._review_summary.setStyleSheet(f'color:{MFG};font-size:10px;')
@@ -1412,73 +1426,158 @@ class WarpCoreWindow(QMainWindow):
         # before OCR finished), re-run OCR now so the name is filled in.
         self._ocr_empty_non_icon_items()
 
-    def _add_review_row(self, name: str, slot: str, conf: float, confirmed: bool = False, cross_check_failed: bool = False, auto_confirmed: bool = False, conflict_disk_name: str = ''):
-        is_virtual = name in VIRTUAL_ITEM_NAMES
-        slot_disp = _pretty_slot(slot)
+    # ── Review list (5-column QTreeWidget) helpers ─────────────────────
+    #
+    # Columns: 0=Slot, 1=Idx (in-slot ordinal), 2=Item, 3=Conf, 4=Status.
+    # State color is applied to every column so the row reads uniformly.
+    # The slot is stored in col-0 UserRole so duplicate slots (e.g. multiple
+    # Boff Tactical rows) get a 1-based index in col 1 — matching the
+    # `slot#N` keying used by `_log_match_summary`.
+
+    _AUTO_COLOR        = '#5cbfff'   # light blue — Auto-confirmed (matches canvas)
+    _CONFIRMED_COLOR   = '#7effc8'   # green — user-confirmed
+    _CONFLICT_COLOR    = '#ff9a3c'   # orange — community conflict
+    _VIRTUAL_CONFIRMED = '#888888'   # grey — confirmed empty/inactive
+    _VIRTUAL_PENDING   = '#aaaaaa'   # lighter grey — pending virtual
+    _CROSS_CHECK_COLOR = '#ffcc00'   # gold — slot type mismatch
+    _UNMATCHED_COLOR   = '#ff5555'   # red — no name / low conf
+    _MED_COLOR         = '#ff8888'   # medium conf
+    _HIGH_COLOR        = '#ffaaaa'   # high conf
+
+    def _review_row_visuals(self, name: str, conf: float, *,
+                            confirmed: bool, cross_check_failed: bool,
+                            auto_confirmed: bool,
+                            conflict_disk_name: str) -> tuple[str, str, str]:
+        """Return (item_text, conf_text, status_text, color_hex) for the row.
+
+        Centralised so `_add_review_row` and the inline refresh sites
+        (rematch, OCR finish, accept, slot-change scanning) produce
+        identical 5-column output without duplicating the state ladder.
+        """
+        is_virtual  = name in VIRTUAL_ITEM_NAMES
         is_conflict = bool(conflict_disk_name)
+
         if is_conflict:
-            label = (f'⚠ {slot_disp}  ->  [CONFLICT] disk: {conflict_disk_name or "—"} '
-                     f'| community: {name or "—"}  [{conf:.0%}]')
+            item_text   = f'[CONFLICT] disk: {conflict_disk_name or "—"} | community: {name or "—"}'
+            status_text = 'Conflict'
+            color       = self._CONFLICT_COLOR
+        elif confirmed and is_virtual:
+            item_text   = '[empty slot]' if name == '__empty__' else '[inactive slot]'
+            status_text = 'Empty' if name == '__empty__' else 'Inactive'
+            color       = self._VIRTUAL_CONFIRMED
+        elif confirmed and auto_confirmed:
+            item_text   = name or '—'
+            status_text = 'Auto'
+            color       = self._AUTO_COLOR
         elif confirmed:
-            tag = 'auto' if auto_confirmed else 'confirmed'
-            if conf > 0.0:
-                label = f'{slot_disp}  ->  {name or "—"}  [{tag} {conf:.0%}]'
-            else:
-                label = f'{slot_disp}  ->  {name or "—"}  [{tag}]'
+            item_text   = name or '—'
+            status_text = 'Confirmed'
+            color       = self._CONFIRMED_COLOR
         elif is_virtual:
-            display = 'empty slot' if name == '__empty__' else 'inactive slot'
-            label = f'{slot_disp}  ->  [{display}]'
+            item_text   = '[empty slot]' if name == '__empty__' else '[inactive slot]'
+            status_text = 'Empty' if name == '__empty__' else 'Inactive'
+            color       = self._VIRTUAL_PENDING
         elif cross_check_failed:
-            label = f'⚠️ {slot_disp}  ->  {name or "— unmatched —"}  [{conf:.0%}]'
+            item_text   = f'⚠ {name or "— unmatched —"}'
+            status_text = 'Type ✕'
+            color       = self._CROSS_CHECK_COLOR
+        elif not name:
+            item_text   = '— unmatched —'
+            status_text = 'Unmatched'
+            color       = self._UNMATCHED_COLOR
+        elif conf >= CONF_HIGH:
+            item_text   = name
+            status_text = 'Match'
+            color       = self._HIGH_COLOR
+        elif conf >= CONF_MEDIUM:
+            item_text   = name
+            status_text = 'Match'
+            color       = self._MED_COLOR
         else:
-            label = f'{slot_disp}  ->  {name or "— unmatched —"}  [{conf:.0%}]'
-        item = QListWidgetItem(label)
-        if is_conflict:
+            item_text   = name
+            status_text = 'Low'
+            color       = self._UNMATCHED_COLOR
+
+        if conf > 0.0:
+            conf_text = f'{conf:.0%}'
+        elif confirmed:
+            conf_text = '—'           # legacy annotation without saved confidence
+        else:
+            conf_text = ''
+
+        return item_text, conf_text, status_text, color
+
+    def _slot_ordinal(self, slot: str, exclude_item=None) -> int:
+        """1-based in-slot index for `slot`. Counts existing rows whose
+        col-0 UserRole equals `slot`, skipping `exclude_item` if given."""
+        n = 0
+        for i in range(self._review_list.count()):
+            it = self._review_list.item(i)
+            if it is None or it is exclude_item:
+                continue
+            if it.data(0, Qt.ItemDataRole.UserRole) == slot:
+                n += 1
+        return n + 1
+
+    def _populate_review_item(self, item, name: str, slot: str, conf: float, *,
+                              confirmed: bool, cross_check_failed: bool,
+                              auto_confirmed: bool, conflict_disk_name: str,
+                              idx: int | None = None) -> None:
+        slot_disp = _pretty_slot(slot)
+        item_text, conf_text, status_text, color = self._review_row_visuals(
+            name, conf,
+            confirmed=confirmed, cross_check_failed=cross_check_failed,
+            auto_confirmed=auto_confirmed, conflict_disk_name=conflict_disk_name,
+        )
+        item.setText(0, slot_disp)
+        item.setData(0, Qt.ItemDataRole.UserRole, slot)
+        if idx is None:
+            try:
+                idx = int(item.text(1)) if item.text(1) else 1
+            except ValueError:
+                idx = 1
+        item.setText(1, str(idx))
+        item.setText(2, item_text)
+        item.setText(3, conf_text)
+        item.setText(4, status_text)
+
+        # Tooltip on the Item column carries the verbose context the old
+        # single-cell label used to embed; col 0 (slot) gets a short copy
+        # so users hovering near the slot name still see it.
+        if conflict_disk_name:
             tooltip = (f'Slot: {slot_disp}\n'
                        f'Disk (your previous confirmation): {conflict_disk_name}\n'
                        f'Community / current detector: {name or "—"}\n\n'
                        f'These disagree. Re-verify the icon and Accept the '
                        f'correct name to cast another community vote.')
-            item.setToolTip(tooltip)
-            item.setForeground(QColor('#ff9a3c'))  # orange — between green and yellow
-            self._review_list.addItem(item)
-            return
-        if confirmed:
+        elif confirmed:
             status = 'auto-confirmed by detector' if auto_confirmed else 'confirmed by user'
-            if conf > 0.0:  # real confidence saved
-                tooltip = (f'Slot: {slot_disp}\nItem: {name or "—"}\n'
-                           f'Status: {status}\n'
-                           f'ML recognition: {conf:.1%}')
-            else:           # conf=0.0 — old annotation without saved confidence
-                tooltip = (f'Slot: {slot_disp}\nItem: {name or "—"}\n'
-                           f'Status: {status}\n'
-                           f'ML recognition: unknown (previous session)')
+            conf_line = f'ML recognition: {conf:.1%}' if conf > 0.0 else \
+                        'ML recognition: unknown (previous session)'
+            tooltip = (f'Slot: {slot_disp}\nItem: {name or "—"}\n'
+                       f'Status: {status}\n{conf_line}')
         elif name:
             tooltip = f'Slot: {slot_disp}\nItem: {name}\nConfidence: {conf:.1%}'
             if cross_check_failed:
-                tooltip += '\n\n⚠️ WARNING: Item type does not match slot type!'
+                tooltip += '\n\n⚠ WARNING: Item type does not match slot type!'
         else:
             tooltip = f'Slot: {slot_disp}\nNo item recognised'
-        item.setToolTip(tooltip)
-        if confirmed and is_virtual:
-            item.setForeground(QColor('#888888'))   # grey — virtual, no build value
-        elif confirmed and auto_confirmed:
-            item.setForeground(QColor('#ffc800'))   # yellow — auto-confirmed by detector
-        elif confirmed:
-            item.setForeground(QColor('#7effc8'))
-        elif is_virtual:
-            item.setForeground(QColor('#aaaaaa'))   # lighter grey — pending virtual
-        elif cross_check_failed:
-            item.setForeground(QColor('#ffcc00')) # Orange/Gold warning
-        elif not name:
-            item.setForeground(QColor('#ff5555'))
-        elif conf >= CONF_HIGH:
-            item.setForeground(QColor('#ffaaaa'))
-        elif conf >= CONF_MEDIUM:
-            item.setForeground(QColor('#ff8888'))
-        else:
-            item.setForeground(QColor('#ff5555'))
+        item.setToolTip(0, slot_disp)
+        item.setToolTip(2, tooltip)
 
+        fg = QBrush(QColor(color))
+        for c in range(5):
+            item.setForeground(c, fg)
+
+    def _add_review_row(self, name: str, slot: str, conf: float, confirmed: bool = False, cross_check_failed: bool = False, auto_confirmed: bool = False, conflict_disk_name: str = ''):
+        item = QTreeWidgetItem()
+        idx  = self._slot_ordinal(slot)
+        self._populate_review_item(
+            item, name, slot, conf,
+            confirmed=confirmed, cross_check_failed=cross_check_failed,
+            auto_confirmed=auto_confirmed, conflict_disk_name=conflict_disk_name,
+            idx=idx,
+        )
         self._review_list.addItem(item)
 
     def _on_review_item_clicked(self, item: QListWidgetItem):
@@ -2135,18 +2234,11 @@ class WarpCoreWindow(QMainWindow):
         
         litem = self._review_list.item(row)
         if litem:
-            label = f'⚠️ {slot}  ->  {text or "— unmatched —"}  [{conf:.0%}]' if cross_check else f'{slot}  ->  {text or "— unmatched —"}  [{conf:.0%}]'
-            litem.setText(label)
-            if cross_check:
-                litem.setForeground(QColor('#ffcc00'))
-            elif not text:
-                litem.setForeground(QColor('#ff5555'))
-            elif conf >= 0.7:
-                litem.setForeground(QColor('#7effc8'))
-            elif conf >= 0.4:
-                litem.setForeground(QColor('#ff8888'))
-            else:
-                litem.setForeground(QColor('#ff5555'))
+            self._populate_review_item(
+                litem, text, slot, conf,
+                confirmed=False, cross_check_failed=cross_check,
+                auto_confirmed=False, conflict_disk_name='',
+            )
 
         if self._review_list.currentRow() == row:
             self._on_item_selected(ri)
@@ -2219,10 +2311,11 @@ class WarpCoreWindow(QMainWindow):
             self._name_edit.setText(name)
             litem = self._review_list.item(row)
             if litem:
-                colour = ('#ffcc00' if _cross_check else '#7effc8' if conf >= CONF_HIGH else '#e8c060' if conf >= CONF_MEDIUM else '#ff7e7e')
-                prefix = '⚠️ ' if _cross_check else ''
-                litem.setText(f'{prefix}{_pretty_slot(ri["slot"])}  ->  {name or "— unmatched —"}  [{conf:.0%}]')
-                litem.setForeground(QColor(colour))
+                self._populate_review_item(
+                    litem, name, ri['slot'], conf,
+                    confirmed=False, cross_check_failed=_cross_check,
+                    auto_confirmed=False, conflict_disk_name='',
+                )
             # Auto-accept if conf >= threshold and checkbox enabled
             if (name and conf > 0
                     and getattr(self, '_chk_auto_accept', None)
@@ -2429,8 +2522,16 @@ class WarpCoreWindow(QMainWindow):
                 self._name_edit.blockSignals(False)
                 litem = self._review_list.item(row)
                 if litem:
-                    litem.setText(f'{slot}  ->  [Scanning...]')
-                    litem.setForeground(QColor('#aaaaaa'))
+                    # Slot change kicks off a fresh OCR pass; show a quick
+                    # "scanning" cue until `_on_ocr_finished` repopulates.
+                    litem.setText(0, _pretty_slot(slot))
+                    litem.setData(0, Qt.ItemDataRole.UserRole, slot)
+                    litem.setText(2, '[Scanning…]')
+                    litem.setText(3, '')
+                    litem.setText(4, 'Scanning')
+                    fg = QBrush(QColor('#aaaaaa'))
+                    for c in range(5):
+                        litem.setForeground(c, fg)
                 
                 worker = OCRWorker(row, crop_bgr, slot, v_tiers, v_types, parent=self)
                 worker.finished.connect(self._on_ocr_finished)
@@ -2462,16 +2563,11 @@ class WarpCoreWindow(QMainWindow):
             self._name_edit.blockSignals(False)
             litem = self._review_list.item(row)
             if litem:
-                prefix = '⚠️ ' if _cross_check else ''
-                litem.setText(f'{prefix}{slot}  ->  {name or "— unmatched —"}  [{conf:.0%}]')
-                if _cross_check:
-                    litem.setForeground(QColor('#ffcc00'))
-                elif conf >= CONF_HIGH:
-                    litem.setForeground(QColor('#ffaaaa'))
-                elif conf >= CONF_MEDIUM:
-                    litem.setForeground(QColor('#ff8888'))
-                else:
-                    litem.setForeground(QColor('#ff5555'))
+                self._populate_review_item(
+                    litem, name, slot, conf,
+                    confirmed=False, cross_check_failed=_cross_check,
+                    auto_confirmed=False, conflict_disk_name='',
+                )
             # Auto-accept if threshold met after rematch
             if (name and conf >= 0.40
                     and getattr(self, '_chk_auto_accept', None)
@@ -2859,12 +2955,11 @@ class WarpCoreWindow(QMainWindow):
                 self._ann_widget.update()  # repaint review-layer bbox in new color
             litem = self._review_list.item(row)
             if litem:
-                conf = ri.get('conf', 0.0)
-                if conf > 0.0:
-                    litem.setText(f'{slot}  ->  {name or "—"}  [confirmed {conf:.0%}]')
-                else:
-                    litem.setText(f'{slot}  ->  {name or "—"}  [confirmed]')
-                litem.setForeground(QColor('#7effc8'))
+                self._populate_review_item(
+                    litem, name, slot, ri.get('conf', 0.0),
+                    confirmed=True, cross_check_failed=False,
+                    auto_confirmed=False, conflict_disk_name='',
+                )
             if name and ri.get('crop_bgr') is not None and slot not in NON_ICON_SLOTS:
                 from warp.recognition.icon_matcher import SETSIconMatcher
                 # origin='user' lets the entry survive WARP's reset_ml_session

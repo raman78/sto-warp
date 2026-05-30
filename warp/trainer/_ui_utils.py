@@ -6,9 +6,11 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QPalette
-from PySide6.QtWidgets import QStyledItemDelegate
+from PySide6.QtWidgets import (
+    QAbstractItemView, QHeaderView, QStyledItemDelegate, QTreeWidget,
+)
 
 from warp import userdata
 
@@ -20,6 +22,74 @@ class _ColorPreservingDelegate(QStyledItemDelegate):
         brush = index.data(Qt.ItemDataRole.ForegroundRole)
         if isinstance(brush, QBrush) and brush.color().isValid():
             option.palette.setColor(QPalette.ColorRole.HighlightedText, brush.color())
+
+
+class _ReviewListAdapter(QTreeWidget):
+    """Flat QTreeWidget exposing the QListWidget-style API used by the WARP
+    CORE recognition-review panel.
+
+    Pre-refactor the panel was a QListWidget; the upgrade to a 5-column
+    Slot / Idx / Item / Conf [%] / Status grid would touch ~30 call sites
+    if we used QTreeWidget directly. This adapter keeps `addItem`,
+    `item(N)`, `count()`, `currentRow()`, `setCurrentRow(N)`, `takeItem`,
+    `insertItem`, `row(item)`, plus a `currentRowChanged(int)` signal so
+    the existing callers continue to work unchanged. Top-level items only
+    (`setRootIsDecorated(False)`), one row per recognition item.
+    """
+
+    currentRowChanged = Signal(int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setColumnCount(5)
+        self.setHeaderLabels(['Slot', 'Idx', 'Item', 'Conf', 'Status'])
+        self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        self.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        self.setAlternatingRowColors(False)
+        self.setRootIsDecorated(False)
+        self.setUniformRowHeights(True)
+        self.setColumnWidth(0, 140)
+        self.setColumnWidth(1, 34)
+        self.setColumnWidth(3, 50)
+        self.setColumnWidth(4, 90)
+        self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+        # Translate Qt's (current, previous) into the row-int signal
+        # callers from the old QListWidget era expect.
+        self.currentItemChanged.connect(self._on_current_item_changed)
+
+    def _on_current_item_changed(self, current, _previous):
+        row = self.indexOfTopLevelItem(current) if current else -1
+        self.currentRowChanged.emit(row)
+
+    # ── QListWidget-style shims ─────────────────────────────────────
+
+    def addItem(self, item):
+        self.addTopLevelItem(item)
+
+    def insertItem(self, row, item):
+        self.insertTopLevelItem(row, item)
+
+    def takeItem(self, row):
+        return self.takeTopLevelItem(row)
+
+    def item(self, row):
+        return self.topLevelItem(row)
+
+    def count(self):
+        return self.topLevelItemCount()
+
+    def currentRow(self):
+        cur = self.currentItem()
+        return self.indexOfTopLevelItem(cur) if cur else -1
+
+    def setCurrentRow(self, row):
+        if row < 0 or row >= self.topLevelItemCount():
+            self.setCurrentItem(None)
+        else:
+            self.setCurrentItem(self.topLevelItem(row))
+
+    def row(self, item):
+        return self.indexOfTopLevelItem(item)
 
 
 # ── Match summary table + history ──────────────────────────────────────
