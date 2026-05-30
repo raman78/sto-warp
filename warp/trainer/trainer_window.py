@@ -417,7 +417,8 @@ class WarpCoreWindow(QMainWindow):
             self._on_open_screenshot)
         act('Open Folder', 'Open screenshots folder', self._on_open)
         act('Detect Screen Types', 'Re-classify screen types', self._on_detect_screen_types)
-        act('Auto-Detect Slots', 'Auto-detect icons', self._on_auto_detect)
+        self._action_auto_detect = act(
+            'Auto-Detect Slots', 'Auto-detect icons', self._on_auto_detect)
 
     def _on_open(self):
         from warp.folder_picker import pick_folder
@@ -1772,6 +1773,8 @@ class WarpCoreWindow(QMainWindow):
             self._btn_remove_item.setToolTip(locked_tip)
             self._btn_clear_all_bboxes.setEnabled(False)
             self._btn_clear_all_bboxes.setToolTip(locked_tip)
+            self._action_auto_detect.setEnabled(False)
+            self._action_auto_detect.setToolTip(locked_tip)
         else:
             self._btn_remove_item.setToolTip('')
             self._btn_clear_all_bboxes.setEnabled(True)
@@ -1779,6 +1782,8 @@ class WarpCoreWindow(QMainWindow):
                 'Remove every bbox on the current screenshot. A confirmation dialog '
                 'offers the option to spare bboxes already marked confirmed.'
             )
+            self._action_auto_detect.setEnabled(True)
+            self._action_auto_detect.setToolTip('Auto-detect icons')
 
     def _on_bbox_drawn(self, bbox: tuple):
         if self._current_idx >= 0 and self._screen_types.get(
