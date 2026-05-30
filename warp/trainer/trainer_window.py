@@ -1509,7 +1509,11 @@ class WarpCoreWindow(QMainWindow):
 
     def _slot_ordinal(self, slot: str, exclude_item=None) -> int:
         """1-based in-slot index for `slot`. Counts existing rows whose
-        col-0 UserRole equals `slot`, skipping `exclude_item` if given."""
+        col-0 UserRole equals `slot`, skipping `exclude_item` if given.
+
+        Works for both pre- and post-addItem state: the slot id lives on
+        the item itself (col-0 UserRole), so the adapter's grouping is
+        irrelevant — we just walk the flat insertion-order list."""
         n = 0
         for i in range(self._review_list.count()):
             it = self._review_list.item(i)
@@ -1529,8 +1533,14 @@ class WarpCoreWindow(QMainWindow):
             confirmed=confirmed, cross_check_failed=cross_check_failed,
             auto_confirmed=auto_confirmed, conflict_disk_name=conflict_disk_name,
         )
-        item.setText(0, slot_disp)
+        # Col 0 carries the slot label only on standalone items (those
+        # not yet added to the tree). Once `addItem` places the item under
+        # a parent, the parent owns the Slot column and the child's col 0
+        # stays blank — preserve that here so refresh sites don't
+        # reintroduce the slot text on every child row.
         item.setData(0, Qt.ItemDataRole.UserRole, slot)
+        if item.parent() is None:
+            item.setText(0, slot_disp)
         if idx is None:
             try:
                 idx = int(item.text(1)) if item.text(1) else 1
@@ -1568,6 +1578,11 @@ class WarpCoreWindow(QMainWindow):
         fg = QBrush(QColor(color))
         for c in range(5):
             item.setForeground(c, fg)
+        # If this item is already living under a parent in the grouped
+        # tree, mirror the new texts/foreground to the parent so the
+        # collapsed-state summary line stays in sync.
+        if item.parent() is not None:
+            self._review_list.refresh_parent_of(item)
 
     def _add_review_row(self, name: str, slot: str, conf: float, confirmed: bool = False, cross_check_failed: bool = False, auto_confirmed: bool = False, conflict_disk_name: str = ''):
         item = QTreeWidgetItem()
@@ -2524,14 +2539,19 @@ class WarpCoreWindow(QMainWindow):
                 if litem:
                     # Slot change kicks off a fresh OCR pass; show a quick
                     # "scanning" cue until `_on_ocr_finished` repopulates.
-                    litem.setText(0, _pretty_slot(slot))
+                    # Children leave col 0 blank (parent owns Slot); only
+                    # standalone items get the label written there.
                     litem.setData(0, Qt.ItemDataRole.UserRole, slot)
+                    if litem.parent() is None:
+                        litem.setText(0, _pretty_slot(slot))
                     litem.setText(2, '[Scanning…]')
                     litem.setText(3, '')
                     litem.setText(4, 'Scanning')
                     fg = QBrush(QColor('#aaaaaa'))
                     for c in range(5):
                         litem.setForeground(c, fg)
+                    if litem.parent() is not None:
+                        self._review_list.refresh_parent_of(litem)
                 
                 worker = OCRWorker(row, crop_bgr, slot, v_tiers, v_types, parent=self)
                 worker.finished.connect(self._on_ocr_finished)

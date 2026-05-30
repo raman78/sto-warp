@@ -10,6 +10,7 @@ from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QBrush, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView, QHeaderView, QStyledItemDelegate, QTreeWidget,
+    QTreeWidgetItem,
 )
 
 from warp import userdata
@@ -25,16 +26,25 @@ class _ColorPreservingDelegate(QStyledItemDelegate):
 
 
 class _ReviewListAdapter(QTreeWidget):
-    """Flat QTreeWidget exposing the QListWidget-style API used by the WARP
-    CORE recognition-review panel.
+    """5-column grouped QTreeWidget exposing the QListWidget-style API
+    used by the WARP CORE recognition-review panel.
+
+    Visual layout mirrors WARP's Results view: top-level parent rows are
+    slot headers (bold, with `(count)` in the Idx column); each
+    recognition item is a child row. For single-item slots the parent
+    mirrors the child's Item / Conf / Status so a collapsed tree still
+    reads as a one-liner.
 
     Pre-refactor the panel was a QListWidget; the upgrade to a 5-column
     Slot / Idx / Item / Conf [%] / Status grid would touch ~30 call sites
     if we used QTreeWidget directly. This adapter keeps `addItem`,
     `item(N)`, `count()`, `currentRow()`, `setCurrentRow(N)`, `takeItem`,
     `insertItem`, `row(item)`, plus a `currentRowChanged(int)` signal so
-    the existing callers continue to work unchanged. Top-level items only
-    (`setRootIsDecorated(False)`), one row per recognition item.
+    the existing callers continue to work unchanged. The flat `N` index
+    refers to insertion order (== order of `_recognition_items`), not the
+    tree's visual order — so callers that pair the panel with the
+    recognition-items list stay aligned even when the tree groups them
+    under different parents.
     """
 
     currentRowChanged = Signal(int)
@@ -43,53 +53,174 @@ class _ReviewListAdapter(QTreeWidget):
         super().__init__(parent)
         self.setColumnCount(5)
         self.setHeaderLabels(['Slot', 'Idx', 'Item', 'Conf', 'Status'])
-        self.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        self.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        # stretchLastSection defaults to True and silently overrides the
+        # explicit Status width + steals the divider grab-zone on its
+        # left edge. Turn it off so each column has a real, draggable
+        # divider and the column widths below are actually honoured.
+        h = self.header()
+        h.setStretchLastSection(False)
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        h.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
         self.setAlternatingRowColors(False)
-        self.setRootIsDecorated(False)
+        self.setRootIsDecorated(True)
         self.setUniformRowHeights(True)
-        self.setColumnWidth(0, 140)
-        self.setColumnWidth(1, 34)
-        self.setColumnWidth(3, 50)
-        self.setColumnWidth(4, 90)
+        self.setColumnWidth(0, 160)
+        self.setColumnWidth(1, 40)
+        self.setColumnWidth(3, 56)   # fits '100%'
+        self.setColumnWidth(4, 86)   # fits 'Confirmed'
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)
+
+        self._flat: list[QTreeWidgetItem] = []           # insertion order
+        self._slot_parents: dict[str, QTreeWidgetItem] = {}
+
         # Translate Qt's (current, previous) into the row-int signal
         # callers from the old QListWidget era expect.
         self.currentItemChanged.connect(self._on_current_item_changed)
+        # Bold the selected leaf row so the active pick stands out
+        # against the ACCENT-tinted selection background.
+        self.itemSelectionChanged.connect(self._refresh_bold_selected)
+
+    # ── Internals ───────────────────────────────────────────────────
 
     def _on_current_item_changed(self, current, _previous):
-        row = self.indexOfTopLevelItem(current) if current else -1
-        self.currentRowChanged.emit(row)
+        if current is None or current not in self._flat:
+            self.currentRowChanged.emit(-1)
+            return
+        self.currentRowChanged.emit(self._flat.index(current))
+
+    def _refresh_bold_selected(self):
+        sel = set(self.selectedItems())
+        cols = self.columnCount()
+        for it in self._flat:
+            bold = it in sel
+            f = it.font(0)
+            if f.bold() == bold:
+                continue
+            f.setBold(bold)
+            for c in range(cols):
+                it.setFont(c, f)
+
+    def _get_or_create_parent(self, slot_raw: str,
+                              slot_pretty: str) -> QTreeWidgetItem:
+        if slot_raw in self._slot_parents:
+            return self._slot_parents[slot_raw]
+        p = QTreeWidgetItem(self)
+        p.setText(0, slot_pretty)
+        p.setData(0, Qt.ItemDataRole.UserRole, slot_raw)
+        # Parents are not user-selectable — they're headers, not items.
+        p.setFlags(p.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+        f = p.font(0)
+        f.setBold(True)
+        for c in range(self.columnCount()):
+            p.setFont(c, f)
+        self._slot_parents[slot_raw] = p
+        return p
+
+    def _drop_parent_if_empty(self, parent: QTreeWidgetItem) -> None:
+        if parent.childCount() != 0:
+            return
+        slot_raw = parent.data(0, Qt.ItemDataRole.UserRole)
+        idx = self.indexOfTopLevelItem(parent)
+        if idx >= 0:
+            self.takeTopLevelItem(idx)
+        self._slot_parents.pop(slot_raw, None)
+
+    def refresh_parent_of(self, item: QTreeWidgetItem) -> None:
+        """Public helper — call after mutating a child so the parent's
+        Idx / Item / Conf / Status summary stays in sync. Idempotent."""
+        parent = item.parent()
+        if parent is None:
+            return
+        n = parent.childCount()
+        parent.setText(1, str(n) if n > 1 else '')
+        if n == 1:
+            child = parent.child(0)
+            parent.setText(2, child.text(2))
+            parent.setText(3, child.text(3))
+            parent.setText(4, child.text(4))
+            # Mirror the child's foreground onto the parent so the
+            # collapsed-state summary line matches the child's status.
+            for c in range(self.columnCount()):
+                parent.setForeground(c, child.foreground(c))
+        else:
+            parent.setText(2, '')
+            parent.setText(3, '')
+            parent.setText(4, '')
+            # Reset parent foreground to default for multi-child slots.
+            blank = QBrush()
+            for c in range(self.columnCount()):
+                parent.setForeground(c, blank)
 
     # ── QListWidget-style shims ─────────────────────────────────────
 
     def addItem(self, item):
-        self.addTopLevelItem(item)
+        slot_raw    = item.data(0, Qt.ItemDataRole.UserRole) or ''
+        slot_pretty = item.text(0)
+        parent      = self._get_or_create_parent(slot_raw, slot_pretty)
+        # Children leave the Slot column blank — the parent owns it.
+        item.setText(0, '')
+        parent.addChild(item)
+        parent.setExpanded(True)
+        self._flat.append(item)
+        self.refresh_parent_of(item)
 
     def insertItem(self, row, item):
-        self.insertTopLevelItem(row, item)
+        slot_raw    = item.data(0, Qt.ItemDataRole.UserRole) or ''
+        slot_pretty = item.text(0)
+        parent      = self._get_or_create_parent(slot_raw, slot_pretty)
+        item.setText(0, '')
+        parent.addChild(item)
+        parent.setExpanded(True)
+        if row < 0 or row > len(self._flat):
+            row = len(self._flat)
+        self._flat.insert(row, item)
+        self.refresh_parent_of(item)
 
     def takeItem(self, row):
-        return self.takeTopLevelItem(row)
+        if not (0 <= row < len(self._flat)):
+            return None
+        item   = self._flat.pop(row)
+        parent = item.parent()
+        if parent is not None:
+            parent.removeChild(item)
+            if parent.childCount() == 0:
+                self._drop_parent_if_empty(parent)
+            else:
+                self.refresh_parent_of(parent.child(0))
+        return item
 
     def item(self, row):
-        return self.topLevelItem(row)
+        if 0 <= row < len(self._flat):
+            return self._flat[row]
+        return None
 
     def count(self):
-        return self.topLevelItemCount()
+        return len(self._flat)
 
     def currentRow(self):
         cur = self.currentItem()
-        return self.indexOfTopLevelItem(cur) if cur else -1
+        if cur in self._flat:
+            return self._flat.index(cur)
+        return -1
 
     def setCurrentRow(self, row):
-        if row < 0 or row >= self.topLevelItemCount():
-            self.setCurrentItem(None)
+        if 0 <= row < len(self._flat):
+            self.setCurrentItem(self._flat[row])
         else:
-            self.setCurrentItem(self.topLevelItem(row))
+            self.setCurrentItem(None)
 
     def row(self, item):
-        return self.indexOfTopLevelItem(item)
+        if item in self._flat:
+            return self._flat.index(item)
+        return -1
+
+    def clear(self):
+        super().clear()
+        self._flat.clear()
+        self._slot_parents.clear()
 
 
 # ── Match summary table + history ──────────────────────────────────────

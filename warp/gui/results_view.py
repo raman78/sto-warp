@@ -447,17 +447,28 @@ class ResultsView(QWidget):
         self._tree = QTreeWidget(self)
         self._tree.setColumnCount(4)
         self._tree.setHeaderLabels(['Slot', 'Idx', 'Item', 'Conf'])
-        self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        # stretchLastSection defaults to True, which silently overrides the
+        # explicit width on the last column and steals the divider grab
+        # zone on its left. Turn it off so each column has a real divider
+        # the user can drag and so Conf actually honours its 56 px width.
+        h = self._tree.header()
+        h.setStretchLastSection(False)
+        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
+        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
+        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
+        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
         self._tree.setAlternatingRowColors(False)
         self._tree.setRootIsDecorated(True)
         self._tree.setUniformRowHeights(True)
-        self._tree.setColumnWidth(0, 200)
-        self._tree.setColumnWidth(1, 50)
-        self._tree.setColumnWidth(3, 60)
+        self._tree.setColumnWidth(0, 180)
+        self._tree.setColumnWidth(1, 40)
+        self._tree.setColumnWidth(3, 56)   # fits '100%'
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
         self._tree.itemSelectionChanged.connect(self._on_tree_selection_changed)
+        # Bold the selected leaf row so the active pick stands out even
+        # against the ACCENT-tinted selection background.
+        self._tree.itemSelectionChanged.connect(self._refresh_bold_selected)
         # Amber-accented selected row + currently-displayed file gets a
         # subtle pale-green wash on its rows (drawn per-cell in
         # _apply_file_tint — this stylesheet handles only selection).
@@ -468,7 +479,15 @@ class ResultsView(QWidget):
         split.addWidget(self._tree)
 
         # Toggle-on-click for the file list so a second click on the
-        # already-selected file clears tint + canvas.
+        # already-selected file clears tint + canvas. itemPressed fires
+        # BEFORE itemSelectionChanged, so we capture which file was
+        # active prior to the click and the itemClicked handler can
+        # decide based on that snapshot — without it, the first click
+        # on an unselected row would incorrectly toggle off (because
+        # _on_file_selected already updated _current_file by the time
+        # itemClicked landed).
+        self._pre_click_file: str = ''
+        self._list.itemPressed.connect(self._on_list_pressed)
         self._list.itemClicked.connect(self._on_list_clicked)
 
         split.setSizes([240, 700, 320])
@@ -557,19 +576,25 @@ class ResultsView(QWidget):
             bt_tag = ''
         return f'{Path(src).name}   ({with_bbox}/{len(items)}){bt_tag}'
 
+    def _on_list_pressed(self, item: QListWidgetItem):
+        # Snapshot the active file BEFORE Qt fires selectionChanged so
+        # _on_list_clicked can tell apart a fresh selection from a
+        # second click on the already-displayed file.
+        self._pre_click_file = self._current_file
+
     def _on_list_clicked(self, item: QListWidgetItem):
         """Toggle behavior: clicking the already-displayed file again
         clears the file tint and the canvas. Selecting a different file
-        is handled by _on_file_selected (Qt fires selectionChanged for
-        actual selection moves; clicking the same row keeps selection
-        unchanged but still emits itemClicked — which is where we land)."""
+        is handled by _on_file_selected."""
         row = self._list.row(item)
         if row < 0 or row >= len(self._file_keys):
             return
         clicked_src = self._file_keys[row]
-        if clicked_src != self._current_file:
-            return  # Different file → handled by _on_file_selected.
-        # Same file clicked again → toggle off.
+        if clicked_src != self._pre_click_file:
+            # First click on a previously-unselected file — selectionChanged
+            # already triggered the load. Nothing to do here.
+            return
+        # Same file clicked again → toggle off immediately.
         self._current_file = ''
         self._list.blockSignals(True)
         self._list.clearSelection()
@@ -579,6 +604,23 @@ class ResultsView(QWidget):
         self._type_combo.setEnabled(False)
         self._override_lbl.setText('')
         self._apply_file_tint()
+        self._refresh_bold_selected()
+
+    def _refresh_bold_selected(self):
+        """Bold the font of the currently selected leaf row so the
+        active pick is legible against the ACCENT highlight."""
+        sel = set(self._tree.selectedItems())
+        for i in range(self._tree.topLevelItemCount()):
+            parent = self._tree.topLevelItem(i)
+            for j in range(parent.childCount()):
+                child = parent.child(j)
+                bold = child in sel
+                f = child.font(0)
+                if f.bold() == bold:
+                    continue
+                f.setBold(bold)
+                for c in range(self._tree.columnCount()):
+                    child.setFont(c, f)
 
     def _on_file_selected(self):
         row = self._list.currentRow()
