@@ -1421,7 +1421,7 @@ class WarpCoreWindow(QMainWindow):
             if 0 <= row < len(self._recognition_items):
                 ri = self._recognition_items[row]
                 is_confirmed = ri.get('state') == 'confirmed'
-                self._btn_remove_item.setEnabled(True)
+                self._btn_remove_item.setEnabled(not self._is_current_locked())
                 # self._btn_edit_bbox.setEnabled(True)  # disabled
                 # if is_confirmed:
                 #     self._btn_edit_bbox.setChecked(False)
@@ -1542,6 +1542,8 @@ class WarpCoreWindow(QMainWindow):
         if obj in (rl, aw) and obj is not None and event.type() == QEvent.Type.KeyPress:
             key = event.key()
             if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):
+                if self._is_current_locked():
+                    return True
                 self._on_remove_item()
                 return True
         # Forward wheel events from anywhere in scroll area to the canvas widget
@@ -1570,6 +1572,8 @@ class WarpCoreWindow(QMainWindow):
             self._ann_widget.set_draw_mode(False)
 
     def _on_remove_item(self):
+        if self._is_current_locked():
+            return
         row = self._review_list.currentRow()
         if row < 0 or row >= len(self._recognition_items):
             return
@@ -1622,6 +1626,8 @@ class WarpCoreWindow(QMainWindow):
         the on-disk annotations file via `_data_mgr.remove_annotation`,
         same as the single-item Remove flow."""
         if self._current_idx < 0 or not self._recognition_items:
+            return
+        if self._is_current_locked():
             return
         path = self._screenshots[self._current_idx]
         total = len(self._recognition_items)
@@ -1737,9 +1743,12 @@ class WarpCoreWindow(QMainWindow):
         for btn in (self._btn_remove_item,):  # btn_edit_bbox disabled
             btn.setEnabled(enabled)
 
+    def _is_current_locked(self) -> bool:
+        return (self._current_idx >= 0
+                and self._screenshots[self._current_idx].name in self._screenshots_done)
+
     def _update_add_bbox_btn(self):
-        is_done = (self._current_idx >= 0
-                   and self._screenshots[self._current_idx].name in self._screenshots_done)
+        is_done = self._is_current_locked()
         is_spec = (self._current_idx >= 0
                    and self._screen_types.get(
                        self._screenshots[self._current_idx].name, 'UNKNOWN') == 'SPECIALIZATIONS')
@@ -1751,6 +1760,20 @@ class WarpCoreWindow(QMainWindow):
                 'Icon annotation is not supported for this screen type.')
         else:
             self._btn_add_bbox.setToolTip('')
+        # Destructive bbox actions are also blocked while the screenshot is Done.
+        if is_done:
+            locked_tip = 'Screenshot is marked Done — press ↩ Back to Edit to modify.'
+            self._btn_remove_item.setEnabled(False)
+            self._btn_remove_item.setToolTip(locked_tip)
+            self._btn_clear_all_bboxes.setEnabled(False)
+            self._btn_clear_all_bboxes.setToolTip(locked_tip)
+        else:
+            self._btn_remove_item.setToolTip('')
+            self._btn_clear_all_bboxes.setEnabled(True)
+            self._btn_clear_all_bboxes.setToolTip(
+                'Remove every bbox on the current screenshot. A confirmation dialog '
+                'offers the option to spare bboxes already marked confirmed.'
+            )
 
     def _on_bbox_drawn(self, bbox: tuple):
         if self._current_idx >= 0 and self._screen_types.get(

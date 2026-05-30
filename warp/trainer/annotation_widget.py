@@ -519,6 +519,8 @@ class AnnotationWidget(QWidget):
 
     def keyPressEvent(self, event: QKeyEvent):
         if event.key() == Qt.Key.Key_Delete and self._selected_idx >= 0:
+            if self._locked:
+                return
             ann = self._annotations[self._selected_idx]; self._data_mgr.remove_annotation(self._img_path, ann); self._annotations = self._data_mgr.get_annotations(self._img_path); self._selected_idx = -1; self.update()
 
     def _cancel_hover_timer(self):
