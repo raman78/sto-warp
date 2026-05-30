@@ -52,6 +52,7 @@ from warp.trainer.workers import (
 )
 from warp.recognition.text_extractor import SHIP_TIER_VALUES
 from warp.recognition.boff_keys      import pretty_slot as _pretty_slot
+from warp.warp_importer              import SLOT_ORDER as _SLOT_ORDER
 
 log = logging.getLogger(__name__)
 
@@ -1198,7 +1199,14 @@ class WarpCoreWindow(QMainWindow):
         # "find what's not on screen yet", not "rebuild from scratch". The
         # recognition_done merge drops new items that overlap existing bboxes
         # (IoU) or duplicate a SINGLE_INSTANCE_SLOTS row.
-        existing = list(self._recognition_cache.get(path.name, []))
+        #
+        # Source = `_recognition_items` (the merged view that already
+        # includes disk-confirmed annotations injected by `_populate_review_panel`),
+        # not `_recognition_cache`. The cache is empty on first entry to a
+        # screenshot, so reading it would hide previously confirmed bboxes
+        # from the IoU dedup and let fresh detections re-emit near-identical
+        # duplicates on top of them.
+        existing = list(self._recognition_items)
         self._recognition_cache.pop(path.name, None)
         self._start_recognition(path, stype, preserve_existing=existing)
 
@@ -1406,6 +1414,38 @@ class WarpCoreWindow(QMainWindow):
         self._review_summary.setText('Recognition cancelled.')
         self.statusBar().showMessage('Recognition cancelled.')
 
+    # Meta-slot priority — Ship Name / Ship Type / Ship Tier always lead,
+    # mirroring WARP Results (`results_view._populate_tree:772`).
+    _META_SLOT_PRIORITY: dict[str, int] = {
+        'Ship Name': 0, 'Ship Type': 1, 'Ship Tier': 2,
+    }
+
+    def _sort_items_by_slot_order(self, items: list, stype: str) -> list:
+        """Reorder `_recognition_items` so the review tree groups parents in
+        the same canonical sequence WARP Results uses (Ship Name / Type /
+        Tier first, then weapons / consoles / traits per `SLOT_ORDER`).
+        Within a slot, sort by `slot_index` so multi-entry parents (e.g.
+        Fore Weapons) keep their left-to-right order. Unknown slots
+        (boff subseats, anything outside `SLOT_ORDER`) fall to the bottom
+        sorted alphabetically.
+        """
+        build_type = self._STYPE_TO_BUILD.get(stype, 'SPACE')
+        canonical = _SLOT_ORDER.get(build_type, [])
+        slot_priority = {sd['name']: 3 + i for i, sd in enumerate(canonical)}
+
+        def key(ri):
+            slot = ri.get('slot', '') or ''
+            si = ri.get('slot_index', 0) or 0
+            if slot in self._META_SLOT_PRIORITY:
+                return (self._META_SLOT_PRIORITY[slot], 0, '', si)
+            if slot in slot_priority:
+                return (slot_priority[slot], 0, '', si)
+            # Unknown slot — push past every canonical entry, then
+            # alphabetise so reruns produce a stable order.
+            return (999, 1, slot, si)
+
+        return sorted(items, key=key)
+
     def _populate_review_panel(self, items: list, stype: str):
         confirmed_by_id: dict[str, dict] = {}
         if self._current_idx >= 0:
@@ -1513,7 +1553,7 @@ class WarpCoreWindow(QMainWindow):
         for aid, ci in confirmed_by_id.items():
             if aid not in seen_ids:
                 merged.append(ci)
-        self._recognition_items = merged
+        self._recognition_items = self._sort_items_by_slot_order(merged, stype)
         # Auto-accept high-conf items before drawing the list
         self._apply_auto_accept()
         self._review_list.clear()
