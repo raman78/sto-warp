@@ -31,6 +31,7 @@ from warp.trainer.training_data      import (
 from warp.style import (
     apply_dark_style, primary_btn_style, secondary_btn_style,
     warning_btn_style, danger_btn_style, toggle_yellow_btn_style,
+    accent_qss,
     ACCENT, FG, MFG, BG, MBG, LBG, BC, C_WARNING, C_SUCCESS, C_FAILURE,
 )
 # Phase-0 refactor extracted shared constants, UI helpers, and QThread
@@ -62,6 +63,9 @@ class WarpCoreWindow(QMainWindow):
     # WarpWindow.set_external_result + tab switch so the user can JSON-export
     # the corrected build without re-running WARP detection.
     send_to_warp = Signal(object)
+    # Emitted by `exit_fast_correction_mode()` so the launcher can restore
+    # its tab title and (optionally) switch back to the WARP tab.
+    fast_correction_exited = Signal()
 
     def __init__(self, sets_app=None, parent=None, embed: bool = False):
         super().__init__(parent)
@@ -87,6 +91,11 @@ class WarpCoreWindow(QMainWindow):
         self._data_mgr = TrainingDataManager(userdata.training_data_dir())
         self._screenshots: list[Path] = []
         self._current_idx = -1
+        # Window mode: 'training' (default) or 'fast_correction'. Fast
+        # Correction Mode is launched from WARP's Results pane to fix up
+        # a fixed batch of files; folder-load + Open toolbar entries are
+        # suppressed and a banner with an Exit button is shown.
+        self._mode: str = 'training'
         self._screen_types: dict[str, str] = {}
         self._screen_types_manual: set[str] = set()   # green — user confirmed
         self._screen_types_ml_auto: set[str] = set()  # yellow — ML ≥95% auto-accepted
@@ -153,9 +162,16 @@ class WarpCoreWindow(QMainWindow):
     def _build_ui(self):
         c = QWidget()
         self.setCentralWidget(c)
-        root = QHBoxLayout(c)
+        root = QVBoxLayout(c)
         root.setContentsMargins(0, 0, 0, 0)
         root.setSpacing(0)
+
+        # Fast Correction Mode banner — hidden by default; revealed by
+        # `set_fast_correction_mode()`. ObjectName lets `accent_qss` scope
+        # its styling here without bleeding onto unrelated frames.
+        self._fast_banner = self._make_fast_correction_banner()
+        self._fast_banner.setVisible(False)
+        root.addWidget(self._fast_banner)
 
         sp = QSplitter(Qt.Orientation.Horizontal)
         sp.addWidget(self._make_left_panel())
@@ -443,12 +459,106 @@ class WarpCoreWindow(QMainWindow):
             tb.addAction(a)
             tb.addSeparator()
             return a
-        act('Open Screenshot', 'Open a single screenshot (loads its parent folder and selects the file)',
+        self._action_open_screenshot = act(
+            'Open Screenshot', 'Open a single screenshot (loads its parent folder and selects the file)',
             self._on_open_screenshot)
-        act('Open Folder', 'Open screenshots folder', self._on_open)
-        act('Detect Screen Types', 'Re-classify screen types', self._on_detect_screen_types)
+        self._action_open_folder = act(
+            'Open Folder', 'Open screenshots folder', self._on_open)
+        self._action_detect_screen_types = act(
+            'Detect Screen Types', 'Re-classify screen types', self._on_detect_screen_types)
         self._action_auto_detect = act(
             'Auto-Detect Slots', 'Auto-detect icons', self._on_auto_detect)
+
+    # ── Fast Correction Mode ────────────────────────────────────────────
+    def _make_fast_correction_banner(self) -> QFrame:
+        f = QFrame()
+        f.setObjectName('accent_banner')
+        lay = QHBoxLayout(f)
+        lay.setContentsMargins(10, 4, 6, 4)
+        lay.setSpacing(8)
+        lbl = QLabel('WARP Fast Correction Mode — fix items, Mark Done, then Send All to WARP.')
+        lbl.setObjectName('accent_banner_text')
+        lay.addWidget(lbl, 1)
+        btn = QPushButton('Exit Fast Correction')
+        btn.setObjectName('accent_exit_btn')
+        btn.setCursor(Qt.CursorShape.PointingHandCursor)
+        btn.clicked.connect(self.exit_fast_correction_mode)
+        lay.addWidget(btn)
+        return f
+
+    def set_fast_correction_mode(self, files: list, items_by_file: dict) -> None:
+        """Switch into Fast Correction Mode.
+
+        `files` is a list of Path-like screenshot paths from WARP. The mode
+        replaces the regular folder-load workflow: file list is fixed, Open
+        toolbar entries are hidden, and the window wears a warm-amber accent
+        so the user can tell at a glance they are in the ephemeral
+        correction view rather than the full training-data review.
+
+        `items_by_file` is reserved for future seeding of `_recognition_cache`;
+        for #3 we only pre-load the file list so the user can review.
+        """
+        paths = [Path(p) for p in files]
+        if not paths:
+            self.statusBar().showMessage(
+                'Fast Correction: no files supplied — nothing to do.', 5000)
+            return
+        self._mode = 'fast_correction'
+        # Reset state so the new batch is the only thing on screen.
+        self._screenshots = paths
+        self._screen_types.clear()
+        self._screen_types_manual.clear()
+        self._screen_types_ml_auto.clear()
+        self._recognition_cache.clear()
+        self._recognition_items = []
+        self._current_idx = -1
+        self._file_list.clear()
+        persisted      = self._data_mgr.get_all_screen_types()
+        user_confirmed = self._data_mgr.get_user_confirmed_set()
+        for p in self._screenshots:
+            saved = persisted.get(p.name, '')
+            self._screen_types[p.name] = saved if saved else 'UNKNOWN'
+            if p.name in user_confirmed:
+                self._screen_types_manual.add(p.name)
+            elif saved:
+                self._screen_types_ml_auto.add(p.name)
+            self._file_list.addItem(self._make_file_list_item(p, self._screen_types[p.name]))
+        self._apply_file_filter(self._file_filter.text())
+        # Hide controls that don't apply: caller picks the file set.
+        for a in (self._action_open_screenshot, self._action_open_folder):
+            a.setVisible(False)
+        # Warm-amber chrome + banner.
+        self.setStyleSheet(accent_qss('fast_correction'))
+        self._fast_banner.setVisible(True)
+        self.setWindowTitle('WARP CORE — Fast Correction Mode')
+        if self._file_list.count():
+            self._file_list.setCurrentRow(0)
+        self.statusBar().showMessage(
+            f'Fast Correction Mode — {len(paths)} screenshot(s) loaded from WARP.')
+
+    def exit_fast_correction_mode(self) -> None:
+        """Leave Fast Correction Mode and restore the regular trainer UI."""
+        if self._mode != 'fast_correction':
+            return
+        self._mode = 'training'
+        self.setStyleSheet('')
+        apply_dark_style(self)
+        self._fast_banner.setVisible(False)
+        for a in (self._action_open_screenshot, self._action_open_folder):
+            a.setVisible(True)
+        self.setWindowTitle('WARP CORE — ML Trainer')
+        # Drop the ephemeral batch — the user can re-open a real folder.
+        self._screenshots = []
+        self._screen_types.clear()
+        self._screen_types_manual.clear()
+        self._screen_types_ml_auto.clear()
+        self._recognition_cache.clear()
+        self._recognition_items = []
+        self._current_idx = -1
+        self._file_list.clear()
+        self.statusBar().showMessage(
+            'Back to training mode — open a folder to start annotating.')
+        self.fast_correction_exited.emit()
 
     def _on_open(self):
         from warp.folder_picker import pick_folder
@@ -1975,7 +2085,18 @@ class WarpCoreWindow(QMainWindow):
         # Send to WARP is the inverse: only enabled once the screenshot is
         # locked, since "Done" means the user has reviewed every bbox and
         # the result is safe to hand back to WARP for JSON export.
-        if is_done:
+        # In Fast Correction Mode the gate is stricter: every file in the
+        # ephemeral batch must be Done before the user can send the
+        # corrected batch back to WARP.
+        if self._mode == 'fast_correction':
+            all_done = bool(self._screenshots) and all(
+                p.name in self._screenshots_done for p in self._screenshots)
+            self._btn_send_to_warp.setEnabled(all_done)
+            self._btn_send_to_warp.setToolTip(
+                'Send all corrected screenshots back to WARP.'
+                if all_done else
+                'Mark every screenshot Done first — then send the batch back to WARP.')
+        elif is_done:
             self._btn_send_to_warp.setEnabled(True)
             self._btn_send_to_warp.setToolTip(
                 'Send the confirmed results to WARP and switch tabs — '

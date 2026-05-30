@@ -89,6 +89,59 @@ def danger_btn_style() -> str:
         f'QPushButton:hover{{background:#2a1a1a;}}'
     )
 
+# ── Accent overlays ─────────────────────────────────────────────────────────
+
+def accent_qss(name: str) -> str:
+    """Return a QSS overlay for a named theme accent variant.
+
+    Designed to be applied via `widget.setStyleSheet(accent_qss(name))`
+    on a specific widget subtree so only that subtree is recoloured —
+    the rest of the QApplication keeps the base theme.
+
+    Returns an empty string when the active theme does not declare the
+    requested accent, which makes it safe to apply unconditionally.
+
+    Targets object-name-scoped widgets so the overlay does NOT cascade
+    onto every QWidget / QPushButton inside the subtree:
+      - `QMainWindow` background tint (subtle warm wash on the chrome)
+      - widgets with `objectName == 'accent_banner'` — prominent banner
+      - widgets with `objectName == 'accent_exit_btn'`  — exit action
+    """
+    theme = _get_theme()
+    a = theme.accents.get(name) if hasattr(theme, 'accents') else None
+    if not a:
+        return ''
+    bg     = a.get('BG',     theme.BG)
+    accent = a.get('ACCENT', theme.ACCENT)
+    border = a.get('BORDER', accent)
+    return (
+        f'QMainWindow {{ background-color: {bg}; }}'
+        f'QFrame#accent_banner {{'
+        f'  background-color: {bg};'
+        f'  color: {accent};'
+        f'  border: 2px solid {border};'
+        f'  border-radius: 4px;'
+        f'  padding: 6px 12px;'
+        f'  font-weight: bold;'
+        f'}}'
+        f'QLabel#accent_banner_text {{'
+        f'  color: {accent};'
+        f'  background: transparent;'
+        f'  font-weight: bold;'
+        f'}}'
+        f'QPushButton#accent_exit_btn {{'
+        f'  background-color: {accent};'
+        f'  color: #1a1a1a;'
+        f'  border: none;'
+        f'  border-radius: 3px;'
+        f'  padding: 4px 12px;'
+        f'  font-weight: bold;'
+        f'}}'
+        f'QPushButton#accent_exit_btn:hover {{'
+        f'  background-color: #e0a060;'
+        f'}}'
+    )
+
 # ── Global stylesheet ────────────────────────────────────────────────────────
 
 WARP_QSS = f"""

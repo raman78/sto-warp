@@ -22,7 +22,7 @@ from pathlib import Path
 from PySide6.QtCore import QByteArray, QSettings
 from PySide6.QtGui import QIcon
 from PySide6.QtWidgets import (
-    QApplication, QMainWindow, QPushButton, QTabWidget,
+    QApplication, QMainWindow, QMessageBox, QPushButton, QTabWidget,
 )
 
 from warp.debug import log
@@ -113,6 +113,15 @@ class LauncherWindow(QMainWindow):
         # into WARP and switch tabs so the user can run JSON export
         # without re-detecting.
         self._core_win.send_to_warp.connect(self._on_send_to_warp)
+        # When the trainer leaves Fast Correction Mode, restore the
+        # default tab title and swing the user back to the WARP tab so
+        # the workflow loop closes naturally.
+        self._core_win.fast_correction_exited.connect(
+            self._on_fast_correction_exited)
+
+        # Default tab titles — captured here so `set_fast_correction_mode`
+        # can swap the trainer's tab label and restore it on exit.
+        self._core_tab_default_title = self._tabs.tabText(core_idx)
 
         # Main-thread detection-log routing follows the active tab so any
         # synchronous `log.info(...)` from a UI callback lands in the
@@ -183,21 +192,42 @@ class LauncherWindow(QMainWindow):
             log.warning(f'Launcher: open_screenshot({path!r}) failed: {e}')
 
     def _on_open_in_warp_fast_correction(self, items_by_file: dict):
-        # Phase B (Fast Correction Mode infra) will replace this stub with
-        # a real tab-swap that enters the trainer's Fast Correction Mode.
-        # For now, fall back to the regular WARP CORE handoff so the action
-        # is at least useful: load the first file with its items, leaving
-        # the user to walk the rest manually.
+        """Enter the trainer's Fast Correction Mode with WARP's batch.
+
+        Re-entry while the trainer is already in Fast Mode shows a
+        confirmation dialog: the running batch's annotation state is
+        discarded when the user accepts. This is intentional — the
+        ephemeral nature of Fast Mode is core to its design.
+        """
         if not items_by_file:
             return
-        first_path = next(iter(items_by_file))
-        first_items = items_by_file.get(first_path) or None
+        if getattr(self._core_win, '_mode', 'training') == 'fast_correction':
+            choice = QMessageBox.question(
+                self,
+                'Fast Correction already active',
+                'A Fast Correction batch is already loaded.\n'
+                'Replace it with the new batch from WARP?\n\n'
+                '(Any unsaved Done marks on the current batch will be kept '
+                'in the trainer\'s annotation store; the new batch starts fresh.)',
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+                QMessageBox.StandardButton.No,
+            )
+            if choice != QMessageBox.StandardButton.Yes:
+                return
+        files = list(items_by_file.keys())
         self._tabs.setCurrentIndex(self._core_idx)
+        self._tabs.setTabText(self._core_idx, 'WARP CORE — Fast Correction')
         try:
-            self._core_win.open_screenshot(first_path, preload_items=first_items)
+            self._core_win.set_fast_correction_mode(files, items_by_file)
         except Exception as e:
             log.warning(
-                f'Launcher: fast-correction stub open({first_path!r}) failed: {e}')
+                f'Launcher: set_fast_correction_mode({len(files)} file(s)) failed: {e}')
+            # Restore tab title on failure so the user isn't stranded.
+            self._tabs.setTabText(self._core_idx, self._core_tab_default_title)
+
+    def _on_fast_correction_exited(self):
+        self._tabs.setTabText(self._core_idx, self._core_tab_default_title)
+        self._tabs.setCurrentIndex(self._warp_idx)
 
     def _on_send_to_warp(self, result: object):
         try:

@@ -19,7 +19,7 @@ read state-at-a-glance (confirmed / error / warning / success).
 from __future__ import annotations
 
 import os
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 
 @dataclass(frozen=True)
@@ -42,6 +42,12 @@ class Theme:
     C_WARNING:    str   # amber  — warning / attention
     C_SUCCESS:    str   # green  — training complete
     C_FAILURE:    str   # red    — training failed
+    # ── Accent variants ───────────────────────────────────────────────
+    # Named overlays consumed by `warp.style.accent_qss(name)`. Each entry
+    # is a small dict of overrides; consumers fall back to chrome colors
+    # when a key is missing. Apply via `widget.setStyleSheet(accent_qss(...))`
+    # so the overlay scopes to that widget subtree only.
+    accents: dict = field(default_factory=dict)
 
 
 SETS_DARK = Theme(
@@ -53,6 +59,16 @@ SETS_DARK = Theme(
     C_CONFIRMED='#7effc8', C_ERROR='#ff5555',
     C_CONF_HIGH='#ffaaaa', C_CONF_MED='#ff8888',
     C_WARNING='#e8c060',   C_SUCCESS='#7effc8', C_FAILURE='#ff7e7e',
+    accents={
+        # WARP Fast Correction Mode — warm amber-brown overlay so the user
+        # can see at a glance they are in the ephemeral correction tab,
+        # not the regular training-data review.
+        'fast_correction': {
+            'BG':     '#2a1f12',   # warm tint behind the window chrome
+            'ACCENT': '#d49050',   # banner / exit-button accent
+            'BORDER': '#d49050',
+        },
+    },
 )
 
 
