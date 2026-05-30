@@ -19,24 +19,21 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, QThread, Qt, Signal
-from PySide6.QtGui import QBrush, QColor
+from PySide6.QtCore import QObject, QSettings, QThread, Signal
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QFileDialog, QHeaderView, QLabel,
-    QMainWindow, QMenu, QMessageBox, QPushButton, QStyle, QTabWidget,
-    QToolBar, QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout,
+    QApplication, QCheckBox, QComboBox, QFileDialog, QLabel,
+    QMainWindow, QMessageBox, QPushButton, QTabWidget,
+    QToolBar, QWidget, QVBoxLayout,
 )
 
 from warp.gui.log_view import LogViewWidget
-from warp.gui.preview_view import PreviewView
 from warp.gui.progress_bar import StatusProgressBar
-from warp.style import LBG, primary_btn_style, secondary_btn_style
+from warp.gui.results_view import ResultsView
+from warp.style import primary_btn_style, secondary_btn_style
 
 from warp.debug import log
-from warp.recognition.boff_keys import group_items_by_seat
 from warp.warp_importer import (
-    SCREENSHOT_EXTENSIONS, SLOT_ORDER, ImportResult, RecognisedItem,
-    WarpImporter,
+    SCREENSHOT_EXTENSIONS, ImportResult, WarpImporter,
 )
 
 _SETTINGS_LAST_FILES_DIR  = 'warp/last_files_dir'
@@ -142,6 +139,12 @@ class WarpWindow(QMainWindow):
     # fall back to the trainer's normal (annotations-only) load path.
     open_in_warp_core = Signal(str, object)
 
+    # Emitted when the user picks "Open in WARP Fast Correction Mode" —
+    # batch handoff of every screenshot in the current result. Payload:
+    # dict[resolved_abs_path → list[RecognisedItem]]. The trainer enters
+    # Fast Correction Mode and loads them all at once.
+    open_in_warp_fast_correction = Signal(dict)
+
     def __init__(self):
         super().__init__()
         self.setWindowTitle('sto-warp — Star Trek Online screenshot recognition')
@@ -150,10 +153,12 @@ class WarpWindow(QMainWindow):
         self._result: ImportResult | None = None
         self._worker: RecognitionWorker | None = None
         self._thread: QThread | None = None
-        # Launcher flips this when it wires `open_in_warp_core` to the
-        # trainer. Standalone `sto-warp gui` runs leave it False and the
-        # Results context menu hides the trainer-handoff entry.
+        # Launcher flips these via set_warp_core_handler / set_fast_correction_handler
+        # when it wires the respective signals to the trainer. Standalone
+        # `sto-warp gui` runs leave them False and the Results context menu
+        # hides the corresponding handoff entries.
         self._has_warp_core_handler = False
+        self._has_fast_correction_handler = False
         # Temp dir holds copies of single-file selections so we can reuse
         # the folder-oriented `process_folder` entry point cleanly.
         self._tmp_dir: tempfile.TemporaryDirectory | None = None
@@ -256,24 +261,12 @@ class WarpWindow(QMainWindow):
 
         self._tabs = QTabWidget(central)
 
-        self._tree = QTreeWidget(self._tabs)
-        self._tree.setColumnCount(5)
-        self._tree.setHeaderLabels(['Slot', 'Idx', 'Item', 'Conf', 'Source'])
-        self._tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        self._tree.header().setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        self._tree.setAlternatingRowColors(False)
-        self._tree.setRootIsDecorated(True)
-        self._tree.setUniformRowHeights(True)
-        self._tree.setColumnWidth(0, 220)
-        self._tree.setColumnWidth(1, 50)
-        self._tree.setColumnWidth(3, 70)
-        self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
-        self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
-        self._tabs.addTab(self._tree, 'Results')
-
-        self._preview = PreviewView(self._tabs)
-        self._preview.rerun_requested.connect(self._on_rerun_requested)
-        self._tabs.addTab(self._preview, 'Preview')
+        self._results = ResultsView(self._tabs)
+        self._results.rerun_requested.connect(self._on_rerun_requested)
+        self._results.open_in_warp_core.connect(self.open_in_warp_core.emit)
+        self._results.open_in_warp_fast_corr.connect(
+            self.open_in_warp_fast_correction.emit)
+        self._tabs.addTab(self._results, 'Results')
 
         # Detection logs are scoped to WARP's own runs — live-tails the
         # 'detection' channel and gets wiped at the start of every new run
@@ -355,13 +348,13 @@ class WarpWindow(QMainWindow):
         # cleared and rebuilt by `_populate_tree` only when the new result
         # arrives. Mirrors the WARP CORE review-panel fix (commit 513d87a)
         # so the user doesn't see an empty pane flash mid-detection.
-        # Preserve Preview's per-file overrides across re-runs so the user
+        # Preserve Results' per-file overrides across re-runs so the user
         # doesn't have to re-pick them; the dropdown state is what drives
         # the next Rerun. Only clear on a fresh folder open.
         if overrides is None:
-            self._preview.clear()
+            self._results.clear()
         elif focus_preview:
-            self._tabs.setCurrentWidget(self._preview)
+            self._tabs.setCurrentWidget(self._results)
         self._result = None
         self._ship_banner.clear()
         self._export_sets_btn.setEnabled(False)
@@ -406,8 +399,7 @@ class WarpWindow(QMainWindow):
 
     def _on_finished(self, result: ImportResult):
         self._result = result
-        self._populate_tree(result)
-        self._preview.set_result(result)
+        self._results.set_result(result)
         self._progress.finish()
         self._set_ship_banner(result)
         msg = f'{len(result.items)} items recognised'
@@ -423,13 +415,12 @@ class WarpWindow(QMainWindow):
         "Send to WARP" handoff) into the WARP UI.
 
         Mirrors `_on_finished` minus the progress/worker bookkeeping:
-        populates the Results tree, Preview tab, ship banner, summary,
-        and enables the SETS-build export so the user can hit "Export"
-        without re-running detection.
+        populates the Results view, ship banner, summary, and enables the
+        SETS-build export so the user can hit "Export" without re-running
+        detection.
         """
         self._result = result
-        self._populate_tree(result)
-        self._preview.set_result(result)
+        self._results.set_result(result)
         self._set_ship_banner(result)
         msg = f'{len(result.items)} items recognised (from WARP CORE)'
         if result.errors:
@@ -530,200 +521,22 @@ class WarpWindow(QMainWindow):
         # The combo only takes input when the checkbox is on AND we're idle.
         self._build_combo.setEnabled(enabled and self._force_bt_check.isChecked())
 
-    # ── Result rendering ────────────────────────────────────────────
+    # ── Handler advertisement (launcher wires these on init) ────────
 
-    def _populate_tree(self, result: ImportResult):
-        # Clear at populate time (not at run start) so previous results
-        # stay visible until the new ones are ready to render. Without
-        # this, the user sees an empty Results pane the entire time the
-        # detection thread is running.
-        self._tree.clear()
-        # Group seat-aware: BOFF items with a seat_key collapse to one
-        # group per physical seat (with #1/#2 suffix when the same
-        # profession label repeats), so a Boff Intel seat holding a
-        # stray Science ability no longer inflates the "Boff Science"
-        # bucket across seat boundaries. Non-BOFF slots group by slot
-        # as before. Returned in spatial (Y) order — we re-arrange
-        # below to honour the canonical pipeline display order for
-        # non-BOFF sections.
-        seat_groups: list[tuple[str, list[RecognisedItem]]] = \
-            group_items_by_seat(result.items)
-        by_label: dict[str, list[RecognisedItem]] = {
-            label: items for label, items in seat_groups
-        }
-        spatial_order: list[str] = [label for label, _ in seat_groups]
+    def set_warp_core_handler(self, has: bool) -> None:
+        self._has_warp_core_handler = bool(has)
+        self._results.set_warp_core_handler(has)
 
-        # Display order: ship metadata → non-BOFF canonical (SLOT_ORDER)
-        # → BOFF in spatial Y order → anything else (sorted). BOFF labels
-        # like "Boff Tactical #1" can't be matched directly against
-        # SLOT_ORDER entries, so the whole BOFF block is taken from the
-        # spatial ordering returned by group_items_by_seat() — which
-        # also matches the on-screen top-to-bottom seat order.
-        meta_slots = ['Ship Name', 'Ship Type', 'Ship Tier']
-        canonical = [sd['name'] for sd in SLOT_ORDER.get(result.build_type, [])]
-        non_boff_canonical = [s for s in canonical if not s.startswith('Boff')]
-        boff_in_order = [lbl for lbl in spatial_order if lbl.startswith('Boff')]
-        seen: set[str] = set()
-        ordered_labels: list[str] = []
-        for s in meta_slots + non_boff_canonical:
-            if s in by_label and s not in seen:
-                ordered_labels.append(s)
-                seen.add(s)
-        for lbl in boff_in_order:
-            if lbl not in seen:
-                ordered_labels.append(lbl)
-                seen.add(lbl)
-        for lbl in sorted(by_label):
-            if lbl not in seen:
-                ordered_labels.append(lbl)
-                seen.add(lbl)
+    def set_fast_correction_handler(self, has: bool) -> None:
+        self._has_fast_correction_handler = bool(has)
+        self._results.set_fast_correction_handler(has)
 
-        # Parent (slot) rows get a lighter background so the eye can find
-        # the section breaks at a glance; child rows stay on the default
-        # tree background. Alternating row colors are off — they made the
-        # multi-row equipment slots noisy.
-        parent_brush = QBrush(QColor(LBG))
-        for slot in ordered_labels:
-            entries = sorted(by_label[slot], key=lambda it: (it.slot_index, it.name))
-            parent = QTreeWidgetItem(self._tree)
-            parent.setText(0, slot)
-            parent.setText(1, str(len(entries)))
-            # Single-entry slots (Ship Name / Type / Tier, or any slot
-            # that only matched one item) — surface the value on the
-            # parent row directly so it's visible even when collapsed,
-            # mirroring the ship banner above the tree.
-            if len(entries) == 1:
-                _name = entries[0].name or '—'
-                if getattr(entries[0], 'match_origin', '') == 'user':
-                    _name = f'✓ {_name}'
-                    parent.setForeground(2, QBrush(QColor('#7effc8')))
-                    parent.setToolTip(
-                        2, 'Match from your own WARP CORE correction (live-seed)')
-                parent.setText(2, _name)
-                parent.setText(3, f'{entries[0].confidence:.2f}')
-            parent.setFirstColumnSpanned(False)
-            for col in range(self._tree.columnCount()):
-                parent.setBackground(col, parent_brush)
-            f = parent.font(0)
-            f.setBold(True)
-            for col in range(self._tree.columnCount()):
-                parent.setFont(col, f)
-            for it in entries:
-                child = QTreeWidgetItem(parent)
-                child.setText(0, '')
-                child.setText(1, str(it.slot_index + 1))
-                _name = it.name or '—'
-                if getattr(it, 'match_origin', '') == 'user':
-                    _name = f'✓ {_name}'
-                    child.setForeground(2, QBrush(QColor('#7effc8')))
-                    child.setToolTip(
-                        2, 'Match from your own WARP CORE correction (live-seed)')
-                child.setText(2, _name)
-                child.setText(3, f'{it.confidence:.2f}')
-                child.setText(4, Path(it.source_file).name if it.source_file else '')
-                # Stash the *resolved* source path on the child row so the
-                # right-click context menu can copy or hand it off to
-                # WARP CORE. Single-file selections are staged through a
-                # symlink in a temp dir (`_on_open_files`); resolving here
-                # makes Copy / Open in WARP CORE land on the original
-                # screenshot location, not the throwaway staging path.
-                if it.source_file:
-                    try:
-                        real = str(Path(it.source_file).resolve())
-                    except Exception:
-                        real = str(it.source_file)
-                    child.setData(4, Qt.ItemDataRole.UserRole, real)
-            parent.setExpanded(True)
-
-    def _on_tree_context_menu(self, pos):
-        """Right-click on any Results row → Copy / Open in WARP CORE.
-
-        Resolves a source screenshot path from the clicked row:
-          - Child row → its own column-4 UserRole.
-          - Parent (slot) row → first non-empty UserRole among its
-            children. Useful for collapsed rows and for slots where the
-            source filename only lives on child rows.
-
-        "Open in WARP CORE" only appears when something is listening on
-        `open_in_warp_core` (launcher mode); standalone `sto-warp gui`
-        runs hide it.
-        """
-        item = self._tree.itemAt(pos)
-        if item is None:
-            return
-        src = self._resolve_item_source(item)
-        name = Path(src).name if src else ''
-
-        st = self.style()
-        icon_copy = st.standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
-        icon_link = st.standardIcon(QStyle.StandardPixmap.SP_FileLinkIcon)
-        icon_open = st.standardIcon(QStyle.StandardPixmap.SP_DirOpenIcon)
-
-        menu = QMenu(self._tree)
-        # Disabled header row makes it obvious which file the actions
-        # below operate on, especially when the same slot has children
-        # from different screenshots.
-        if name:
-            header = menu.addAction(name)
-            header.setEnabled(False)
-            f = header.font()
-            f.setBold(True)
-            header.setFont(f)
-            menu.addSeparator()
-        act_copy_name = menu.addAction(icon_copy, 'Copy filename')
-        act_copy_path = menu.addAction(icon_link, 'Copy full path')
-        if not src:
-            act_copy_name.setEnabled(False)
-            act_copy_path.setEnabled(False)
-        act_open_core = None
-        if src and self._has_warp_core_handler:
-            menu.addSeparator()
-            act_open_core = menu.addAction(icon_open, 'Open in WARP CORE')
-
-        chosen = menu.exec(self._tree.viewport().mapToGlobal(pos))
-        if chosen is None:
-            return
-        if chosen is act_copy_name and src:
-            QApplication.clipboard().setText(name)
-        elif chosen is act_copy_path and src:
-            QApplication.clipboard().setText(src)
-        elif chosen is act_open_core:
-            items_for_src: list[RecognisedItem] = []
-            if self._result is not None:
-                try:
-                    src_resolved = str(Path(src).resolve())
-                except Exception:
-                    src_resolved = src
-                for it in self._result.items:
-                    if not it.source_file:
-                        continue
-                    try:
-                        if str(Path(it.source_file).resolve()) == src_resolved:
-                            items_for_src.append(it)
-                    except Exception:
-                        if it.source_file == src:
-                            items_for_src.append(it)
-            self.open_in_warp_core.emit(src, items_for_src)
-
-    def _resolve_item_source(self, item: QTreeWidgetItem) -> str:
-        """Return the screenshot source path bound to `item` (column-4
-        UserRole). For parent rows that lack their own path, walks the
-        children and returns the first non-empty one. Empty string when
-        nothing is found.
-        """
-        own = item.data(4, Qt.ItemDataRole.UserRole)
-        if isinstance(own, str) and own:
-            return own
-        for i in range(item.childCount()):
-            child_src = item.child(i).data(4, Qt.ItemDataRole.UserRole)
-            if isinstance(child_src, str) and child_src:
-                return child_src
-        return ''
+    # ── Detection Logs save-name suggestion ─────────────────────────
 
     def _suggest_log_save_stem(self) -> str:
         """Default 'Save As' name for the Detection Logs tab.
 
-        Uses the currently-selected file in the Preview tab plus its
+        Uses the currently-displayed file in the Results view plus its
         detected build family (SPACE / GROUND) when known, suffixed with
         the date — e.g. `Screenshot_2024-01-15_120000_12345_space_20260521`.
         Falls back to a plain timestamped stem when nothing is loaded.
@@ -731,11 +544,10 @@ class WarpWindow(QMainWindow):
         import datetime
         date = datetime.datetime.now().strftime('%Y%m%d')
         try:
-            row = self._preview._list.currentRow()
-            if 0 <= row < len(self._preview._keys):
-                src = self._preview._keys[row]
+            src = self._results.current_file()
+            if src:
                 stem = Path(src).stem
-                bt = (self._preview._bt_by_file.get(src) or '').upper()
+                bt = (self._results.current_build_type() or '').upper()
                 fam = ''
                 if bt.startswith('SPACE'):
                     fam = '_space'

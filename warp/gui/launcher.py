@@ -100,7 +100,14 @@ class LauncherWindow(QMainWindow):
         # (rather than in WarpWindow) keeps WARP free of any direct
         # reference to the trainer module.
         self._warp_win.open_in_warp_core.connect(self._on_open_in_warp_core)
-        self._warp_win._has_warp_core_handler = True
+        self._warp_win.set_warp_core_handler(True)
+
+        # "Open in WARP Fast Correction Mode" — batch handoff of every
+        # screenshot in the current WARP result. The launcher flips the
+        # trainer tab into Fast Correction Mode and loads them all.
+        self._warp_win.open_in_warp_fast_correction.connect(
+            self._on_open_in_warp_fast_correction)
+        self._warp_win.set_fast_correction_handler(True)
 
         # WARP CORE "↗ Send to WARP" — install the corrected ImportResult
         # into WARP and switch tabs so the user can run JSON export
@@ -174,6 +181,23 @@ class LauncherWindow(QMainWindow):
             self._core_win.open_screenshot(path, preload_items=items or None)
         except Exception as e:
             log.warning(f'Launcher: open_screenshot({path!r}) failed: {e}')
+
+    def _on_open_in_warp_fast_correction(self, items_by_file: dict):
+        # Phase B (Fast Correction Mode infra) will replace this stub with
+        # a real tab-swap that enters the trainer's Fast Correction Mode.
+        # For now, fall back to the regular WARP CORE handoff so the action
+        # is at least useful: load the first file with its items, leaving
+        # the user to walk the rest manually.
+        if not items_by_file:
+            return
+        first_path = next(iter(items_by_file))
+        first_items = items_by_file.get(first_path) or None
+        self._tabs.setCurrentIndex(self._core_idx)
+        try:
+            self._core_win.open_screenshot(first_path, preload_items=first_items)
+        except Exception as e:
+            log.warning(
+                f'Launcher: fast-correction stub open({first_path!r}) failed: {e}')
 
     def _on_send_to_warp(self, result: object):
         try:
