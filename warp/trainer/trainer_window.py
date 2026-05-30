@@ -358,7 +358,7 @@ class WarpCoreWindow(QMainWindow):
         hdr.setFont(QFont('', 10, QFont.Weight.Bold))
         hdr.setStyleSheet(f'color:{ACCENT};')
         pl.addWidget(hdr)
-        hint = QLabel('Green = high confidence\nYellow = uncertain  ·  Red = unmatched\nClick item to select on canvas.')
+        hint = QLabel('Confirmed · Auto-confirmed (needs review) · Unmatched\nClick item to select on canvas.')
         hint.setWordWrap(True)
         hint.setStyleSheet(f'color:{MFG};font-size:10px;')
         pl.addWidget(hint)
@@ -3571,7 +3571,7 @@ class WarpCoreWindow(QMainWindow):
                 self._btn_done.setChecked(False)
                 self._btn_done.blockSignals(False)
                 msg = (f'Mark Done blocked: {len(pending_auto)} auto-detected '
-                       f'item(s) still yellow — confirm them first.')
+                       f'item(s) still not confirmed — confirm them first.')
                 self.statusBar().showMessage(msg, 6000)
                 log.info(f'mark_done: blocked for {path.name} — '
                          f'{len(pending_auto)} auto_confirmed item(s) unverified')

@@ -62,6 +62,7 @@ BUILD_TYPES = (
     'BOFFS',
     'SPACE_BOFFS',
     'GROUND_BOFFS',
+    'TRAITS',
     'SPACE_TRAITS',
     'GROUND_TRAITS',
     'SPEC',
@@ -166,6 +167,10 @@ class WarpWindow(QMainWindow):
         # Recognition" action can re-run against the same input with
         # per-file overrides applied.
         self._last_folder: Path | None = None
+        # Background screen-type classifier — fires on Open Files / Open
+        # Folder so the file list shows detected types without paying for
+        # full slot recognition. Replaced by the Auto-Detect Slots run.
+        self._stype_worker = None
 
         self._setup_ui()
 
@@ -334,28 +339,78 @@ class WarpWindow(QMainWindow):
         self._stage_folder(folder)
 
     def _stage_folder(self, folder: Path):
-        """Remember the folder and prime the UI but don't run detection.
+        """Remember the folder, list the screenshots and run a quick
+        screen-type classification pass — but do NOT run full recognition.
 
-        WARP used to auto-fire a detection pass at the end of every Open
-        Files / Open Folder. The toolbar's "Auto-Detect Slots" button
-        now owns that step, so the user can preview which folder they
-        picked (and adjust the Force-build-type combo) before paying
-        for a full pipeline run.
+        Mirrors WARP CORE's folder-open behavior: the user sees the
+        loaded files immediately, each annotated with its detected screen
+        type as the background classifier produces results. Full slot
+        recognition stays behind the "Auto-Detect Slots" toolbar button.
         """
+        self._cancel_stype_worker()
         self._last_folder = folder
         self._result = None
-        self._results.clear()
         self._ship_banner.clear()
         self._export_sets_btn.setEnabled(False)
-        n = sum(1 for p in folder.iterdir()
-                if p.is_file() and p.suffix.lower() in SCREENSHOT_EXTENSIONS) \
-            if folder.is_dir() else 0
+
+        paths = sorted(
+            (p for p in folder.iterdir()
+             if p.is_file() and p.suffix.lower() in SCREENSHOT_EXTENSIONS),
+            key=lambda p: p.name.lower()
+        ) if folder.is_dir() else []
+
+        self._results.preload_files(paths)
+
+        n = len(paths)
         self._summary_lbl.setText(
             f'{n} screenshot{"" if n == 1 else "s"} loaded — '
             f'press "Auto-Detect Slots" to run recognition.')
         self.statusBar().showMessage(
-            f'Loaded {folder} — press Auto-Detect Slots to start.')
-        self._rerun_btn.setEnabled(True)
+            f'Loaded {folder} — classifying screen types…' if n else
+            f'Loaded {folder}.')
+        self._rerun_btn.setEnabled(n > 0)
+
+        if paths:
+            self._start_screen_type_detection(paths)
+
+    def _start_screen_type_detection(self, paths: list[Path]) -> None:
+        from warp import userdata
+        from warp.trainer.workers import ScreenTypeDetectorWorker
+        self._stype_worker = ScreenTypeDetectorWorker(
+            paths, models_dir=userdata.models_dir(), parent=self,
+        )
+        self._stype_worker.progress.connect(self._on_stype_progress)
+        self._stype_worker.finished.connect(self._on_stype_finished)
+        self._stype_worker.start()
+
+    def _on_stype_progress(self, idx: int, total: int, filename: str,
+                           stype: str, conf: float):
+        # filename is just the basename — resolve against the folder.
+        if self._last_folder is None:
+            return
+        src = self._last_folder / filename
+        self._results.update_file_screen_type(src, stype)
+        self.statusBar().showMessage(
+            f'Classifying [{idx}/{total}] {filename} → {stype}')
+
+    def _on_stype_finished(self, results: dict):
+        self._stype_worker = None
+        n = len(results)
+        if self._last_folder is not None:
+            self.statusBar().showMessage(
+                f'{n} screenshot{"" if n == 1 else "s"} classified — '
+                f'press Auto-Detect Slots to run recognition.')
+
+    def _cancel_stype_worker(self) -> None:
+        w = self._stype_worker
+        if w is None:
+            return
+        try:
+            w.requestInterruption()
+            w.wait(2000)
+        except Exception:
+            pass
+        self._stype_worker = None
 
     # ── Pipeline plumbing ───────────────────────────────────────────
 

@@ -51,6 +51,8 @@ _FILE_TINT = QColor(120, 220, 120, 38)
 
 
 # Override choices — mirror the toolbar combo so muscle memory matches.
+# Must cover every value produced by SCREEN_TYPE_TO_BUILD_TYPE so the
+# combo is selectable for any auto-detected screen.
 _OVERRIDE_BUILD_TYPES = (
     'SPACE_MIXED',
     'GROUND_MIXED',
@@ -59,6 +61,7 @@ _OVERRIDE_BUILD_TYPES = (
     'BOFFS',
     'SPACE_BOFFS',
     'GROUND_BOFFS',
+    'TRAITS',
     'SPACE_TRAITS',
     'GROUND_TRAITS',
     'SPEC',
@@ -111,7 +114,7 @@ class _InteractiveCanvas(QWidget):
         self._gidx:  list[int] = []
         self._build_type: str = ''
         self._scale: float = 1.0
-        self._highlight_gidx: int = -1
+        self._highlight_set: set[int] = set()
         self._hover_gidx:     int = -1
         self.setMinimumSize(200, 200)
         self.setMouseTracking(True)
@@ -130,7 +133,7 @@ class _InteractiveCanvas(QWidget):
         self._gidx  = list(gidx)
         self._build_type = build_type or ''
         self._scaled = None
-        self._highlight_gidx = -1
+        self._highlight_set = set()
         self._hover_gidx = -1
         self._compute_fit()
         self.update()
@@ -141,14 +144,22 @@ class _InteractiveCanvas(QWidget):
         self._items = []
         self._gidx  = []
         self._build_type = ''
-        self._highlight_gidx = -1
+        self._highlight_set = set()
         self._hover_gidx = -1
         self.update()
 
     def set_highlight(self, gidx: int) -> None:
-        if gidx == self._highlight_gidx:
+        new_set: set[int] = {gidx} if gidx >= 0 else set()
+        if new_set == self._highlight_set:
             return
-        self._highlight_gidx = gidx
+        self._highlight_set = new_set
+        self.update()
+
+    def set_highlight_set(self, gidxs) -> None:
+        new_set = {g for g in gidxs if isinstance(g, int) and g >= 0}
+        if new_set == self._highlight_set:
+            return
+        self._highlight_set = new_set
         self.update()
 
     # ── Geometry ────────────────────────────────────────────────────
@@ -282,7 +293,7 @@ class _InteractiveCanvas(QWidget):
             rw = max(1, int(w * self._scale))
             rh = max(1, int(h * self._scale))
             color = _color_for_slot(it.slot)
-            selected = (g == self._highlight_gidx)
+            selected = (g in self._highlight_set)
             hovered  = (g == self._hover_gidx) and not selected
             if selected:
                 # Selected bbox jumps to the amber accent so it stands out
@@ -509,6 +520,67 @@ class ResultsView(QWidget):
         self._type_combo.setEnabled(False)
         self._override_lbl.setText('')
         self._rerun_btn.setVisible(False)
+
+    def preload_files(self, paths: list) -> None:
+        """Populate the file list with screenshot paths before recognition runs.
+
+        Used by WARP's Open Files / Open Folder flow so the user sees the
+        loaded screenshots immediately. Per-file screen types are filled in
+        later via ``update_file_screen_type`` as the background classifier
+        produces results. A subsequent ``set_result`` call replaces this
+        preview with the full recognition output.
+        """
+        kept_overrides = dict(self._overrides)
+        self.clear()
+        self._overrides = kept_overrides
+        self._result = None
+        keys: list[str] = []
+        for p in paths:
+            try:
+                k = str(Path(p).resolve())
+            except OSError:
+                k = str(p)
+            keys.append(k)
+            self._items_by_file[k] = []
+        self._file_keys = keys
+        self._gidx_to_file = []
+        for src in keys:
+            self._list.addItem(QListWidgetItem(self._list_label_for(src)))
+        if self._list.count():
+            self._list.setCurrentRow(0)
+
+    def update_file_screen_type(self, src, stype: str) -> None:
+        """Set the detected screen-type tag for a single preloaded file."""
+        from warp.warp_importer import SCREEN_TYPE_TO_BUILD_TYPE
+        try:
+            key = str(Path(src).resolve())
+        except OSError:
+            key = str(src)
+        bt = SCREEN_TYPE_TO_BUILD_TYPE.get(stype, '')
+        if bt:
+            self._bt_by_file[key] = bt
+        if key in self._file_keys:
+            row = self._file_keys.index(key)
+            item = self._list.item(row)
+            if item is not None:
+                item.setText(self._list_label_for(key))
+        if self._current_file == key:
+            detected = self._bt_by_file.get(key, '')
+            self._suppress_combo = True
+            if detected and detected in _OVERRIDE_BUILD_TYPES:
+                self._type_combo.setCurrentText(detected)
+            else:
+                self._type_combo.setCurrentIndex(0)
+            self._suppress_combo = False
+            self._type_combo.setEnabled(True)
+            # Refresh the canvas badge so it matches the file-list tag.
+            self._canvas.set_image(
+                Path(key),
+                self._items_by_file.get(key, []),
+                [self._gidx_to_file_index(it)
+                 for it in self._items_by_file.get(key, [])],
+                self._overrides.get(key) or detected,
+            )
 
     def set_result(self, result: ImportResult) -> None:
         kept_overrides = dict(self._overrides)
@@ -799,6 +871,11 @@ class ResultsView(QWidget):
             return
         item = items[0]
         gidx = item.data(0, Qt.ItemDataRole.UserRole)
+        # Parent (group) row: highlight every child bbox that belongs to
+        # the currently displayed file.
+        if item.parent() is None:
+            self._highlight_group(item)
+            return
         if not isinstance(gidx, int) or gidx < 0:
             self._canvas.set_highlight(-1)
             return
@@ -812,6 +889,40 @@ class ResultsView(QWidget):
             finally:
                 self._syncing_highlight = False
         self._canvas.set_highlight(gidx)
+
+    def _highlight_group(self, parent: QTreeWidgetItem) -> None:
+        """Highlight every child bbox of `parent` that belongs to the
+        currently displayed screenshot. If none do, fall back to the
+        first child's source file (so clicking a group from another
+        image still produces a meaningful preview)."""
+        gidxs_current: list[int] = []
+        gidxs_other: dict[str, list[int]] = {}
+        for j in range(parent.childCount()):
+            child = parent.child(j)
+            g = child.data(0, Qt.ItemDataRole.UserRole)
+            src = child.data(2, Qt.ItemDataRole.UserRole)
+            if not isinstance(g, int) or g < 0:
+                continue
+            if isinstance(src, str) and src == self._current_file:
+                gidxs_current.append(g)
+            elif isinstance(src, str):
+                gidxs_other.setdefault(src, []).append(g)
+        if gidxs_current:
+            self._canvas.set_highlight_set(gidxs_current)
+            return
+        # No children on this image — switch to the file owning the
+        # first child and highlight its group there.
+        if gidxs_other:
+            src, gidxs = next(iter(gidxs_other.items()))
+            if src in self._file_keys:
+                self._syncing_highlight = True
+                try:
+                    self._list.setCurrentRow(self._file_keys.index(src))
+                finally:
+                    self._syncing_highlight = False
+                self._canvas.set_highlight_set(gidxs)
+                return
+        self._canvas.set_highlight(-1)
 
     def _on_canvas_bbox_clicked(self, gidx: int):
         self._canvas.set_highlight(gidx)
