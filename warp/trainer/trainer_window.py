@@ -977,6 +977,11 @@ class WarpCoreWindow(QMainWindow):
 
     def _on_auto_detect(self):
         if self._current_idx < 0: return
+        if self._is_current_locked():
+            self.statusBar().showMessage(
+                'Auto-Detect blocked: screenshot is marked Done — '
+                'press ↩ Back to Edit to modify.', 6000)
+            return
         path = self._screenshots[self._current_idx]
         stype = self._screen_types.get(path.name, 'UNKNOWN')
 
