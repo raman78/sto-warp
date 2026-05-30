@@ -453,15 +453,21 @@ class ResultsView(QWidget):
         # the user can drag and so Conf actually honours its 56 px width.
         h = self._tree.header()
         h.setStretchLastSection(False)
-        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
+        # All columns Interactive — Qt's Stretch mode silently fixes the
+        # section's width to the calculated stretch-fill and refuses to
+        # let the user drag the divider on either side of it, which is
+        # what made the Item↔Conf boundary unresponsive. Without any
+        # Stretch column the tree may leave trailing whitespace if the
+        # panel is wider than the sum of column widths — acceptable in
+        # exchange for fully resizable boundaries.
+        for c in range(4):
+            h.setSectionResizeMode(c, QHeaderView.ResizeMode.Interactive)
         self._tree.setAlternatingRowColors(False)
         self._tree.setRootIsDecorated(True)
         self._tree.setUniformRowHeights(True)
-        self._tree.setColumnWidth(0, 180)
+        self._tree.setColumnWidth(0, 170)
         self._tree.setColumnWidth(1, 40)
+        self._tree.setColumnWidth(2, 240)
         self._tree.setColumnWidth(3, 56)   # fits '100%'
         self._tree.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._tree.customContextMenuRequested.connect(self._on_tree_context_menu)
@@ -478,17 +484,11 @@ class ResultsView(QWidget):
         )
         split.addWidget(self._tree)
 
-        # Toggle-on-click for the file list so a second click on the
-        # already-selected file clears tint + canvas. itemPressed fires
-        # BEFORE itemSelectionChanged, so we capture which file was
-        # active prior to the click and the itemClicked handler can
-        # decide based on that snapshot — without it, the first click
-        # on an unselected row would incorrectly toggle off (because
-        # _on_file_selected already updated _current_file by the time
-        # itemClicked landed).
-        self._pre_click_file: str = ''
-        self._list.itemPressed.connect(self._on_list_pressed)
-        self._list.itemClicked.connect(self._on_list_clicked)
+        # File list is select-only: a click picks a file, no toggle-off
+        # behaviour (clearing the active file via clicking it again was
+        # confusing — the canvas would flicker between "loaded" and
+        # "empty" depending on click cadence). _on_file_selected handles
+        # all selection moves.
 
         split.setSizes([240, 700, 320])
         root.addWidget(split)
@@ -575,36 +575,6 @@ class ResultsView(QWidget):
         else:
             bt_tag = ''
         return f'{Path(src).name}   ({with_bbox}/{len(items)}){bt_tag}'
-
-    def _on_list_pressed(self, item: QListWidgetItem):
-        # Snapshot the active file BEFORE Qt fires selectionChanged so
-        # _on_list_clicked can tell apart a fresh selection from a
-        # second click on the already-displayed file.
-        self._pre_click_file = self._current_file
-
-    def _on_list_clicked(self, item: QListWidgetItem):
-        """Toggle behavior: clicking the already-displayed file again
-        clears the file tint and the canvas. Selecting a different file
-        is handled by _on_file_selected."""
-        row = self._list.row(item)
-        if row < 0 or row >= len(self._file_keys):
-            return
-        clicked_src = self._file_keys[row]
-        if clicked_src != self._pre_click_file:
-            # First click on a previously-unselected file — selectionChanged
-            # already triggered the load. Nothing to do here.
-            return
-        # Same file clicked again → toggle off immediately.
-        self._current_file = ''
-        self._list.blockSignals(True)
-        self._list.clearSelection()
-        self._list.setCurrentItem(None)
-        self._list.blockSignals(False)
-        self._canvas.clear()
-        self._type_combo.setEnabled(False)
-        self._override_lbl.setText('')
-        self._apply_file_tint()
-        self._refresh_bold_selected()
 
     def _refresh_bold_selected(self):
         """Bold the font of the currently selected leaf row so the

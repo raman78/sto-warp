@@ -161,11 +161,14 @@ class WarpCoreWindow(QMainWindow):
         sp.addWidget(self._make_left_panel())
         sp.addWidget(self._make_center_panel())
         sp.addWidget(self._make_right_panel())
-        sp.setSizes([400, 700, 400])
         sp.setStretchFactor(0, 0)
         sp.setStretchFactor(1, 1)
         sp.setStretchFactor(2, 0)
-        sp.setSizes([220, 700, 400])
+        # Right pane hosts the slot/name controls plus the 5-column
+        # recognition-review tree. The earlier 400 px squashed the Item
+        # column; widen to match WARP's Results panel proportions so the
+        # two tabs feel consistent.
+        sp.setSizes([220, 640, 560])
 
         # Top-level tabs: the entire annotation workspace (list + canvas +
         # side panel) lives under "Screenshot"; Detection Logs is its

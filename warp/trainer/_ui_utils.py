@@ -59,16 +59,21 @@ class _ReviewListAdapter(QTreeWidget):
         # divider and the column widths below are actually honoured.
         h = self.header()
         h.setStretchLastSection(False)
-        h.setSectionResizeMode(0, QHeaderView.ResizeMode.Interactive)
-        h.setSectionResizeMode(1, QHeaderView.ResizeMode.Interactive)
-        h.setSectionResizeMode(2, QHeaderView.ResizeMode.Stretch)
-        h.setSectionResizeMode(3, QHeaderView.ResizeMode.Interactive)
-        h.setSectionResizeMode(4, QHeaderView.ResizeMode.Interactive)
+        # All columns Interactive — Qt's Stretch mode silently fixes the
+        # section's width to the calculated stretch-fill and refuses to
+        # let the user drag the divider on either side of it, which is
+        # what made the Item↔Conf boundary unresponsive. Without any
+        # Stretch column the tree may leave trailing whitespace if the
+        # panel is wider than the sum of column widths — acceptable in
+        # exchange for fully resizable boundaries.
+        for c in range(5):
+            h.setSectionResizeMode(c, QHeaderView.ResizeMode.Interactive)
         self.setAlternatingRowColors(False)
         self.setRootIsDecorated(True)
         self.setUniformRowHeights(True)
-        self.setColumnWidth(0, 160)
+        self.setColumnWidth(0, 150)
         self.setColumnWidth(1, 40)
+        self.setColumnWidth(2, 240)
         self.setColumnWidth(3, 56)   # fits '100%'
         self.setColumnWidth(4, 86)   # fits 'Confirmed'
         self.setSelectionMode(QAbstractItemView.SelectionMode.SingleSelection)

@@ -316,7 +316,7 @@ class WarpWindow(QMainWindow):
                 # fall back to copy.
                 import shutil
                 shutil.copy2(f, staged / Path(f).name)
-        self._run_against(staged)
+        self._stage_folder(staged)
 
     def _on_open_folder(self):
         from warp.folder_picker import pick_folder
@@ -331,7 +331,31 @@ class WarpWindow(QMainWindow):
         # No staged tempdir for direct folder open — but if a previous
         # single-file run left one around, retire it now.
         self._release_tmp_dir()
-        self._run_against(folder)
+        self._stage_folder(folder)
+
+    def _stage_folder(self, folder: Path):
+        """Remember the folder and prime the UI but don't run detection.
+
+        WARP used to auto-fire a detection pass at the end of every Open
+        Files / Open Folder. The toolbar's "Auto-Detect Slots" button
+        now owns that step, so the user can preview which folder they
+        picked (and adjust the Force-build-type combo) before paying
+        for a full pipeline run.
+        """
+        self._last_folder = folder
+        self._result = None
+        self._results.clear()
+        self._ship_banner.clear()
+        self._export_sets_btn.setEnabled(False)
+        n = sum(1 for p in folder.iterdir()
+                if p.is_file() and p.suffix.lower() in SCREENSHOT_EXTENSIONS) \
+            if folder.is_dir() else 0
+        self._summary_lbl.setText(
+            f'{n} screenshot{"" if n == 1 else "s"} loaded — '
+            f'press "Auto-Detect Slots" to run recognition.')
+        self.statusBar().showMessage(
+            f'Loaded {folder} — press Auto-Detect Slots to start.')
+        self._rerun_btn.setEnabled(True)
 
     # ── Pipeline plumbing ───────────────────────────────────────────
 

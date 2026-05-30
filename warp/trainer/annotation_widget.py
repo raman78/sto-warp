@@ -319,14 +319,15 @@ class AnnotationWidget(QWidget):
             base_color = self._AUTO_CONFIRMED_COLOR
         else:
             base_color = self._STATE_COLOR.get(state, QColor(200, 200, 200, 180))
-        if selected:
-            # Selected bbox overrides per-state color with ACCENT (yellow)
-            # so the active pick is unmistakable next to neighboring rows.
+        if selected or highlighted:
+            # Picking a review row (highlight) and entering manual-bbox
+            # mode (selected) both override the per-state color with
+            # ACCENT yellow — matches WARP's Results canvas so the two
+            # tools' selection cues feel unified. Handles still only
+            # appear in `selected` mode (drawn below).
             color = self._SELECTED_COLOR
             pw    = SELECTED_PEN_WIDTH + 1
             style = Qt.PenStyle.DashLine
-        elif highlighted:
-            color = base_color; pw = SELECTED_PEN_WIDTH + 1; style = Qt.PenStyle.DashLine
         else:
             color = base_color; pw = DRAW_PEN_WIDTH; style = Qt.PenStyle.SolidLine
         pen = QPen(color, pw, style); painter.setPen(pen); painter.setBrush(QBrush(QColor(color.red(), color.green(), color.blue(), 25))); rect = self._img_to_screen_rect(bbox); painter.drawRect(rect)
