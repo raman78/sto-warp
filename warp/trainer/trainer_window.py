@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
     QAbstractItemView, QCompleter, QMenu, QPlainTextEdit,
     QCheckBox, QDoubleSpinBox, QTabWidget,
 )
-from PySide6.QtCore import Qt, QSettings, QSortFilterProxyModel, QSize, QTimer
+from PySide6.QtCore import Qt, QSettings, QSortFilterProxyModel, QSize, QTimer, Signal
 from PySide6.QtGui import QFont, QAction, QColor, QIcon, QStandardItemModel, QStandardItem, QKeySequence, QShortcut
 
 
@@ -55,6 +55,13 @@ log = logging.getLogger(__name__)
 
 
 class WarpCoreWindow(QMainWindow):
+    # Emitted when the user presses "↗ Send to WARP" on a screenshot
+    # marked Done. Payload is an ImportResult built from the user-confirmed
+    # annotations for the current screenshot. Launcher wires this to
+    # WarpWindow.set_external_result + tab switch so the user can JSON-export
+    # the corrected build without re-running WARP detection.
+    send_to_warp = Signal(object)
+
     def __init__(self, sets_app=None, parent=None, embed: bool = False):
         super().__init__(parent)
         # Standalone sto-warp: synthesize a cargo-backed SETS-app shim
@@ -210,6 +217,12 @@ class WarpCoreWindow(QMainWindow):
         self._btn_done.setEnabled(False)
         self._btn_done.clicked.connect(self._on_done_toggle)
         ll.addWidget(self._btn_done)
+        self._btn_send_to_warp = QPushButton('↗ Send to WARP')
+        self._btn_send_to_warp.setEnabled(False)
+        self._btn_send_to_warp.setToolTip(
+            'Mark this screenshot as Done first.')
+        self._btn_send_to_warp.clicked.connect(self._on_send_to_warp)
+        ll.addWidget(self._btn_send_to_warp)
         return left
 
     def _make_center_panel(self) -> QWidget:
@@ -444,11 +457,17 @@ class WarpCoreWindow(QMainWindow):
         self._settings.setValue(_KEY_LAST_DIR, str(files[0].parent))
         self.open_screenshot(files[0])
 
-    def open_screenshot(self, path):
+    def open_screenshot(self, path, preload_items=None):
         """Load `path`'s parent folder (if not already loaded) and select
         the matching row in the file list. Public entry point used by the
         toolbar's "Open Screenshot" action and by the launcher when WARP
         hands off via the Results-row "Open in WARP CORE" menu.
+
+        `preload_items`: optional list[RecognisedItem] from WARP. When
+        provided, the trainer skips its own Auto-Detect and seeds the
+        review panel with these items (as `pending`, so the user has to
+        confirm/correct each one). Existing disk annotations for the same
+        bbox+slot still take precedence via `_populate_review_panel`.
         """
         # Resolve symlinks so launcher hand-offs from WARP single-file
         # selections (staged through a temp dir) land on the original
@@ -468,14 +487,28 @@ class WarpCoreWindow(QMainWindow):
             self._load_folder(folder)
         if self._file_filter.text():
             self._file_filter.clear()
+        # Seed the recognition cache before selecting the row so the
+        # subsequent `_load_screenshot` picks WARP's items up as if a
+        # detection run had just finished.
+        if preload_items:
+            try:
+                dicts = self._recognition_dicts_from_warp_items(p, preload_items)
+                self._recognition_cache[p.name] = dicts
+                log.info(
+                    f'open_screenshot: preloaded {len(dicts)} items from WARP '
+                    f'for {p.name}')
+            except Exception as e:
+                log.warning(f'open_screenshot: preload conversion failed: {e}')
         # Defer selection one event-loop tick: `_load_folder` triggers
         # async screen-type detection which can race with `setCurrentRow`
         # and leave the row unhighlighted. A single-shot timer lets the
         # list finish laying out before we move the cursor.
         target = p.name
+        force_reload = bool(preload_items)
         def _select_now():
             for i, sp in enumerate(self._screenshots):
                 if sp.name == target:
+                    prev_idx = self._current_idx
                     self._file_list.setCurrentRow(i)
                     it = self._file_list.item(i)
                     if it is not None:
@@ -484,8 +517,46 @@ class WarpCoreWindow(QMainWindow):
                             QAbstractItemView.ScrollHint.PositionAtCenter,
                         )
                     self._file_list.setFocus()
+                    # `setCurrentRow` only fires `currentRowChanged` when
+                    # the index actually moves. When the launcher hands off
+                    # the same file the user is already viewing, force a
+                    # reload so the freshly-injected cache is rendered.
+                    if force_reload and prev_idx == i:
+                        self._load_screenshot(i)
                     break
         QTimer.singleShot(0, _select_now)
+
+    def _recognition_dicts_from_warp_items(self, path: Path, warp_items):
+        """Convert WARP's RecognisedItem list to the trainer's review-panel
+        dict shape. Crops are sliced from the image once so `_on_accept`
+        can still call `add_session_example` for any item the user
+        manually accepts inside the trainer."""
+        import cv2
+        img = cv2.imread(str(path))
+        out: list[dict] = []
+        for it in warp_items:
+            bbox = tuple(it.bbox) if it.bbox else ()
+            crop = None
+            if img is not None and bbox and len(bbox) == 4:
+                x, y, w, h = bbox
+                if w > 0 and h > 0 and y >= 0 and x >= 0:
+                    crop_view = img[y:y + h, x:x + w]
+                    if crop_view.size > 0:
+                        crop = crop_view.copy()
+            out.append({
+                'name':        it.name or '',
+                'slot':        it.slot,
+                'conf':        float(it.confidence or 0.0),
+                'bbox':        bbox,
+                'state':       'pending',
+                'thumb':       None,
+                'crop_bgr':    crop,
+                'orig_name':   it.name or '',
+                'ship_name':   '',
+                'cross_check_failed': False,
+                'auto_confirmed':     False,
+            })
+        return out
 
     def _apply_file_filter(self, text: str):
         """Hide file-list rows that don't contain `text` (case-insensitive
@@ -1784,6 +1855,18 @@ class WarpCoreWindow(QMainWindow):
             )
             self._action_auto_detect.setEnabled(True)
             self._action_auto_detect.setToolTip('Auto-detect icons')
+        # Send to WARP is the inverse: only enabled once the screenshot is
+        # locked, since "Done" means the user has reviewed every bbox and
+        # the result is safe to hand back to WARP for JSON export.
+        if is_done:
+            self._btn_send_to_warp.setEnabled(True)
+            self._btn_send_to_warp.setToolTip(
+                'Send the confirmed results to WARP and switch tabs — '
+                'lets you export the JSON build without re-running detection.')
+        else:
+            self._btn_send_to_warp.setEnabled(False)
+            self._btn_send_to_warp.setToolTip(
+                'Mark this screenshot as Done first.')
 
     def _on_bbox_drawn(self, bbox: tuple):
         if self._current_idx >= 0 and self._screen_types.get(
@@ -3386,6 +3469,70 @@ class WarpCoreWindow(QMainWindow):
         self._ann_widget.set_locked(checked)
         self._update_file_list_color(self._current_idx)
         self._update_add_bbox_btn()
+
+    def _on_send_to_warp(self):
+        """Build an ImportResult from the current screenshot's confirmed
+        annotations and emit `send_to_warp` so the launcher can install it
+        into WARP and switch tabs. Only enabled while the screenshot is
+        Mark Done (see _update_add_bbox_btn).
+        """
+        if self._current_idx < 0:
+            return
+        if not self._is_current_locked():
+            return
+        path = self._screenshots[self._current_idx]
+        anns = [a for a in self._data_mgr.get_annotations(path)
+                if a.state == AnnotationState.CONFIRMED]
+        if not anns:
+            self.statusBar().showMessage(
+                'Nothing to send — no confirmed annotations on this screenshot.', 5000)
+            return
+        from warp.warp_importer import ImportResult, RecognisedItem
+        # Map screen_type → build_type bucket WARP's tree renderer expects.
+        stype = self._screen_types.get(path.name, 'UNKNOWN')
+        if stype.startswith('GROUND'):
+            build_type = 'GROUND'
+        else:
+            build_type = 'SPACE'
+        result = ImportResult(build_type=build_type)
+        # Group icon-slot annotations by slot so we can assign slot_index in
+        # spatial order (left-to-right by bbox x, then top-to-bottom by y) —
+        # matches WARP's own slot_index convention.
+        by_slot: dict[str, list] = {}
+        for a in anns:
+            if a.slot == 'Ship Name':
+                result.ship_name = a.name or result.ship_name
+                continue
+            if a.slot == 'Ship Type':
+                result.ship_type = a.name or result.ship_type
+                continue
+            if a.slot == 'Ship Tier':
+                result.ship_tier = a.name or result.ship_tier
+                continue
+            by_slot.setdefault(a.slot, []).append(a)
+        src_str = str(path)
+        for slot, group in by_slot.items():
+            group.sort(key=lambda a: (a.bbox[0] if a.bbox else 0,
+                                      a.bbox[1] if a.bbox else 0))
+            for idx, a in enumerate(group):
+                result.items.append(RecognisedItem(
+                    slot=slot,
+                    slot_index=idx,
+                    name=a.name or '',
+                    confidence=a.ml_conf or 1.0,
+                    thumbnail=None,
+                    source_file=src_str,
+                    bbox=a.bbox or (),
+                    src='user',
+                    match_origin='user',
+                ))
+        result.per_file[src_str] = build_type
+        log.info(
+            f'send_to_warp: {path.name} build_type={build_type} '
+            f'items={len(result.items)} ship={result.ship_name!r}/'
+            f'{result.ship_type!r}/{result.ship_tier!r}'
+        )
+        self.send_to_warp.emit(result)
 
     def _remove_layout_for(self, path: Path):
         from warp.recognition.layout_detector import LayoutDetector

@@ -102,6 +102,11 @@ class LauncherWindow(QMainWindow):
         self._warp_win.open_in_warp_core.connect(self._on_open_in_warp_core)
         self._warp_win._has_warp_core_handler = True
 
+        # WARP CORE "↗ Send to WARP" — install the corrected ImportResult
+        # into WARP and switch tabs so the user can run JSON export
+        # without re-detecting.
+        self._core_win.send_to_warp.connect(self._on_send_to_warp)
+
         # Main-thread detection-log routing follows the active tab so any
         # synchronous `log.info(...)` from a UI callback lands in the
         # tool the user is currently looking at. Worker threads override
@@ -163,12 +168,20 @@ class LauncherWindow(QMainWindow):
         else:
             set_main_detection_channel('detection')
 
-    def _on_open_in_warp_core(self, path: str):
+    def _on_open_in_warp_core(self, path: str, items: object):
         self._tabs.setCurrentIndex(self._core_idx)
         try:
-            self._core_win.open_screenshot(path)
+            self._core_win.open_screenshot(path, preload_items=items or None)
         except Exception as e:
             log.warning(f'Launcher: open_screenshot({path!r}) failed: {e}')
+
+    def _on_send_to_warp(self, result: object):
+        try:
+            self._warp_win.set_external_result(result)
+        except Exception as e:
+            log.warning(f'Launcher: set_external_result failed: {e}')
+            return
+        self._tabs.setCurrentIndex(self._warp_idx)
 
     def _on_refresh_clicked(self):
         self._coord.request_refresh(force=True)

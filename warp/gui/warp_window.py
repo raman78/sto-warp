@@ -136,10 +136,11 @@ class WarpWindow(QMainWindow):
     detection_started = Signal()
 
     # Emitted when the user picks "Open in WARP CORE" from a Results-row
-    # context menu. Payload is the absolute screenshot path. Launcher
-    # wires this to the trainer's `open_screenshot()` so it switches the
-    # active tab and selects the matching row in the file list.
-    open_in_warp_core = Signal(str)
+    # context menu. Payload: (absolute screenshot path, list[RecognisedItem]).
+    # The trainer uses the second arg to skip its own Auto-Detect and load
+    # WARP's pending results directly for review/correction. Empty list ⇒
+    # fall back to the trainer's normal (annotations-only) load path.
+    open_in_warp_core = Signal(str, object)
 
     def __init__(self):
         super().__init__()
@@ -417,6 +418,27 @@ class WarpWindow(QMainWindow):
         self._export_sets_btn.setEnabled(True)
         self._set_controls_enabled(True)
 
+    def set_external_result(self, result: ImportResult) -> None:
+        """Install an ImportResult produced outside WARP (e.g. WARP CORE
+        "Send to WARP" handoff) into the WARP UI.
+
+        Mirrors `_on_finished` minus the progress/worker bookkeeping:
+        populates the Results tree, Preview tab, ship banner, summary,
+        and enables the SETS-build export so the user can hit "Export"
+        without re-running detection.
+        """
+        self._result = result
+        self._populate_tree(result)
+        self._preview.set_result(result)
+        self._set_ship_banner(result)
+        msg = f'{len(result.items)} items recognised (from WARP CORE)'
+        if result.errors:
+            msg += f'  ·  {len(result.errors)} error(s)'
+        self._summary_lbl.setText(msg)
+        self.statusBar().showMessage('Loaded from WARP CORE.')
+        self._export_sets_btn.setEnabled(True)
+        self._set_controls_enabled(True)
+
     def _set_ship_banner(self, result: ImportResult):
         bits = []
         if result.ship_name:
@@ -666,7 +688,22 @@ class WarpWindow(QMainWindow):
         elif chosen is act_copy_path and src:
             QApplication.clipboard().setText(src)
         elif chosen is act_open_core:
-            self.open_in_warp_core.emit(src)
+            items_for_src: list[RecognisedItem] = []
+            if self._result is not None:
+                try:
+                    src_resolved = str(Path(src).resolve())
+                except Exception:
+                    src_resolved = src
+                for it in self._result.items:
+                    if not it.source_file:
+                        continue
+                    try:
+                        if str(Path(it.source_file).resolve()) == src_resolved:
+                            items_for_src.append(it)
+                    except Exception:
+                        if it.source_file == src:
+                            items_for_src.append(it)
+            self.open_in_warp_core.emit(src, items_for_src)
 
     def _resolve_item_source(self, item: QTreeWidgetItem) -> str:
         """Return the screenshot source path bound to `item` (column-4
