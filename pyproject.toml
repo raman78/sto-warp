@@ -32,7 +32,12 @@ dependencies = [
     "scikit-image>=0.21",
     "scipy>=1.11",
     "huggingface-hub>=0.22",
-    # ML stack (CPU-only torch by default)
+    # ML stack. Note: the default PyPI `torch` wheel bundles the CUDA
+    # runtime (~2 GB on Linux/Windows). sto-warp's recognition pipeline
+    # is CPU-only by design (EasyOCR is pinned to gpu=False, no .cuda()
+    # in warp/recognition/). Maintainers who want CUDA for
+    # embedder_trainer should install the CPU wheel first and then
+    # follow docs/gpu_setup.md to swap in the CUDA wheel.
     "torch>=2.1",
     "torchvision>=0.16",
     "pillow>=9.0",

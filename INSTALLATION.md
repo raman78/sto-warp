@@ -4,6 +4,47 @@
 
 To make this as easy as possible, we provide universal installation scripts for both Linux/macOS and Windows.
 
+> **A note on PyTorch.** sto-warp's recognition pipeline is CPU-only by
+> design. The Windows `.exe` installer ships a CPU-only build of PyTorch
+> (~400 MB total). On Linux, the default `pipx install` pulls the
+> standard PyPI `torch` wheel which bundles the CUDA runtime (~2 GB) —
+> harmless but bigger than needed. To save disk space, install with the
+> CPU-only index instead:
+>
+> ```bash
+> pipx install sto-warp \
+>   --pip-args="--index-url https://download.pytorch.org/whl/cpu --extra-index-url https://pypi.org/simple"
+> ```
+>
+> Maintainers / contributors who want CUDA for embedder training: see
+> [`docs/gpu_setup.md`](docs/gpu_setup.md).
+
+---
+
+## 🪟 Windows: one-click installer (recommended)
+
+The simplest way to install on Windows — no Python required, no
+terminal commands.
+
+1. Download the latest **`sto-warp-<version>-setup.exe`** from the
+   [Releases page](https://github.com/raman78/sto-warp/releases/latest).
+2. Double-click to launch the installer.
+3. Accept the license, pick a folder (default
+   `%LOCALAPPDATA%\Programs\sto-warp\` — **no admin required**),
+   choose whether to add a Desktop icon, and click **Install**.
+4. When the wizard finishes, sto-warp is available from the Start
+   Menu. The first launch downloads the recognition models from the
+   community Hugging Face mirror (one-off, ~150 MB).
+
+The installer ships a self-contained Python 3.14 runtime and CPU-only
+PyTorch — nothing else needs to be installed on the machine. To
+update, download the newer `.exe` and run it over the existing install;
+your data in `%APPDATA%\warp\` is preserved.
+
+**SmartScreen on first run.** Because the installer is not yet
+code-signed, Windows may display *"Windows protected your PC"*. Click
+**More info → Run anyway**. This appears once.
+
 ---
 
 ## 🚀 The Easy Way (One-Command Install)
