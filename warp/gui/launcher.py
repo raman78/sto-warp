@@ -70,6 +70,7 @@ class LauncherWindow(QMainWindow):
         self._build_ui()
         self._init_sync()
         self._install_desktop_entry()
+        self._gc_fast_correction_sessions()
         self._restore_window_state()
 
     # ── UI ────────────────────────────────────────────────────────────
@@ -177,6 +178,19 @@ class LauncherWindow(QMainWindow):
         except Exception as e:
             log.debug(f'Launcher: desktop install skipped: {e}')
 
+    def _gc_fast_correction_sessions(self):
+        """Drop Fast Correction staging dirs older than 14 days.
+
+        Runs once at launch — Fast Mode sessions are content-hashed
+        snapshots of WARP batches and can accumulate indefinitely if the
+        user keeps starting new batches without exiting cleanly.
+        """
+        try:
+            from warp.trainer import fast_session
+            fast_session.gc_old_sessions(max_age_days=14)
+        except Exception as e:
+            log.debug(f'Launcher: fast-correction GC skipped: {e}')
+
     def _on_main_tab_changed(self, idx: int):
         from warp.debug import set_main_detection_channel
         if idx == self._core_idx:
@@ -191,7 +205,7 @@ class LauncherWindow(QMainWindow):
         except Exception as e:
             log.warning(f'Launcher: open_screenshot({path!r}) failed: {e}')
 
-    def _on_open_in_warp_fast_correction(self, items_by_file: dict):
+    def _on_open_in_warp_fast_correction(self, items_by_file: dict, stype_by_file: dict):
         """Enter the trainer's Fast Correction Mode with WARP's batch.
 
         Re-entry while the trainer is already in Fast Mode shows a
@@ -218,7 +232,7 @@ class LauncherWindow(QMainWindow):
         self._tabs.setCurrentIndex(self._core_idx)
         self._tabs.setTabText(self._core_idx, 'WARP CORE — Fast Correction')
         try:
-            self._core_win.set_fast_correction_mode(files, items_by_file)
+            self._core_win.set_fast_correction_mode(files, items_by_file, stype_by_file)
         except Exception as e:
             log.warning(
                 f'Launcher: set_fast_correction_mode({len(files)} file(s)) failed: {e}')
@@ -235,6 +249,16 @@ class LauncherWindow(QMainWindow):
         except Exception as e:
             log.warning(f'Launcher: set_external_result failed: {e}')
             return
+        # Send to WARP is the terminal action of the Fast Correction loop —
+        # close the loop by exiting Fast Mode so the trainer tab reverts to
+        # its standing training view. Safe no-op when WARP CORE is already
+        # in normal training mode. `fast_correction_exited` then drives the
+        # tab title restore + tab switch via `_on_fast_correction_exited`;
+        # the explicit switch below covers the non-FC path.
+        try:
+            self._core_win.exit_fast_correction_mode()
+        except Exception as e:
+            log.debug(f'Launcher: exit_fast_correction_mode failed: {e}')
         self._tabs.setCurrentIndex(self._warp_idx)
 
     def _on_refresh_clicked(self):

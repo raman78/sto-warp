@@ -24,6 +24,7 @@ from PySide6.QtGui import QFont, QAction, QBrush, QColor, QIcon, QStandardItemMo
 
 from warp import userdata
 from warp.trainer.annotation_widget import AnnotationWidget
+from warp.trainer.fast_session      import display_name as _disp_name
 from warp.trainer.training_data      import (
     TrainingDataManager, AnnotationState, NON_ICON_SLOTS, SINGLE_INSTANCE_SLOTS,
     TEXT_LEARNING_SLOTS, VIRTUAL_ITEM_NAMES,
@@ -97,6 +98,10 @@ class WarpCoreWindow(QMainWindow):
         # a fixed batch of files; folder-load + Open toolbar entries are
         # suppressed and a banner with an Exit button is shown.
         self._mode: str = 'training'
+        # Populated by `set_fast_correction_mode` — holds the active
+        # FastSession (staging dir + staged→orig path map) while the
+        # window is in Fast Correction Mode; None otherwise.
+        self._fast_session = None
         self._screen_types: dict[str, str] = {}
         self._screen_types_manual: set[str] = set()   # green — user confirmed
         self._screen_types_ml_auto: set[str] = set()  # yellow — ML ≥95% auto-accepted
@@ -155,10 +160,22 @@ class WarpCoreWindow(QMainWindow):
         self.raise_()
         if hasattr(self, '_ann_widget'):
             self._ann_widget.setFocus()
+        # Re-check `_screenshots` and `_mode` *inside* the timer callback:
+        # the launcher's setCurrentIndex fires this showEvent BEFORE
+        # `set_fast_correction_mode` runs, so a check here would still
+        # think we're in training mode. By the time the singleShot fires
+        # (0 ms later, but after the current event loop iteration),
+        # set_fast_correction_mode has already populated `_screenshots`
+        # with the staged batch and flipped `_mode` — both gates skip
+        # the clobbering `_load_folder` call.
         if not self._screenshots:
             last = self._settings.value(_KEY_LAST_DIR, '')
             if last and Path(last).is_dir():
-                QTimer.singleShot(0, lambda: self._load_folder(Path(last)))
+                def _maybe_restore():
+                    if self._screenshots or self._mode == 'fast_correction':
+                        return
+                    self._load_folder(Path(last))
+                QTimer.singleShot(0, _maybe_restore)
 
     def _build_ui(self):
         c = QWidget()
@@ -470,6 +487,21 @@ class WarpCoreWindow(QMainWindow):
         self._action_auto_detect = act(
             'Auto-Detect Slots', 'Auto-detect icons', self._on_auto_detect)
 
+    def _set_toolbar_actions_enabled(self, enabled: bool) -> None:
+        """Toggle the four detect-relevant toolbar actions together.
+
+        Used by the screen-type detection flow to lock the toolbar while a
+        run is in flight — re-enabling Auto-Detect Slots mid-classification
+        would let the user kick off recognition with stale screen types.
+        After re-enabling, `_load_screenshot` reapplies the lock-state
+        gating on Auto-Detect Slots (Done screenshots stay disabled).
+        """
+        for a in (self._action_open_screenshot,
+                  self._action_open_folder,
+                  self._action_detect_screen_types,
+                  self._action_auto_detect):
+            a.setEnabled(enabled)
+
     # ── Fast Correction Mode ────────────────────────────────────────────
     def _make_fast_correction_banner(self) -> QFrame:
         f = QFrame()
@@ -487,7 +519,8 @@ class WarpCoreWindow(QMainWindow):
         lay.addWidget(btn)
         return f
 
-    def set_fast_correction_mode(self, files: list, items_by_file: dict) -> None:
+    def set_fast_correction_mode(self, files: list, items_by_file: dict,
+                                 stype_by_file: dict | None = None) -> None:
         """Switch into Fast Correction Mode.
 
         `files` is a list of Path-like screenshot paths from WARP. The mode
@@ -496,32 +529,119 @@ class WarpCoreWindow(QMainWindow):
         so the user can tell at a glance they are in the ephemeral
         correction view rather than the full training-data review.
 
-        `items_by_file` is reserved for future seeding of `_recognition_cache`;
-        for #3 we only pre-load the file list so the user can review.
+        `items_by_file` maps the *original* file path (str) → WARP's
+        RecognisedItem list. We convert each list to the trainer's dict
+        shape and seed `_recognition_cache` under the *staged* basename
+        so `_load_screenshot` renders WARP's detection on entry — the
+        whole point of Fast Mode is to fix exactly those items, not the
+        user's older disk-confirmed annotations.
         """
-        paths = [Path(p) for p in files]
-        if not paths:
+        orig_paths = [Path(p) for p in files]
+        if not orig_paths:
             self.statusBar().showMessage(
                 'Fast Correction: no files supplied — nothing to do.', 5000)
             return
+        # Stage every input under a content-hashed dir in the warp cache
+        # so Fast Mode never touches the original file's training data
+        # (separate filenames → separate TDM keys, separate crops). The
+        # session also persists across re-entry: same file set → same
+        # hash → resume in-progress annotations.
+        from warp.trainer import fast_session as _fs
+        sess = _fs.prepare(orig_paths)
+        if not sess.staged_paths:
+            self.statusBar().showMessage(
+                'Fast Correction: failed to stage any input file.', 5000)
+            return
+        # Snapshot the training-mode view (folder, screen types, done set,
+        # recognition cache, selection, filter) so `exit_fast_correction_mode`
+        # can drop the user back exactly where they were before WARP handed
+        # the batch over. Only taken on first entry — re-entering FC keeps
+        # the original training snapshot intact, otherwise the second FC
+        # session would snapshot the first FC's staged batch and exit could
+        # never escape Fast Mode.
+        if self._mode != 'fast_correction':
+            self._pre_fc_snapshot = {
+                'screenshots':          list(self._screenshots),
+                'screen_types':         dict(self._screen_types),
+                'screen_types_manual':  set(self._screen_types_manual),
+                'screen_types_ml_auto': set(self._screen_types_ml_auto),
+                'recognition_cache':    dict(self._recognition_cache),
+                'recognition_items':    list(self._recognition_items),
+                'screenshots_done':     set(self._screenshots_done),
+                'current_idx':          self._current_idx,
+                'file_filter':          self._file_filter.text(),
+            }
+        self._fast_session = sess
         self._mode = 'fast_correction'
+        from warp.debug import log as _wlog
+        _wlog.info(
+            f'Fast Correction: ENTER hash={sess.hash} '
+            f'staged={len(sess.staged_paths)} '
+            f'items_by_file_keys={list(items_by_file.keys())[:3]}{"..." if len(items_by_file) > 3 else ""} '
+            f'total_keys={len(items_by_file)}')
         # Reset state so the new batch is the only thing on screen.
-        self._screenshots = paths
+        self._screenshots = list(sess.staged_paths)
         self._screen_types.clear()
         self._screen_types_manual.clear()
         self._screen_types_ml_auto.clear()
         self._recognition_cache.clear()
         self._recognition_items = []
+        # Seed each staged file's cache with WARP's items so the review
+        # panel renders WARP's raw detection (bboxes possibly off-by-a-px
+        # vs. the user's older annotations — this is the *point*: Fast
+        # Mode is an independent confirmation pass that adds a fresh
+        # training signal). Match WARP's items to staged paths by
+        # basename, not full path: WARP keys `items_by_file` using
+        # `Path(source_file).resolve()` which can disagree with our
+        # un-resolved `Path(p)` (symlinks, cwd, trailing slashes), so
+        # comparing strings is fragile. Basenames always line up because
+        # `prepare()` uses `orig.name` to form the staged filename.
+        staged_by_origname = {o.name: s for s, o in sess.paths_map.items()}
+        for orig_key, warp_items in items_by_file.items():
+            if not warp_items:
+                continue
+            staged = staged_by_origname.get(Path(orig_key).name)
+            if staged is None:
+                log.debug(
+                    f'Fast Correction: no staged path for orig {orig_key!r}; '
+                    f'skipping {len(warp_items)} item(s)')
+                continue
+            try:
+                dicts = self._recognition_dicts_from_warp_items(staged, warp_items)
+                self._recognition_cache[staged.name] = dicts
+                log.info(
+                    f'Fast Correction: seeded {len(dicts)} items for '
+                    f'{Path(orig_key).name} → {staged.name}')
+            except Exception as e:
+                log.warning(
+                    f'Fast Correction: seed conversion failed for '
+                    f'{Path(orig_key).name}: {e}')
+        # Each FC entry is a fresh correction pass — clear any Done flag a
+        # previous run of the same hashed batch left in `_screenshots_done`.
+        # Otherwise the file list shows the staged names as green ("done")
+        # the moment the user re-enters, even though the new pass is open
+        # for editing. Persist the cleared state so the disk JSON matches.
+        staged_names = {p.name for p in self._screenshots}
+        if staged_names & self._screenshots_done:
+            self._screenshots_done.difference_update(staged_names)
+            self._save_done()
         self._current_idx = -1
         self._file_list.clear()
-        persisted      = self._data_mgr.get_all_screen_types()
-        user_confirmed = self._data_mgr.get_user_confirmed_set()
+        # Screen type comes from WARP's classifier for *this* recognition
+        # session — not from the TDM (which would carry the user's previous
+        # labels on the original file and contradict the FC principle of
+        # treating WARP's batch as an independent detection pass). Match
+        # `stype_by_file` to staged paths by basename, same as items above.
+        stype_by_origname = {}
+        if stype_by_file:
+            for k, v in stype_by_file.items():
+                if v:
+                    stype_by_origname[Path(k).name] = v
         for p in self._screenshots:
-            saved = persisted.get(p.name, '')
-            self._screen_types[p.name] = saved if saved else 'UNKNOWN'
-            if p.name in user_confirmed:
-                self._screen_types_manual.add(p.name)
-            elif saved:
+            orig_name = sess.paths_map[p].name if p in sess.paths_map else p.name
+            stype = stype_by_origname.get(orig_name, '')
+            self._screen_types[p.name] = stype if stype else 'UNKNOWN'
+            if stype:
                 self._screen_types_ml_auto.add(p.name)
             self._file_list.addItem(self._make_file_list_item(p, self._screen_types[p.name]))
         self._apply_file_filter(self._file_filter.text())
@@ -535,30 +655,67 @@ class WarpCoreWindow(QMainWindow):
         if self._file_list.count():
             self._file_list.setCurrentRow(0)
         self.statusBar().showMessage(
-            f'Fast Correction Mode — {len(paths)} screenshot(s) loaded from WARP.')
+            f'Fast Correction Mode — {len(self._screenshots)} screenshot(s) '
+            f'loaded from WARP (session {sess.hash}).')
 
     def exit_fast_correction_mode(self) -> None:
-        """Leave Fast Correction Mode and restore the regular trainer UI."""
+        """Leave Fast Correction Mode and restore the regular trainer UI.
+
+        If a training-mode snapshot was captured on FC entry, the previous
+        folder, selection, screen types, done flags and recognition cache
+        are restored so the trainer comes back exactly as the user left it.
+        Without a snapshot (FC entered before any training-mode folder was
+        loaded) the trainer falls back to its empty initial state.
+        """
         if self._mode != 'fast_correction':
             return
         self._mode = 'training'
+        self._fast_session = None
         self.setStyleSheet('')
         apply_dark_style(self)
         self._fast_banner.setVisible(False)
         for a in (self._action_open_screenshot, self._action_open_folder):
             a.setVisible(True)
         self.setWindowTitle('WARP CORE — ML Trainer')
-        # Drop the ephemeral batch — the user can re-open a real folder.
-        self._screenshots = []
-        self._screen_types.clear()
-        self._screen_types_manual.clear()
-        self._screen_types_ml_auto.clear()
-        self._recognition_cache.clear()
-        self._recognition_items = []
-        self._current_idx = -1
+
+        snap = getattr(self, '_pre_fc_snapshot', None)
+        self._pre_fc_snapshot = None
         self._file_list.clear()
-        self.statusBar().showMessage(
-            'Back to training mode — open a folder to start annotating.')
+
+        if snap and snap.get('screenshots'):
+            self._screenshots          = snap['screenshots']
+            self._screen_types         = snap['screen_types']
+            self._screen_types_manual  = snap['screen_types_manual']
+            self._screen_types_ml_auto = snap['screen_types_ml_auto']
+            self._recognition_cache    = snap['recognition_cache']
+            self._recognition_items    = snap['recognition_items']
+            self._screenshots_done     = snap['screenshots_done']
+            for p in self._screenshots:
+                self._file_list.addItem(
+                    self._make_file_list_item(
+                        p, self._screen_types.get(p.name, 'UNKNOWN')))
+            self._file_filter.setText(snap.get('file_filter', ''))
+            self._apply_file_filter(self._file_filter.text())
+            prev_idx = snap.get('current_idx', -1)
+            if 0 <= prev_idx < len(self._screenshots):
+                self._file_list.setCurrentRow(prev_idx)
+            else:
+                self._current_idx = -1
+            self.statusBar().showMessage(
+                'Back to training mode — previous folder restored.')
+        else:
+            # No previous training-mode state — drop the ephemeral batch
+            # and let the user open a real folder.
+            self._screenshots = []
+            self._screen_types.clear()
+            self._screen_types_manual.clear()
+            self._screen_types_ml_auto.clear()
+            self._recognition_cache.clear()
+            self._recognition_items = []
+            self._current_idx = -1
+            self.statusBar().showMessage(
+                'Back to training mode — open a folder to start annotating.')
+
         self.fast_correction_exited.emit()
 
     def _on_open(self):
@@ -759,6 +916,7 @@ class WarpCoreWindow(QMainWindow):
         # to runs that the user actually started here.
         self._detect_dlg = '__statusbar__'
         self._detect_max_iter = max_iter
+        self._set_toolbar_actions_enabled(False)
         self._status_progress.start(determinate=True, maximum=max(1, len(pending)))
         self.statusBar().showMessage(
             f'Classifying screenshots — loop mode ({max_iter} iterations)…'
@@ -801,7 +959,7 @@ class WarpCoreWindow(QMainWindow):
             icon  = SCREEN_TYPE_ICONS.get(disp_stype, '?')
             label = SCREEN_TYPE_LABELS.get(disp_stype, 'Unknown')
             self._status_progress.set_progress(idx)
-            self.statusBar().showMessage(f'[{idx}/{total}] {filename}  →  {icon} {label}')
+            self.statusBar().showMessage(f'[{idx}/{total}] {_disp_name(filename)}  →  {icon} {label}')
 
         # During scan: only update UI for items without a user-confirmed type
         if filename in self._screen_types_manual:
@@ -816,7 +974,7 @@ class WarpCoreWindow(QMainWindow):
                     sc_icon = SCREEN_TYPE_ICONS.get(stype, '?')
                     label   = SCREEN_TYPE_LABELS.get(stype, 'Unknown')
                     self._file_list.blockSignals(True)
-                    item.setText(f'{sc_icon} {label}\n  {filename}')
+                    item.setText(f'{sc_icon} {label}\n  {_disp_name(filename)}')
                     item.setCheckState(Qt.CheckState.Unchecked)
                     item.setIcon(QIcon())  # no dot yet — final state set in _on_detect_finished
                     self._file_list.blockSignals(False)
@@ -860,7 +1018,7 @@ class WarpCoreWindow(QMainWindow):
                 sc_icon = SCREEN_TYPE_ICONS.get(stype, '?')
                 label   = SCREEN_TYPE_LABELS.get(stype, 'Unknown')
                 self._file_list.blockSignals(True)
-                item.setText(f'{sc_icon} {label}\n  {p.name}')
+                item.setText(f'{sc_icon} {label}\n  {_disp_name(p.name)}')
                 item.setCheckState(Qt.CheckState.Checked if (is_user or is_ml) else Qt.CheckState.Unchecked)
                 item.setIcon(_get_user_icon() if is_user else (_get_ml_icon() if is_ml else QIcon()))
                 self._file_list.blockSignals(False)
@@ -900,6 +1058,7 @@ class WarpCoreWindow(QMainWindow):
             self._detect_worker = None
             self._status_progress.finish()
             self._detect_dlg = None
+            self._set_toolbar_actions_enabled(True)
             self.statusBar().showMessage(f'Screen-type detection done — {reason}.')
             if self._screenshots:
                 if self._current_idx < 0:
@@ -912,6 +1071,7 @@ class WarpCoreWindow(QMainWindow):
         if self._detect_dlg:
             self._status_progress.finish()
             self._detect_dlg = None
+            self._set_toolbar_actions_enabled(True)
             self.statusBar().showMessage('Screen-type detection done.')
         self._detect_worker = None
         if self._screenshots:
@@ -927,6 +1087,7 @@ class WarpCoreWindow(QMainWindow):
             self._detect_worker.wait(3000)
         self._status_progress.finish()
         self._detect_dlg = None
+        self._set_toolbar_actions_enabled(True)
         self.statusBar().showMessage('Screen-type detection cancelled.')
         if self._screenshots:
             self._file_list.setCurrentRow(0)
@@ -952,7 +1113,7 @@ class WarpCoreWindow(QMainWindow):
     def _make_file_list_item(self, p: Path, stype: str) -> QListWidgetItem:
         sc_icon = SCREEN_TYPE_ICONS.get(stype, '?')
         label   = SCREEN_TYPE_LABELS.get(stype, 'Unknown')
-        item = QListWidgetItem(f'{sc_icon} {label}\n  {p.name}')
+        item = QListWidgetItem(f'{sc_icon} {label}\n  {_disp_name(p.name)}')
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         is_user = p.name in self._screen_types_manual
         is_ml   = p.name in self._screen_types_ml_auto
@@ -1052,6 +1213,13 @@ class WarpCoreWindow(QMainWindow):
         self._name_edit.clear()
         self._name_edit.blockSignals(False)
         cached = self._recognition_cache.get(path.name)
+        if self._mode == 'fast_correction':
+            from warp.debug import log as _wlog
+            _wlog.info(
+                f'Fast Correction: _load_screenshot row={row} path.name={path.name!r} '
+                f'cache_hit={cached is not None} '
+                f'cache_size={len(cached) if cached else 0} '
+                f'all_cache_keys={list(self._recognition_cache.keys())[:3]}')
         if cached is not None: self._populate_review_panel(cached, stype)
         else:
             self._populate_review_panel([], stype)
@@ -1085,10 +1253,14 @@ class WarpCoreWindow(QMainWindow):
         label = SCREEN_TYPE_LABELS.get(stype, 'Unknown')
         self._screen_type_badge.setText(f'Screen: {icon} {label}')
         self._refresh_slot_combo(stype)
-        is_spec = (stype == 'SPECIALIZATIONS')
-        self._slot_combo.setEnabled(not is_spec)
-        self._name_edit.setEnabled(not is_spec)
-        self._btn_accept.setEnabled(not is_spec)
+        is_spec   = (stype == 'SPECIALIZATIONS')
+        is_locked = self._is_current_locked()
+        editable  = not is_spec and not is_locked
+        self._slot_combo.setEnabled(editable)
+        self._name_edit.setEnabled(editable)
+        self._btn_accept.setEnabled(editable)
+        self._tier_combo.setEnabled(editable)
+        self._ship_type_combo.setEnabled(editable)
         if is_spec:
             self._slot_combo.blockSignals(True)
             self._slot_combo.clear()
@@ -1098,6 +1270,9 @@ class WarpCoreWindow(QMainWindow):
             self._name_edit.blockSignals(False)
             self._name_edit.setPlaceholderText(
                 'No bboxes can be added to specializations screens')
+        elif is_locked:
+            self._name_edit.setPlaceholderText(
+                'Screenshot is marked Done — press ↩ Back to Edit to modify')
         else:
             self._name_edit.setPlaceholderText("Item name (or leave blank for 'Unknown')")
 
@@ -1150,7 +1325,7 @@ class WarpCoreWindow(QMainWindow):
             sc_icon = SCREEN_TYPE_ICONS.get(stype, '?')
             label   = SCREEN_TYPE_LABELS.get(stype, 'Unknown')
             self._file_list.blockSignals(True)
-            item.setText(f'{sc_icon} {label}\n  {path.name}')
+            item.setText(f'{sc_icon} {label}\n  {_disp_name(path.name)}')
             item.setCheckState(Qt.CheckState.Checked)
             item.setIcon(_get_user_icon())
             self._file_list.blockSignals(False)
@@ -1260,7 +1435,7 @@ class WarpCoreWindow(QMainWindow):
         icon = SCREEN_TYPE_ICONS.get(stype, '?')
         label = SCREEN_TYPE_LABELS.get(stype, stype)
         self.statusBar().showMessage(
-            f'Matching icons against SETS library —  {icon} {label}   {path.name}'
+            f'Matching icons against SETS library —  {icon} {label}   {_disp_name(path.name)}'
         )
         skip_bboxes = [ri.get('bbox') for ri in (preserve_existing or [])
                        if ri.get('bbox')]
@@ -1447,6 +1622,55 @@ class WarpCoreWindow(QMainWindow):
         return sorted(items, key=key)
 
     def _populate_review_panel(self, items: list, stype: str):
+        # Fast Correction Mode is a pure WARP correction loop — the user
+        # is here to fix exactly what WARP detected, so we must NOT merge
+        # in disk-confirmed annotations, NOT raise community-conflict
+        # state, and NOT silently substitute equivalence-class names.
+        # Every item renders as pending with WARP's raw values.
+        if self._mode == 'fast_correction':
+            from warp.debug import log as _wlog
+            _wlog.info(
+                f'Fast Correction: populate_review_panel items={len(items)} '
+                f'stype={stype} current_idx={self._current_idx}')
+            self._recognition_items = self._sort_items_by_slot_order(
+                list(items), stype)
+            self._review_list.clear()
+            self._review_summary.setText('')
+            self._set_review_buttons_enabled(False)
+            for ri in self._recognition_items:
+                # Respect each item's actual state so a re-run of
+                # Auto-Detect (which goes through `_merge_recognition`
+                # and preserves prior items) keeps already-confirmed
+                # rows visually green on the list. The canvas already
+                # reads `state` directly from the item; without this
+                # the two views disagreed after a second detection.
+                self._add_review_row(
+                    ri.get('name', ''), ri.get('slot', ''),
+                    ri.get('conf', 0.0),
+                    confirmed=(ri.get('state') == 'confirmed'),
+                    cross_check_failed=ri.get('cross_check_failed', False),
+                    auto_confirmed=ri.get('auto_confirmed', False),
+                    conflict_disk_name='')
+            # Slot / Idx column neutrality is now enforced inside
+            # `_populate_review_item` itself (cols 0-1 always white), and
+            # `refresh_parent_of` mirrors that onto each group header — so
+            # no extra post-pass is needed here.
+            self._ann_widget.set_review_items(self._recognition_items)
+            self._ann_widget.set_selected_row(-1)
+            n = len(self._recognition_items)
+            matched = sum(1 for i in self._recognition_items if i.get('name'))
+            icon = SCREEN_TYPE_ICONS.get(stype, '?')
+            label = SCREEN_TYPE_LABELS.get(stype, stype)
+            ship = (self._recognition_items[0].get('ship_name') or '--') \
+                if self._recognition_items else '--'
+            self._review_summary.setText(
+                f'{matched}/{n} from WARP — confirm or correct each.  '
+                f'Ship: {ship}  {icon} {label}')
+            self._set_review_buttons_enabled(n > 0)
+            self._refresh_slot_combo(stype)
+            if n > 0:
+                self._review_list.setCurrentRow(0)
+            return
         confirmed_by_id: dict[str, dict] = {}
         if self._current_idx >= 0:
             path = self._screenshots[self._current_idx]
@@ -1728,9 +1952,20 @@ class WarpCoreWindow(QMainWindow):
         item.setToolTip(0, slot_disp)
         item.setToolTip(2, tooltip)
 
-        fg = QBrush(QColor(color))
-        for c in range(5):
-            item.setForeground(c, fg)
+        # Slot (col 0) and Idx (col 1) are structural grouping columns —
+        # keep them in the chrome foreground (white) so they don't shift
+        # between white and the high/medium/low-conf colours depending on
+        # the row's confidence. Only the Item, Conf and Status columns
+        # carry the state colour. `refresh_parent_of` then mirrors these
+        # foregrounds onto the parent row, so the group header stays neutral
+        # in cols 0-1 too. This makes the WARP CORE review tree match Fast
+        # Correction Mode's existing convention.
+        fg_state = QBrush(QColor(color))
+        fg_white = QBrush(QColor(FG))
+        item.setForeground(0, fg_white)
+        item.setForeground(1, fg_white)
+        for c in range(2, 5):
+            item.setForeground(c, fg_state)
         # If this item is already living under a parent in the grouped
         # tree, mirror the new texts/foreground to the parent so the
         # collapsed-state summary line stays in sync.
@@ -1984,13 +2219,13 @@ class WarpCoreWindow(QMainWindow):
         box.setWindowTitle('Clear all bboxes')
         if confirmed_count:
             msg = (
-                f'Remove all {total} bbox(es) from "{path.name}"?\n\n'
+                f'Remove all {total} bbox(es) from "{_disp_name(path.name)}"?\n\n'
                 f'{confirmed_count} are confirmed — they will also be '
                 f'deleted from the saved annotations on disk.'
             )
         else:
             msg = (
-                f'Remove all {total} bbox(es) from "{path.name}"?\n\n'
+                f'Remove all {total} bbox(es) from "{_disp_name(path.name)}"?\n\n'
                 f'None of them are confirmed yet.'
             )
         box.setText(msg)
@@ -2048,7 +2283,7 @@ class WarpCoreWindow(QMainWindow):
         _stype = self._screen_types.get(path.name, 'UNKNOWN')
         self._refresh_slot_combo(_stype)
         self.statusBar().showMessage(
-            f'Cleared {removed} bbox(es) from {path.name}'
+            f'Cleared {removed} bbox(es) from {_disp_name(path.name)}'
             + (f' — kept {len(kept)} confirmed.' if spare_confirmed and kept else '.')
         )
 
@@ -3020,6 +3255,18 @@ class WarpCoreWindow(QMainWindow):
         pass
 
     def _on_accept(self):
+        # Locked-screenshot guard. Mirrors _on_auto_detect / _on_remove_item /
+        # _on_clear_all_bboxes / the Delete key handler — all destructive
+        # actions are gated on `_is_current_locked()`. Without this, Enter,
+        # the Accept button, autocomplete pick, Ship Type/Tier combo
+        # activation and the auto-accept path could still mutate items on
+        # a screenshot the user has marked Done, even though the canvas is
+        # visually locked and the button reads "↩ Back to Edit".
+        if self._is_current_locked():
+            self.statusBar().showMessage(
+                'Accept blocked: screenshot is marked Done — '
+                'press ↩ Back to Edit to modify.', 6000)
+            return
         slot = self._slot_combo.currentText()
         if slot == 'Ship Tier':
             name = self._tier_combo.currentText()
@@ -3746,70 +3993,111 @@ class WarpCoreWindow(QMainWindow):
             self._btn_done.setText('✓ Mark Done')
         self._save_done()
         self._ann_widget.set_locked(checked)
+        # Re-gate the annotate panel (Slot combo, Item field, Accept, Tier /
+        # Ship Type combos): locked → disabled, unlocked → re-enabled. Without
+        # this the panel stays editable after Mark Done is toggled on, and the
+        # user can keep typing into the Name field on a locked screenshot.
+        stype = self._screen_types.get(path.name, 'UNKNOWN')
+        self._update_screen_type_ui(stype)
         self._update_file_list_color(self._current_idx)
         self._update_add_bbox_btn()
 
     def _on_send_to_warp(self):
-        """Build an ImportResult from the current screenshot's confirmed
-        annotations and emit `send_to_warp` so the launcher can install it
-        into WARP and switch tabs. Only enabled while the screenshot is
-        Mark Done (see _update_add_bbox_btn).
+        """Build an ImportResult from confirmed annotations and emit
+        `send_to_warp` so the launcher can install it into WARP and switch
+        tabs.
+
+        Single-screenshot training mode: sends only the currently loaded
+        screenshot (must be Mark Done — see `_update_add_bbox_btn`).
+
+        Fast Correction Mode: sends *every* file in the ephemeral batch.
+        The toolbar gates the button on all-files-done, so we don't
+        re-check per-file here — we just iterate `self._screenshots` and
+        merge each file's confirmed annotations into one ImportResult.
         """
-        if self._current_idx < 0:
-            return
-        if not self._is_current_locked():
-            return
-        path = self._screenshots[self._current_idx]
-        anns = [a for a in self._data_mgr.get_annotations(path)
-                if a.state == AnnotationState.CONFIRMED]
-        if not anns:
-            self.statusBar().showMessage(
-                'Nothing to send — no confirmed annotations on this screenshot.', 5000)
+        if self._mode == 'fast_correction':
+            files = list(self._screenshots)
+        else:
+            if self._current_idx < 0 or not self._is_current_locked():
+                return
+            files = [self._screenshots[self._current_idx]]
+        if not files:
             return
         from warp.warp_importer import ImportResult, RecognisedItem
-        # Map screen_type → build_type bucket WARP's tree renderer expects.
-        stype = self._screen_types.get(path.name, 'UNKNOWN')
-        if stype.startswith('GROUND'):
-            build_type = 'GROUND'
-        else:
-            build_type = 'SPACE'
-        result = ImportResult(build_type=build_type)
-        # Group icon-slot annotations by slot so we can assign slot_index in
-        # spatial order (left-to-right by bbox x, then top-to-bottom by y) —
-        # matches WARP's own slot_index convention.
-        by_slot: dict[str, list] = {}
-        for a in anns:
-            if a.slot == 'Ship Name':
-                result.ship_name = a.name or result.ship_name
+        result = ImportResult(build_type='')
+        total_items = 0
+        for path in files:
+            anns = [a for a in self._data_mgr.get_annotations(path)
+                    if a.state == AnnotationState.CONFIRMED]
+            if not anns:
                 continue
-            if a.slot == 'Ship Type':
-                result.ship_type = a.name or result.ship_type
-                continue
-            if a.slot == 'Ship Tier':
-                result.ship_tier = a.name or result.ship_tier
-                continue
-            by_slot.setdefault(a.slot, []).append(a)
-        src_str = str(path)
-        for slot, group in by_slot.items():
-            group.sort(key=lambda a: (a.bbox[0] if a.bbox else 0,
-                                      a.bbox[1] if a.bbox else 0))
-            for idx, a in enumerate(group):
-                result.items.append(RecognisedItem(
-                    slot=slot,
-                    slot_index=idx,
-                    name=a.name or '',
-                    confidence=a.ml_conf or 1.0,
-                    thumbnail=None,
-                    source_file=src_str,
-                    bbox=a.bbox or (),
-                    src='user',
-                    match_origin='user',
-                ))
-        result.per_file[src_str] = build_type
+            stype = self._screen_types.get(path.name, 'UNKNOWN')
+            build_type = 'GROUND' if stype.startswith('GROUND') else 'SPACE'
+            # FC: map staged → orig path so WARP keys by the user's real file.
+            emit_path = path
+            if self._mode == 'fast_correction' and self._fast_session is not None:
+                orig = self._fast_session.orig_for(path)
+                if orig is not None:
+                    emit_path = orig
+            src_str = str(emit_path)
+            by_slot: dict[str, list] = {}
+            file_ship = {'name': '', 'type': '', 'tier': ''}
+            for a in anns:
+                if a.slot == 'Ship Name':
+                    file_ship['name'] = a.name or file_ship['name']
+                    continue
+                if a.slot == 'Ship Type':
+                    file_ship['type'] = a.name or file_ship['type']
+                    continue
+                if a.slot == 'Ship Tier':
+                    file_ship['tier'] = a.name or file_ship['tier']
+                    continue
+                by_slot.setdefault(a.slot, []).append(a)
+            for slot, group in by_slot.items():
+                group.sort(key=lambda a: (a.bbox[0] if a.bbox else 0,
+                                          a.bbox[1] if a.bbox else 0))
+                for idx, a in enumerate(group):
+                    result.items.append(RecognisedItem(
+                        slot=slot,
+                        slot_index=idx,
+                        name=a.name or '',
+                        confidence=a.ml_conf or 1.0,
+                        thumbnail=None,
+                        source_file=src_str,
+                        bbox=a.bbox or (),
+                        src='user',
+                        match_origin='user',
+                    ))
+                    total_items += 1
+            result.per_file[src_str] = build_type
+            result.per_file_screen_type[src_str] = stype
+            # Best-score ship selection (tier > type > name) — mirrors
+            # `WarpImporter.process_folder` so multi-file batches pick the
+            # most informative source instead of last-write-wins.
+            new_score = (bool(file_ship['tier']),
+                         bool(file_ship['type']),
+                         bool(file_ship['name']))
+            cur_score = (bool(result.ship_tier),
+                         bool(result.ship_type),
+                         bool(result.ship_name))
+            if new_score > cur_score:
+                result.ship_name = file_ship['name'] or result.ship_name
+                result.ship_type = file_ship['type']
+                result.ship_tier = file_ship['tier']
+                result.build_type = build_type
+            elif not result.build_type:
+                result.build_type = build_type
+        if total_items == 0:
+            self.statusBar().showMessage(
+                'Nothing to send — no confirmed annotations.', 5000)
+            return
+        if not result.build_type:
+            result.build_type = 'SPACE'
         log.info(
-            f'send_to_warp: {path.name} build_type={build_type} '
-            f'items={len(result.items)} ship={result.ship_name!r}/'
-            f'{result.ship_type!r}/{result.ship_tier!r}'
+            f'send_to_warp: files={len(files)} '
+            f'items={total_items} build_type={result.build_type} '
+            f'ship={result.ship_name!r}/{result.ship_type!r}/{result.ship_tier!r}'
+            f'{" (fast-mode → orig)" if self._mode == "fast_correction" else ""}'
         )
         self.send_to_warp.emit(result)
 
@@ -3897,10 +4185,13 @@ class WarpCoreWindow(QMainWindow):
                 stype = self._screen_types.get(p.name, 'UNKNOWN')
                 icon = SCREEN_TYPE_ICONS.get(stype, '?')
                 label = SCREEN_TYPE_LABELS.get(stype, 'Unknown')
-                confirmed = p.name in self._screen_types_manual
-                item.setText(f'{icon} {label}\n  {p.name}')
+                is_user = p.name in self._screen_types_manual
+                is_ml   = p.name in self._screen_types_ml_auto
+                item.setText(f'{icon} {label}\n  {_disp_name(p.name)}')
                 item.setCheckState(
-                    Qt.CheckState.Checked if confirmed else Qt.CheckState.Unchecked)
+                    Qt.CheckState.Checked if (is_user or is_ml) else Qt.CheckState.Unchecked)
+                item.setIcon(_get_user_icon() if is_user
+                             else (_get_ml_icon() if is_ml else QIcon()))
                 item.setForeground(self._file_item_color(p))
         self._file_list.blockSignals(False)
 

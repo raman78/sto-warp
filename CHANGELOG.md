@@ -8,6 +8,115 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.11] — 2026-05-31
+
+### Added
+- **Windows .exe installer** — sto-warp can now be installed on
+  Windows by downloading the installer attached to the GitHub
+  Release, with no Python toolchain required. The installer is
+  per-user (does not need administrator rights), drops the app
+  under `%LOCALAPPDATA%\Programs\sto-warp`, registers a Start Menu
+  entry and the optional desktop shortcut, and ships a CPU-only
+  PyTorch build so the bundle stays compact. The existing `pipx
+  install sto-warp` path continues to work and is still the
+  recommended channel on Linux.
+- **Fast Correction Mode** — a new lightweight bridge between WARP
+  recognition and a clean SETS JSON export. Right-clicking a row in
+  the WARP Results tree exposes *Open in WARP Fast Correction Mode*,
+  which hands the entire current batch to WARP CORE in a temporary
+  workspace. Wrong items can be corrected with the usual trainer
+  flow, and a single **↗ Send to WARP** button pushes the corrected
+  result back to WARP for export. Corrections made in this mode are
+  ephemeral by design: the original screenshots' permanent training
+  data is never overwritten, but the confirmed crops still feed the
+  community sync queue. The trainer tab is clearly relabelled and
+  themed while a Fast Correction session is active, and the launcher
+  automatically cleans up sessions older than 14 days.
+- The screen-type detection pass — both the automatic one in WARP
+  on folder open and the manual *Detect Screen Types* button in
+  WARP CORE — now shows a determinate progress bar with a working
+  **Cancel** button. Files already classified keep their detected
+  type; the remaining files stay on their previous value.
+- While screen-type detection is running, the surrounding toolbar
+  actions are temporarily greyed out in both WARP and WARP CORE so
+  a second pass cannot be started on top of the first.
+- The WARP CORE Recognition Review panel is now organised as a
+  grouped tree — each slot family is one expandable header with a
+  child count, items are listed in pipeline order underneath, and
+  the currently selected row is rendered in bold across both
+  columns to stay visually anchored while scrolling.
+
+### Changed
+- Sending the corrected batch back to WARP from Fast Correction Mode
+  now closes the loop end-to-end: the trainer automatically exits
+  Fast Correction, the tab title and accent are restored, and the
+  trainer view is rewound to the folder, selection and filter that
+  were active before the Fast Correction session was entered. The
+  standing training work is no longer replaced by the ephemeral
+  batch when the loop completes.
+- The Item ↔ Conf column edge in the WARP CORE Recognition Review
+  panel is draggable. The chosen width is remembered across
+  sessions.
+- The selection accent is now consistent across the file list, the
+  Review tree and the Annotate panel, so the currently active item
+  is obvious at a glance.
+- The original screenshot filenames are shown throughout Fast
+  Correction Mode — in the file list, dialogs and status messages —
+  even though the files are staged into a hashed temporary folder
+  underneath. The staging hash never surfaces in the UI.
+
+### Fixed
+- After a `pipx upgrade`, the launcher no longer leaves a fresh
+  duplicate menu entry behind. On Linux any sibling
+  `~/.local/share/applications/sto-warp-*.desktop` that points at
+  the same `sto-warp` shim as the current install is removed on
+  startup; on Windows the same cleanup is applied to the Start Menu
+  `.lnk` shortcuts. Genuinely parallel installs targeting a
+  different binary path are left alone.
+- *Send to WARP* in Fast Correction Mode sends the entire batch of
+  screenshots, not just the one that happened to be selected when
+  the button was clicked.
+- The Done colour in the Fast Correction file list no longer
+  persists across sessions. Files start in the editable state every
+  time a new batch is loaded, regardless of whether the originals
+  were marked Done in an earlier normal trainer session.
+- The confirmation checkbox next to a filename no longer disappears
+  after a correction is accepted in Fast Correction Mode — it now
+  correctly reflects either a manual confirmation or a model
+  auto-classification, with the appropriate icon for each.
+- Accepting an item on a screenshot already marked Done is now
+  correctly blocked, matching the rest of the locked-screenshot
+  guards (Remove, Clear All BBoxes, Auto-Detect, Delete key). The
+  canvas was already visually locked and the button already read
+  *↩ Back to Edit*, but Enter, the Accept button, picking from the
+  autocomplete dropdown and the Ship Type / Ship Tier combos still
+  let an annotation through. The status bar now explains why the
+  action was skipped when this is attempted.
+- The Annotate Selection panel (Slot dropdown, Item field, Accept
+  button and the Ship Tier / Ship Type combos) is now disabled
+  whenever the current screenshot is marked Done. Selecting a slot
+  no longer reactivates the Item field on a locked screenshot, and
+  the placeholder text inside the field changes to explain why
+  editing is blocked. Toggling *↩ Back to Edit* immediately
+  restores the panel.
+- The WARP CORE Recognition Review tree's Slot and Idx columns now
+  always render in the chrome's neutral white, regardless of the
+  row's confidence or status. Previously these structural grouping
+  columns inherited the confidence colour, so the labels shifted
+  between white, pink and red depending on the row underneath. The
+  Item, Conf and Status columns still carry the colour as before,
+  matching the long-standing Fast Correction Mode convention.
+- Hovering with **Shift** to resize a bbox edge is now responsive
+  along the full length of every edge in the WARP CORE canvas, not
+  only within a narrow zone around the midpoint handle. The cursor
+  switches to the appropriate resize shape as soon as it crosses
+  the edge band, regardless of how far along the side it is.
+- **Alt** (the icon-crop cursor) and the other canvas modifier keys
+  no longer react when the cursor is hovering a side panel while
+  the image is zoomed above fit. The trigger area is now strictly
+  the visible canvas panel, not the (potentially much larger)
+  zoomed image rectangle.
+
 ## [1.0.10] — 2026-05-30
 
 ### Added

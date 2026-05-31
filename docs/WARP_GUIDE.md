@@ -18,6 +18,7 @@ WARP CORE lets you review, correct, and confirm what WARP found — and feed tho
 4. [WARP CORE — interface overview](#4-warp-core--interface-overview)
 5. [Reviewing and correcting recognition](#5-reviewing-and-correcting-recognition)
 6. [Confirming items and accepting results](#6-confirming-items-and-accepting-results)
+6½. [Fast Correction Mode](#65-fast-correction-mode)
 7. [Detection logs / System logs tabs](#7-detection-logs--system-logs-tabs)
 8. [Community model — how it works](#8-community-model--how-it-works)
 9. [Community sync details](#9-community-sync-details)
@@ -218,6 +219,7 @@ Right-clicking any row in the Results tree (slot row or individual item) opens a
 - **Copy filename** — copies just the screenshot's filename (e.g. *Screenshot_4.png*) to the clipboard.
 - **Copy full path** — copies the absolute path to the screenshot, ready to paste into a file manager or another tool.
 - **Open in WARP CORE** — only shown when WARP is running inside the launcher window (not in standalone `sto-warp gui`). Jumps straight to the WARP CORE tab with the screenshot pre-selected so a correction can be made without scrolling through the file list.
+- **Open in WARP Fast Correction Mode** — hands the **entire current batch** (every screenshot in the run) to WARP CORE in a special temporary workspace that does not touch the local training set. Use this when a few items still need polishing before exporting the SETS JSON, but you do not want the fixes to permanently rewrite the standing training data. See [Fast Correction Mode](#65-fast-correction-mode).
 
 The clicked filename is shown as a disabled header at the top of the menu, so it is always clear which file the action will affect — useful when the same slot has children from several different screenshots.
 
@@ -271,24 +273,39 @@ SETS build → /path/to/build.json  ·  ship=Fleet Heavy Cruiser
 The **WARP CORE — Trainer** tab in the launcher has three panels.
 
 ```
-+------------------+------------------------------+----------------------+
-|   LEFT PANEL     |       CENTER PANEL           |    RIGHT PANEL       |
-|                  |                              |                      |
-|  Screenshots     |   [canvas / screenshot]      |  Recognition Review  |
-|  ----------      |                              |  ----------          |
-|  screen1.png  [ok]|  (zoom with Ctrl+wheel)     |  Slot: Fore Weapon 1 |
-|  screen2.png  [?] |  (bboxes drawn on items)    |  Item: Phaser Array  |
-|  screen3.png  [ ] |                              |  Conf: 94%  [green]  |
-|                  |                              |                      |
-|  [progress bar]  |  +------------------------+  |  Slot: Console Sci 1 |
-|  3/6 confirmed   |  |  Slot:  [combo box  ]  |  |  Item: ???  [red]    |
-|                  |  |  Item:  [name field ]  |  |  Conf: 31%           |
-|                  |  |  [  Accept (Enter)  ]  |  |                      |
-|                  |  +------------------------+  |  [+ Add BBox] [- Rm] |
-|                  |                              |  [x] Auto >= [0.75]  |
-|                  |                              |  [  Accept (Enter) ] |
-+------------------+------------------------------+----------------------+
++------------------+------------------------------+-----------------------------+
+|   LEFT PANEL     |       CENTER PANEL           |        RIGHT PANEL          |
+|                  |                              |                             |
+|  Screenshots     |   [canvas / screenshot]      |  Recognition Review         |
+|  ----------      |                              |  ----------                 |
+|  screen1.png [ok]|  (zoom with Ctrl+wheel)      |  Slot           Item   Conf |
+|  screen2.png [? ]|  (bboxes drawn on items)     |  ─────────────────────────  |
+|  screen3.png [ ] |                              |  ▾ Fore Weapon            4 |
+|                  |                              |     1  Phaser Array   94%   |
+|  [progress bar]  |  +------------------------+  |     2  Phaser Array   91%   |
+|  3/6 confirmed   |  |  Screen type [combo  ] |  |     3  ???            31%   |
+|                  |  |  Slot:  [combo box   ] |  |  ▾ Tactical Console       3 |
+|  [✓ Mark Done]   |  |  Item:  [name field  ] |  |     1  Vulnerability  82%   |
+|                  |  |  [  Accept (Enter)   ] |  |     2  Vulnerability  77%   |
+|                  |  +------------------------+  |                             |
+|                  |                              |  ⟷ Item / Conf column edge   |
+|                  |                              |    is draggable.            |
+|                  |                              |                             |
+|                  |                              |  [+ Add BBox] [- Remove]    |
+|                  |                              |  [Clear All BBoxes]         |
+|                  |                              |  [x] Auto >= [0.75]         |
+|                  |                              |  [   Accept (Enter)    ]    |
++------------------+------------------------------+-----------------------------+
 ```
+
+The Review tree is grouped by slot family — each top-level row is a
+slot name with a child count, expandable to show the individual
+items in pipeline order. Clicking either a group header or an item
+child selects the matching bbox on the canvas and the corresponding
+row in the Annotate panel. The Item ↔ Conf column edge is
+draggable; the chosen width is remembered across sessions. The
+currently selected row is rendered in bold across both columns to
+keep it visually anchored as the tree scrolls.
 
 ### Toolbar
 
@@ -296,6 +313,17 @@ The **WARP CORE — Trainer** tab in the launcher has three panels.
 |--------|--------|
 | **Detect Screen Types** | Classifies every screenshot in the folder using the MobileNetV3-Small screen classifier (Equipment / Traits / Boffs / Specializations / Mixed). Runs automatically when you open a folder — use the button to re-run it manually if you rename or replace files. Files you have already confirmed with a checkmark are skipped. |
 | **Auto-Detect Slots** | Re-runs the full recognition pipeline on the **currently selected screenshot**. Items you have already confirmed are preserved and used as seeds for icon matching — only unconfirmed slots are re-processed. Use this after correcting a few items to let WARP retry the remaining ones with better context. |
+
+While **Detect Screen Types** is running, the status bar shows a
+determinate progress bar with a **Cancel** button (live count of
+files done out of total), and the toolbar actions are temporarily
+greyed out so a second pass cannot be started on top of the first.
+Clicking **Cancel** stops the classifier at the next file boundary
+— files already classified keep their detected type, the remaining
+files stay on their previous value. The toolbar comes back as soon
+as the run finishes or is cancelled. The same progress + Cancel
+behaviour applies to the equivalent screen-type pass in the WARP
+tab (run automatically when a folder is opened).
 
 ---
 
@@ -623,6 +651,138 @@ re-verify against the new proposal.
 
 ---
 
+## 6.5. Fast Correction Mode
+
+### What it is for
+
+Fast Correction Mode is a temporary workspace inside WARP CORE that
+exists to **bridge the gap between "recognition almost right" and
+"a clean SETS JSON in your hand"**.
+
+The community model improves over time as users confirm crops, but
+right now is right now: when a build needs to be exported today and
+two or three slots came out wrong, a full WARP CORE training pass on
+every screenshot is a heavy way to get there. Fast Correction Mode
+makes the lightweight path explicit. The whole batch is staged into
+a temporary, content-hashed folder, opened in WARP CORE as if it
+were an ordinary import, and once every screenshot is marked Done
+the corrected results are pushed back to WARP — ready to export to
+SETS — in a single click.
+
+Most importantly, the corrections made in Fast Correction Mode
+**do not overwrite the permanent training data** for the original
+screenshots. The session is ephemeral: a separate annotations file
+under `~/.cache/warp/fast_correction/<hash>/` holds the corrections
+just long enough to compute the corrected JSON and feed the
+community sync queue, and is cleaned up by the launcher after a
+couple of weeks. Standing training data on disk for those same
+screenshots is left exactly as it was.
+
+### When to use it
+
+Use Fast Correction Mode when:
+
+- A WARP run is mostly right, but a handful of items need fixing
+  before the build can be exported.
+- The build is a one-off and the correct labels are not material
+  enough to belong in the long-term training set.
+- The original screenshots are already used elsewhere in the trainer
+  with confirmed labels, and you do not want the current quick edits
+  to compete with the permanent ones.
+
+Use the normal **Open in WARP CORE** path (a single right-click on a
+Results row) instead when:
+
+- Only one screenshot needs corrections.
+- The corrections are good general training data and should
+  permanently improve future recognition for that screenshot.
+
+### How to enter it
+
+After running recognition in the WARP tab, right-click any row in
+the Results tree and pick **Open in WARP Fast Correction Mode**.
+The launcher:
+
+1. Snapshots the entire batch (every source screenshot in the run)
+   into a temporary staging folder.
+2. Switches to the WARP CORE tab.
+3. Renames the tab from *WARP CORE — Trainer* to
+   *WARP CORE — Fast Correction* and applies an accent colour to
+   the toolbar so it is clearly distinguishable from a normal
+   training session.
+4. Pre-populates the corrections panel with whatever WARP already
+   recognised, so only the wrong rows need attention.
+
+If a Fast Correction session is already open and a new batch is
+sent over, a confirmation dialog asks whether to replace the
+running batch — accepting starts the new batch fresh, declining
+keeps the existing one.
+
+### Correction loop
+
+The day-to-day workflow inside Fast Correction Mode mirrors the
+normal WARP CORE workflow described in
+[section 5](#5-reviewing-and-correcting-recognition) — same
+keyboard shortcuts, same Add BBox / Accept / Mark Done buttons,
+same colour conventions:
+
+1. Click a screenshot in the left list. Its bboxes load on the
+   canvas.
+2. Walk down the pending (red) rows in the Review tree, accept the
+   correct ones, retype the wrong ones, draw missing slots with
+   **Alt + drag**.
+3. When the screenshot is fully reviewed, press **Alt + D** (or
+   click **✓ Mark Done**) to lock it.
+4. Move to the next screenshot in the list and repeat.
+
+The file list shows the **original screenshot names** throughout —
+the staging hash is never surfaced in the UI, dialogs or status
+messages, so it is easy to map what is on screen back to the source
+files on disk.
+
+### Sending the corrections back to WARP
+
+Once every screenshot is marked Done (or as soon as you are
+satisfied with what is corrected), click **↗ Send to WARP** in the
+toolbar. The launcher:
+
+1. Re-runs the SETS pipeline on the corrected batch, taking the
+   user-confirmed items as ground truth.
+2. Selects the strongest ship-name candidate across all screenshots
+   the same way an ordinary WARP run does.
+3. Installs the corrected result into the WARP tab as if recognition
+   had just finished there.
+4. Switches focus back to the WARP tab and exits Fast Correction
+   Mode automatically. The trainer tab title is restored, the accent
+   theming is removed, and the trainer view is rewound to whatever
+   folder, selection and filter were active before the Fast
+   Correction session was entered — so the standing training work is
+   right where you left it instead of being replaced by the
+   ephemeral batch.
+
+From there, click **Export to SETS JSON…** as usual — the file you
+get reflects the corrections.
+
+### What gets saved, what does not
+
+| Destination | Behaviour in Fast Correction Mode |
+|---|---|
+| The WARP Results / Preview tabs | Updated when you click **Send to WARP** (and only then). |
+| The exported SETS JSON | Reflects the corrections from this session. |
+| `annotations.json` for the staged batch (in `~/.cache/warp/fast_correction/<hash>/`) | Updated as you accept corrections, just like a normal session. |
+| `annotations.json` for the **original** screenshots (in `~/.local/share/warp/training_data/`) | **Untouched.** Fast Correction never writes to the long-term training set under the original filename. |
+| Community upload queue | Confirmed crops are still added to the upload queue, so the community model still benefits from the corrections. |
+| Layout / anchors database | Each **Mark Done** still saves the confirmed layout for that screen type so future auto-detect on similar layouts improves. |
+
+### Cleanup
+
+Staging folders are kept for 14 days so a session can be reopened
+in the same launcher window if needed. The launcher sweeps anything
+older than that on startup, so abandoned sessions do not accumulate
+on disk.
+
+---
+
 ## 7. Detection logs / System logs tabs
 
 The launcher's last two tabs surface what is happening under the hood.
@@ -792,28 +952,4 @@ This appears when two confirmed items overlap by more than 70% in the same scree
 - If you only have a handful of unique items, accuracy metrics may fluctuate — this is normal with small datasets.
 - More data always helps. Confirm items from 5–10 screenshots before training for the best results.
 
-### Repeated "POISON skip" or "looks colourful" warnings at startup
-
-On every start, sto-warp inspects the local training data and flags
-crops that are labelled **empty** or **inactive** but visually look
-like a real, colourful icon. These are usually genuine mistakes
-left over from earlier auto-accepts, but a few real icons (rare
-console arts, bright vanity items) can trip the heuristic.
-
-To go through the flagged crops one by one:
-
-```
-python -m warp.tools.scrub_training_data --review
-```
-
-Each crop is shown 6× scaled with the current label. Press **Y** to
-delete a real mistake, **N** to keep a crop that is correct as
-labelled, or **Q** to quit. Crops kept with **N** are remembered —
-the same crop will not appear in the warnings or in the next review
-run.
-
-If the noise should be gone for good without inspecting anything,
-re-run the tool with `--apply` to delete every flagged crop in one
-pass. This is destructive, so prefer the interactive `--review` flow
-when in doubt.
 

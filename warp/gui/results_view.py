@@ -367,12 +367,16 @@ class ResultsView(QWidget):
     Public signals:
       rerun_requested            (dict[str_path, build_type])
       open_in_warp_core          (str_path, list[RecognisedItem])
-      open_in_warp_fast_corr     (dict[str_path, list[RecognisedItem]])
+      open_in_warp_fast_corr     (dict[str_path, list[RecognisedItem]],
+                                  dict[str_path, str])
     """
 
     rerun_requested        = Signal(dict)
     open_in_warp_core      = Signal(str, object)
-    open_in_warp_fast_corr = Signal(dict)
+    # Two dicts: items per file, AND screen_type per file (so Fast
+    # Correction can render the screen-type WARP just classified, not
+    # whatever the user previously confirmed for that filename in TDM).
+    open_in_warp_fast_corr = Signal(dict, dict)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -381,6 +385,11 @@ class ResultsView(QWidget):
         self._items_by_file: dict[str, list[RecognisedItem]] = {}
         # Resolved file path → detected build_type (autodetector pick)
         self._bt_by_file:    dict[str, str] = {}
+        # Resolved file path → detected screen_type (full ML label,
+        # finer-grained than build_type). Used by the Fast Correction
+        # handoff to pass WARP's actual classification through to the
+        # trainer.
+        self._stype_by_file: dict[str, str] = {}
         # Resolved file path → user-chosen build_type (overrides detected)
         self._overrides:     dict[str, str] = {}
         self._file_keys:     list[str] = []
@@ -605,6 +614,8 @@ class ResultsView(QWidget):
         self._items_by_file = by_file
         self._gidx_to_file  = gidx_to_file
         self._bt_by_file    = dict(getattr(result, 'per_file', {}) or {})
+        self._stype_by_file = dict(
+            getattr(result, 'per_file_screen_type', {}) or {})
         # Union: every file the importer touched + every file with items.
         self._file_keys = sorted(set(by_file) | set(self._bt_by_file))
 
@@ -1023,6 +1034,10 @@ class ResultsView(QWidget):
             self.open_in_warp_core.emit(src, list(items_for_src))
         elif chosen is act_open_fast:
             # Fast Correction sends ALL files from the current result,
-            # not just the right-clicked one.
+            # not just the right-clicked one. The second dict carries
+            # WARP's per-file screen_type so the trainer doesn't have to
+            # re-classify (and doesn't fall back to TDM which holds the
+            # user's *previous* labels — exactly what we want to fix).
             self.open_in_warp_fast_corr.emit(
-                {k: list(v) for k, v in self._items_by_file.items()})
+                {k: list(v) for k, v in self._items_by_file.items()},
+                dict(self._stype_by_file))

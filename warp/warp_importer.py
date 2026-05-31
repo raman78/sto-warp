@@ -1177,11 +1177,22 @@ class ImportResult:
     items:        list = field(default_factory=list)
     errors:       list = field(default_factory=list)
     warnings:     list = field(default_factory=list)
+    # ML screen-type label decided for THIS image (file-level result only).
+    # SCREEN_TYPE_TO_BUILD_TYPE maps it to `build_type` but the original
+    # label is finer-grained (SPACE_BOFFS vs BOFFS, etc.) — Fast
+    # Correction Mode needs it so the trainer sees what WARP actually
+    # classified, not just the bucketed build_type.
+    screen_type:  str  = ''
     # Per-image build_type, keyed by source file path. Populated by
     # process_folder so the Preview tab can show every processed image —
     # including those that yielded zero recognised items — along with the
     # screen-type the autodetector settled on for each one.
     per_file:     dict = field(default_factory=dict)
+    # Per-image screen_type, keyed by resolved source path — same keys
+    # as `per_file`, but values are SPACE_EQ / GROUND_EQ / TRAITS /
+    # BOFFS / SPACE_BOFFS / GROUND_BOFFS / SPECIALIZATIONS instead of
+    # the SPACE / GROUND / SPACE_TRAITS / BOFFS / SPEC bucketing.
+    per_file_screen_type: dict = field(default_factory=dict)
 
 
 @dataclass
@@ -1383,11 +1394,14 @@ class WarpImporter:
                     # has a canonical SLOT_ORDER to sort by.
                     result.build_type = file_result.build_type
                 per_file.append((fpath.name, file_result))
-                result.per_file[str(fpath.resolve())] = file_result.build_type
+                _rkey = str(fpath.resolve())
+                result.per_file[_rkey] = file_result.build_type
+                result.per_file_screen_type[_rkey] = file_result.screen_type
                 result.errors.extend(file_result.errors)
             except Exception as e:
                 result.errors.append(f'{fpath.name}: {e}')
                 result.per_file[str(fpath.resolve())] = ''
+                result.per_file_screen_type[str(fpath.resolve())] = ''
                 log.exception(f'WarpImporter: {fpath}')
 
         result.items = self._merge_items_by_block_score(per_file)
@@ -1738,6 +1752,7 @@ class WarpImporter:
             ship_type    = ship_type,
             ship_tier    = ship_tier,
             ship_profile = profile,
+            screen_type  = _ml_stype or '',
         )
 
         # Step 3 — layout detection.

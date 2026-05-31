@@ -172,6 +172,13 @@ sto-warp install-desktop
 This rewrites the entry with the current binary path and refreshes
 the icon. It is safe to re-run after every `pipx upgrade`.
 
+After a `pipx upgrade` the launcher tidies up any old menu entries
+that point at the same `sto-warp` shim as the new install, so the
+menu does not collect a fresh duplicate every time the application
+is upgraded. Genuinely parallel installs that target a different
+binary path (for example a separate development checkout) are left
+alone.
+
 **macOS.** No native menu entry is created on macOS yet. Launch
 from the terminal with `sto-warp`.
 

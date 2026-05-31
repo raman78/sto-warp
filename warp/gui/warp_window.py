@@ -142,9 +142,10 @@ class WarpWindow(QMainWindow):
 
     # Emitted when the user picks "Open in WARP Fast Correction Mode" —
     # batch handoff of every screenshot in the current result. Payload:
-    # dict[resolved_abs_path → list[RecognisedItem]]. The trainer enters
-    # Fast Correction Mode and loads them all at once.
-    open_in_warp_fast_correction = Signal(dict)
+    # (items_by_file: dict[abs_path, list[RecognisedItem]],
+    #  stype_by_file: dict[abs_path, str]). The trainer enters Fast
+    # Correction Mode and loads them all at once.
+    open_in_warp_fast_correction = Signal(dict, dict)
 
     def __init__(self):
         super().__init__()
@@ -376,6 +377,11 @@ class WarpWindow(QMainWindow):
     def _start_screen_type_detection(self, paths: list[Path]) -> None:
         from warp import userdata
         from warp.trainer.workers import ScreenTypeDetectorWorker
+        # Show progress + Cancel and lock the toolbar so the user can't kick
+        # off Auto-Detect Slots mid-classification (the recognition pipeline
+        # depends on the screen type result for each image).
+        self._progress.start(determinate=True, maximum=max(1, len(paths)))
+        self._set_controls_enabled(False)
         self._stype_worker = ScreenTypeDetectorWorker(
             paths, models_dir=userdata.models_dir(), parent=self,
         )
@@ -390,11 +396,19 @@ class WarpWindow(QMainWindow):
             return
         src = self._last_folder / filename
         self._results.update_file_screen_type(src, stype)
+        self._progress.set_progress(idx)
         self.statusBar().showMessage(
             f'Classifying [{idx}/{total}] {filename} → {stype}')
 
     def _on_stype_finished(self, results: dict):
+        # Drop stale finished signals from a worker we've already replaced
+        # (happens when the user opens a new folder mid-classification).
+        if (self.sender() is not self._stype_worker
+                and self._stype_worker is not None):
+            return
         self._stype_worker = None
+        self._progress.finish()
+        self._set_controls_enabled(True)
         n = len(results)
         if self._last_folder is not None:
             self.statusBar().showMessage(
@@ -471,6 +485,13 @@ class WarpWindow(QMainWindow):
         self.statusBar().showMessage(label)
 
     def _on_cancel_requested(self):
+        # Two workers share the same progress + Cancel chrome; the trainer
+        # never runs both concurrently, so checking each in turn is enough.
+        if self._stype_worker is not None and self._stype_worker.isRunning():
+            self._stype_worker.requestInterruption()
+            self._progress.set_cancel_enabled(False)
+            self.statusBar().showMessage('Cancelling screen-type detection…')
+            return
         if self._worker is not None:
             self._worker.cancel()
             self._progress.set_cancel_enabled(False)

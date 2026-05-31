@@ -95,6 +95,44 @@ def _prepare_icon() -> str:
         return ''
 
 
+def _sweep_stale_shortcuts(start_menu: Path, our_target: str, our_name: str) -> None:
+    """Remove duplicate sto-warp-*.lnk shortcuts pointing to our target.
+
+    pipx upgrades recreate the venv, so `sys.executable` changes and the
+    next launch's `_install_id()` differs from the old one. The old .lnk
+    still points at the same `sto-warp.exe` shim, so without cleanup the
+    user ends up with a fresh Start Menu entry after every upgrade. This
+    sweep removes any sibling shortcut that targets the same binary as
+    the current install. Shortcuts targeting a *different* TargetPath
+    (a genuinely parallel install) are left alone.
+    """
+    if not start_menu.is_dir():
+        return
+    siblings = [f for f in start_menu.glob('sto-warp-*.lnk') if f.name != our_name]
+    if not siblings:
+        return
+    for f in siblings:
+        ps = (
+            "$WshShell = New-Object -ComObject WScript.Shell; "
+            f"$Shortcut = $WshShell.CreateShortcut('{str(f).replace(chr(39), chr(39) * 2)}'); "
+            "$Shortcut.TargetPath"
+        )
+        try:
+            result = subprocess.run(
+                ['powershell', '-NoProfile', '-NonInteractive',
+                 '-ExecutionPolicy', 'Bypass', '-Command', ps],
+                check=False, capture_output=True, text=True, timeout=10,
+            )
+            if result.returncode != 0:
+                continue
+            file_target = result.stdout.strip()
+            if file_target and file_target.lower() == our_target.lower():
+                f.unlink()
+                log.info(f'Windows shortcut: removed stale entry {f.name}')
+        except Exception as e:
+            log.debug(f'Windows shortcut: sweep skip {f.name}: {e}')
+
+
 def install_windows_shortcut(force: bool = False) -> Path | None:
     """Install (or refresh) the Start Menu .lnk for sto-warp.
 
@@ -115,6 +153,11 @@ def install_windows_shortcut(force: bool = False) -> Path | None:
     start_menu = appdata / 'Microsoft' / 'Windows' / 'Start Menu' / 'Programs'
     lnk_name = f'sto-warp-{_install_id()}.lnk'
     lnk_path = start_menu / lnk_name
+
+    # Clean up duplicates left behind by pipx upgrades (new venv → new
+    # install_id → new .lnk, but the .exe shim is the same). Runs on
+    # every launch so the Start Menu stays tidy after upgrades.
+    _sweep_stale_shortcuts(start_menu, target, lnk_name)
 
     if lnk_path.is_file() and not force:
         return lnk_path

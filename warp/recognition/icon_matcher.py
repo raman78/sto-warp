@@ -899,7 +899,7 @@ class SETSIconMatcher:
                 if (name in VIRTUAL_LABELS
                         and not ann.get('poison_reviewed')
                         and _virtual_crop_looks_real(img)):
-                    log.warning(
+                    log.debug(
                         f'WARP: training-seed POISON skip — '
                         f'{crop_path.name} labeled {name!r} but looks colourful '
                         f'(run `python -m warp.tools.scrub_training_data --review` '
@@ -986,7 +986,7 @@ class SETSIconMatcher:
                 continue
             # Poison guard: virtual label but colourful crop → skip.
             if name in VIRTUAL_LABELS and _virtual_crop_looks_real(img):
-                syslog.warning(
+                syslog.debug(
                     f'CommunitySeed: POISON skip — {sha[:10]} labeled {name!r} '
                     f'but looks colourful'
                 )

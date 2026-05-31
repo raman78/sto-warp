@@ -58,6 +58,35 @@ def _install_id() -> str:
     return h[:8]
 
 
+def _sweep_stale_entries(apps_dir: Path, our_exec: str, our_name: str) -> None:
+    """Remove duplicate sto-warp-*.desktop entries pointing to our Exec.
+
+    pipx upgrades recreate the venv, so `sys.executable` changes and the
+    next launch's `_install_id()` differs from the old one. The old
+    .desktop file still points at the same `~/.local/bin/sto-warp` shim,
+    so without cleanup the user ends up with a fresh menu entry after
+    every upgrade. This sweep removes any sibling entry that targets the
+    same binary as the current install. Entries targeting a *different*
+    Exec (a genuinely parallel install — e.g. editable dev venv) are
+    left alone.
+    """
+    if not apps_dir.is_dir():
+        return
+    for f in apps_dir.glob('sto-warp-*.desktop'):
+        if f.name == our_name:
+            continue
+        try:
+            for line in f.read_text(encoding='utf-8', errors='replace').splitlines():
+                if line.startswith('Exec='):
+                    file_exec = line[len('Exec='):].rsplit(' %', 1)[0].strip()
+                    if file_exec == our_exec:
+                        f.unlink()
+                        log.info(f'Desktop installer: removed stale entry {f.name}')
+                    break
+        except Exception as e:
+            log.debug(f'Desktop installer: sweep skip {f.name}: {e}')
+
+
 def install_desktop_entry(force: bool = False) -> Path | None:
     """Install (or refresh) the menu entry. Returns the path written, or None.
 
@@ -88,6 +117,11 @@ def install_desktop_entry(force: bool = False) -> Path | None:
 
     desktop_name = f'sto-warp-{_install_id()}.desktop'
     desktop_path = apps_dir / desktop_name
+
+    # Clean up duplicates left behind by pipx upgrades (new venv → new
+    # install_id → new file, but the Exec shim is the same). Runs on
+    # every launch so the menu stays tidy even after multiple upgrades.
+    _sweep_stale_entries(apps_dir, exec_path, desktop_name)
 
     if desktop_path.is_file() and not force:
         return desktop_path

@@ -584,22 +584,37 @@ class AnnotationWidget(QWidget):
         return [(l, t), (mx, t), (r, t), (l, my), (r, my), (l, b), (mx, b), (r, b), (mx, my)]
 
     def _handle_hit_test_review(self, pos: QPoint, row: int) -> str | None:
-        """Hit-test handles on a review item bbox. Returns handle name or None."""
+        """Hit-test handles on a review item bbox. Returns handle name or None.
+
+        Order of checks: corner handles first (small zones near the four
+        corners), then full edges (anywhere along the top / bottom / left /
+        right line within `h` pixels). Without the edge check, edge-resize
+        used to only trigger near the midpoint handle — hovering 25 % along
+        an edge with Shift held silently dropped back to the move cursor,
+        which made the resize feel unresponsive."""
         if row < 0 or row >= len(self._review_items): return None
         bbox = self._review_items[row].get('bbox')
         if not bbox: return None
         rect = self._img_to_screen_rect(bbox)
         h = self._HANDLE + 2
         l, t, r, b = rect.left(), rect.top(), rect.right(), rect.bottom()
-        mx, my = (l + r) // 2, (t + b) // 2
-        handles = [
-            ('resize_NW', l, t), ('resize_N', mx, t), ('resize_NE', r, t),
-            ('resize_W',  l, my),                     ('resize_E',  r, my),
-            ('resize_SW', l, b), ('resize_S', mx, b), ('resize_SE', r, b),
-        ]
         x, y = pos.x(), pos.y()
-        for name, hx, hy in handles:
-            if abs(x - hx) <= h and abs(y - hy) <= h: return name
+        corners = [
+            ('resize_NW', l, t), ('resize_NE', r, t),
+            ('resize_SW', l, b), ('resize_SE', r, b),
+        ]
+        for name, hx, hy in corners:
+            if abs(x - hx) <= h and abs(y - hy) <= h:
+                return name
+        # Full-edge bands — only valid when the cursor's perpendicular
+        # coordinate lies within the bbox extent (extended by `h` so the
+        # bands meet the corner zones seamlessly).
+        in_x = (l - h) <= x <= (r + h)
+        in_y = (t - h) <= y <= (b + h)
+        if in_x and abs(y - t) <= h: return 'resize_N'
+        if in_x and abs(y - b) <= h: return 'resize_S'
+        if in_y and abs(x - l) <= h: return 'resize_W'
+        if in_y and abs(x - r) <= h: return 'resize_E'
         return None
 
     def _handle_hit_test_all_reviews(self, pos: QPoint) -> tuple[str | None, int]:
@@ -783,12 +798,16 @@ class AnnotationWidget(QWidget):
                 if not isinstance(focused, (QLineEdit, QTextEdit, QAbstractSpinBox)):
                     self.setFocus()
 
-            # Allow cursor change if mouse is within the viewport even if outside the image widget
-            over_area = self.rect().contains(lpos)
-            if not over_area and self.parent():
-                viewport_rect = self.parent().rect()
+            # Gate solely on the scrollarea's viewport — the visible canvas
+            # panel area. `self.rect()` is the full widget rect which, once
+            # the image is zoomed above fit, extends beyond the viewport and
+            # lets widget-local coordinates from neighbouring side panels
+            # look like they fall inside the canvas. The viewport rect is
+            # always the canvas panel.
+            over_area = False
+            if self.parent():
                 viewport_pos = self.parent().mapFromGlobal(gpos)
-                if viewport_rect.contains(viewport_pos):
+                if self.parent().rect().contains(viewport_pos):
                     over_area = True
 
             if not over_area:
