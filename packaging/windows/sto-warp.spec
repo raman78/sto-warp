@@ -6,8 +6,18 @@ Invoked from the repo root by the GitHub Actions workflow:
     pyinstaller --noconfirm --clean packaging/windows/sto-warp.spec
 
 Produces ``dist/sto-warp/`` (onedir layout) consumed by Inno Setup.
+
+PyInstaller chdirs to the spec's own directory before executing this
+file, so every relative path inside Analysis / EXE would resolve under
+``packaging/windows/`` rather than the repo root. We anchor on
+``SPECPATH`` (the directory containing this spec) and derive the repo
+root from it.
 """
+import os
+
 from PyInstaller.utils.hooks import collect_data_files, collect_submodules
+
+REPO_ROOT = os.path.abspath(os.path.join(SPECPATH, '..', '..'))
 
 
 datas = []
@@ -35,7 +45,7 @@ excludes = [
 ]
 
 a = Analysis(
-    ['warp/cli.py'],
+    [os.path.join(REPO_ROOT, 'warp', 'cli.py')],
     pathex=[],
     binaries=[],
     datas=datas,
@@ -61,7 +71,7 @@ exe = EXE(
     strip=False,
     upx=False,
     console=False,
-    icon='packaging/windows/_build/sto-warp.ico',
+    icon=os.path.join(SPECPATH, '_build', 'sto-warp.ico'),
 )
 
 coll = COLLECT(

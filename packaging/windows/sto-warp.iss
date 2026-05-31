@@ -15,6 +15,12 @@
 #endif
 
 [Setup]
+; SourceDir anchors all relative paths below on the repo root rather
+; than this .iss file's own directory (the Inno Setup default). The
+; PyInstaller bundle lands in dist\sto-warp\ at the repo root and the
+; workflow expects the installer at dist\installer\, so we resolve
+; everything from there.
+SourceDir=..\..
 AppId={{A4D1F9B6-7E2C-4F18-9C2A-2F3D8D5E9A21}
 AppName=sto-warp
 AppVersion={#STOWarpVersion}

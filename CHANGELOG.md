@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [1.0.11] — 2026-05-31
+## [1.0.12] — 2026-05-31
 
 ### Added
 - **Windows .exe installer** — sto-warp can now be installed on
@@ -20,6 +20,10 @@ details live in the git history.
   PyTorch build so the bundle stays compact. The existing `pipx
   install sto-warp` path continues to work and is still the
   recommended channel on Linux.
+
+## [1.0.11] — 2026-05-31
+
+### Added
 - **Fast Correction Mode** — a new lightweight bridge between WARP
   recognition and a clean SETS JSON export. Right-clicking a row in
   the WARP Results tree exposes *Open in WARP Fast Correction Mode*,
