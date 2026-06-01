@@ -283,6 +283,7 @@ def order_items_for_display(
     canonical_slots: list[str],
     *,
     meta_slots: tuple[str, ...] = _META_SLOTS,
+    fallback_canonical_slots: list[str] | tuple[str, ...] = (),
 ) -> list[tuple[str, list]]:
     """Single source of truth for the recognition-results display order.
 
@@ -295,7 +296,10 @@ def order_items_for_display(
       - groups are emitted in this order: meta slots (Ship Name / Type /
         Tier) first, then non-BOFF canonical slots in `canonical_slots`
         order, then BOFF seat groups in top-down Y order (inherited from
-        `group_items_by_seat`), then any unknown slots alphabetically;
+        `group_items_by_seat`), then slots from
+        `fallback_canonical_slots` (the global in-game order, used when
+        the build_type's primary canonical doesn't cover everything the
+        screen produced), then any unknown slots alphabetically;
       - within each group, items are sorted by `(slot_index, name)`,
         matching what `_populate_tree` already does for child rows.
 
@@ -305,6 +309,7 @@ def order_items_for_display(
     label as a stable parent-row key.
 
     `canonical_slots` should be `[sd['name'] for sd in SLOT_ORDER[bt]]`.
+    `fallback_canonical_slots` should be `warp_importer.DISPLAY_CANONICAL_ORDER`.
     Importing SLOT_ORDER here would pull `warp.warp_importer` (heavy)
     into this dependency-light module — callers pass the list instead.
     """
@@ -312,6 +317,8 @@ def order_items_for_display(
     by_label: dict[str, list] = {lbl: list(lst) for lbl, lst in groups}
     boff_y_order = [lbl for lbl, _ in groups if lbl.startswith('Boff')]
     canonical_non_boff = [s for s in canonical_slots if not s.startswith('Boff')]
+    fallback_non_boff  = [s for s in fallback_canonical_slots
+                          if not s.startswith('Boff')]
 
     seen: set[str] = set()
     ordered: list[tuple[str, list]] = []
@@ -329,6 +336,8 @@ def order_items_for_display(
     for label in list(meta_slots) + canonical_non_boff:
         _emit(label)
     for label in boff_y_order:
+        _emit(label)
+    for label in fallback_non_boff:
         _emit(label)
     for label in sorted(by_label):
         _emit(label)

@@ -40,7 +40,9 @@ from warp.style import (
     BG as _THEME_BG, LBG as _THEME_LBG, ACCENT as _THEME_ACCENT,
     primary_btn_style,
 )
-from warp.warp_importer import ImportResult, RecognisedItem, SLOT_ORDER
+from warp.warp_importer import (
+    ImportResult, RecognisedItem, SLOT_ORDER, DISPLAY_CANONICAL_ORDER,
+)
 
 
 # Selection accent — gold/amber, matches the Export to SETS JSON button.
@@ -777,7 +779,10 @@ class ResultsView(QWidget):
         # warp.recognition.boff_keys.order_items_for_display — shared
         # with WARP CORE so the two UIs cannot drift on slot ordering.
         canonical = [sd['name'] for sd in SLOT_ORDER.get(result.build_type, [])]
-        ordered_groups = order_items_for_display(result.items, canonical)
+        ordered_groups = order_items_for_display(
+            result.items, canonical,
+            fallback_canonical_slots=DISPLAY_CANONICAL_ORDER,
+        )
 
         parent_brush = QBrush(QColor(_THEME_LBG))
         for slot, entries in ordered_groups:

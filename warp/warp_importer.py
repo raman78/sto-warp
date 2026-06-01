@@ -314,6 +314,17 @@ for _order_list in SLOT_ORDER.values():
     for _sd in _order_list:
         _ALL_SLOT_DEFS.setdefault(_sd['name'], _sd)
 
+# Flat canonical display order — every known non-BOFF + BOFF slot name in
+# the natural in-game sequence (space gear → ground gear → space traits →
+# ground traits → boffs → specs). Consumed by
+# `boff_keys.order_items_for_display` as a stable secondary sort key, so
+# that when a screen's build_type doesn't cover every slot the recognition
+# detected (e.g. a SPACE classification on a screenshot that also caught
+# trait icons), the orphan slots still land in canonical order instead of
+# falling to the alphabetical fallback — which used to flip Starship
+# Traits below Space Reputation.
+DISPLAY_CANONICAL_ORDER: list[str] = list(_ALL_SLOT_DEFS.keys())
+
 SPACE_SLOTS        = [(s['name'], s['max']) for s in SPACE_SLOT_ORDER]
 GROUND_SLOTS       = [(s['name'], s['max']) for s in GROUND_SLOT_ORDER]
 SPACE_TRAITS_SLOTS = [(s['name'], s['max']) for s in SPACE_TRAITS_SLOT_ORDER]

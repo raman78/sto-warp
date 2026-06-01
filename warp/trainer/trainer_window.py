@@ -1609,10 +1609,14 @@ class WarpCoreWindow(QMainWindow):
         seat key.
         """
         from warp.recognition.boff_keys import order_items_for_display
+        from warp.warp_importer import DISPLAY_CANONICAL_ORDER
         build_type = self._STYPE_TO_BUILD.get(stype, 'SPACE')
         canonical = [sd['name'] for sd in _SLOT_ORDER.get(build_type, [])]
         flat: list = []
-        for label, group in order_items_for_display(items, canonical):
+        for label, group in order_items_for_display(
+            items, canonical,
+            fallback_canonical_slots=DISPLAY_CANONICAL_ORDER,
+        ):
             for ri in group:
                 ri['_group_label'] = label
                 flat.append(ri)
