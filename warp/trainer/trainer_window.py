@@ -1444,14 +1444,27 @@ class WarpCoreWindow(QMainWindow):
         self.statusBar().showMessage(
             f'Matching icons against SETS library —  {icon} {label}   {_disp_name(path.name)}'
         )
-        skip_bboxes = [ri.get('bbox') for ri in (preserve_existing or [])
+        # Filter out legacy BOFF rows (profession-only slot, no seat_key)
+        # from both the worker's skip-list AND the preserved list so the
+        # layout pass re-detects those bboxes with seat-keyed slots +
+        # seat_key. The disk-confirmed name is re-applied to the fresh
+        # dict by the bbox-fallback in `_populate_review_panel`, which
+        # also re-reads disk annotations — so no user confirmation is
+        # lost; only the slot identifier gets upgraded to today's
+        # seat-keyed form, restoring per-seat grouping.
+        def _is_legacy_boff(ri: dict) -> bool:
+            return ((ri.get('slot', '') or '').startswith('Boff')
+                    and not (ri.get('seat_key') or ''))
+        _preserve = [ri for ri in (preserve_existing or [])
+                     if not _is_legacy_boff(ri)]
+        skip_bboxes = [ri.get('bbox') for ri in _preserve
                        if ri.get('bbox')]
         self._recog_worker = RecognitionWorker(path, stype, self._sets, parent=self,
                                                 skip_bboxes=skip_bboxes)
         self._recog_worker.progress.connect(self._on_recognition_progress)
         self._recog_worker.finished.connect(
             lambda items: self._on_recognition_done(path.name, stype, items,
-                                                    preserve_existing=preserve_existing))
+                                                    preserve_existing=_preserve))
         self._recog_worker.error.connect(self._on_recognition_error)
         self._recog_worker.start()
 
@@ -1690,12 +1703,65 @@ class WarpCoreWindow(QMainWindow):
                     'thumb': None, 'crop_bgr': None, 'ship_name': '', 'ann_id': ann.ann_id,
                 }
         from warp.trainer.training_data import Annotation as _Ann
+        # Build a parallel index of disk-confirmed entries keyed by bbox
+        # so we can recover from slot-format drift: an annotation saved
+        # as 'Boff Tactical' has a different ann_id than the same bbox
+        # detected today as 'Boff Seat L[T]_<y>', so the ann_id-based
+        # match fails. Bbox is the stable physical anchor.
+        confirmed_bbox_list: list[tuple[tuple, str]] = [
+            (tuple(_ci.get('bbox') or ()), _aid)
+            for _aid, _ci in confirmed_by_id.items()
+            if _ci.get('bbox')
+        ]
+        IOU_RECOVER = 0.5
+        def _find_legacy_aid(fresh_bbox) -> str | None:
+            """Find a disk-confirmed entry whose bbox best overlaps
+            `fresh_bbox`. Handles detector drift between save-time and
+            today (a few px shift). Returns the legacy ann_id if a match
+            above `IOU_RECOVER` exists, else None."""
+            best_aid, best_iou = None, IOU_RECOVER
+            for bb, aid in confirmed_bbox_list:
+                if not bb or aid in seen_ids:
+                    continue
+                iou = self._bbox_iou(tuple(fresh_bbox), bb)
+                if iou > best_iou:
+                    best_iou, best_aid = iou, aid
+            return best_aid
         merged: list[dict] = []
         seen_ids: set[str] = set()
         for ri in items:
             bbox = ri.get('bbox')
+            # Capture fresh detector's seat_key before any merge branch
+            # reassigns `ri` from a disk-confirmed dict. Legacy
+            # annotations don't carry seat_key (the field is newer than
+            # the JSON schema), so `ri = dict(confirmed)` would drop it
+            # and collapse per-seat grouping back to one profession row.
+            _fresh_seat_key = (ri.get('seat_key') or '') if isinstance(ri, dict) else ''
             if bbox:
                 aid = _Ann(bbox=bbox, slot=ri.get('slot',''), name=ri.get('name','')).ann_id
+                # Bbox-IoU fallback: when the fresh seat-keyed slot
+                # doesn't ann_id-match, find the disk entry whose bbox
+                # overlaps. Promote it onto the fresh ann_id, overwrite
+                # slot + seat_key with today's geometry. User's
+                # confirmed name/state survive; group_items_by_seat now
+                # sees the seat-keyed slot and groups per physical seat.
+                if aid not in confirmed_by_id:
+                    legacy_aid = _find_legacy_aid(bbox)
+                    if legacy_aid:
+                        legacy = confirmed_by_id[legacy_aid]
+                        promoted = dict(legacy)
+                        promoted['slot'] = ri.get('slot') or legacy.get('slot', '')
+                        if ri.get('seat_key'):
+                            promoted['seat_key'] = ri['seat_key']
+                        promoted['bbox'] = bbox  # adopt today's geometry
+                        promoted['ann_id'] = legacy_aid
+                        confirmed_by_id[aid] = promoted
+                        seen_ids.add(legacy_aid)
+                        log.debug(
+                            f'populate: IoU-recovered legacy slot '
+                            f'{legacy.get("slot")!r} → {promoted["slot"]!r} '
+                            f'(seat_key={promoted.get("seat_key","")!r})'
+                        )
                 if aid in confirmed_by_id:
                     confirmed = confirmed_by_id[aid]
                     fresh_name = (ri.get('name') or '').strip()
@@ -1774,6 +1840,14 @@ class WarpCoreWindow(QMainWindow):
                             ri['ann_id'] = confirmed.get('ann_id', aid)
                     else:
                         ri = dict(confirmed)
+                # Re-attach fresh seat_key after any disk-merge branch:
+                # `ri = dict(confirmed)` returns a legacy dict with no
+                # seat_key, but `group_items_by_seat` needs it to split
+                # rows per physical seat instead of collapsing all
+                # Tac/Eng/Sci items into one profession row.
+                if _fresh_seat_key and not ri.get('seat_key'):
+                    ri = dict(ri)
+                    ri['seat_key'] = _fresh_seat_key
                 seen_ids.add(aid)
             merged.append(ri)
         for aid, ci in confirmed_by_id.items():
