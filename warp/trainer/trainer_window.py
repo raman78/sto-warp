@@ -1596,37 +1596,27 @@ class WarpCoreWindow(QMainWindow):
         self._review_summary.setText('Recognition cancelled.')
         self.statusBar().showMessage('Recognition cancelled.')
 
-    # Meta-slot priority — Ship Name / Ship Type / Ship Tier always lead,
-    # mirroring WARP Results (`results_view._populate_tree:772`).
-    _META_SLOT_PRIORITY: dict[str, int] = {
-        'Ship Name': 0, 'Ship Type': 1, 'Ship Tier': 2,
-    }
+    def _order_items_for_review(self, items: list, stype: str) -> list:
+        """Reorder `_recognition_items` for the review tree and stamp each
+        item with `_group_label` — the parent-row label the
+        `_ReviewListAdapter` should put the item under.
 
-    def _sort_items_by_slot_order(self, items: list, stype: str) -> list:
-        """Reorder `_recognition_items` so the review tree groups parents in
-        the same canonical sequence WARP Results uses (Ship Name / Type /
-        Tier first, then weapons / consoles / traits per `SLOT_ORDER`).
-        Within a slot, sort by `slot_index` so multi-entry parents (e.g.
-        Fore Weapons) keep their left-to-right order. Unknown slots
-        (boff subseats, anything outside `SLOT_ORDER`) fall to the bottom
-        sorted alphabetically.
+        Delegates ordering and seat-aware BOFF grouping to
+        `warp.recognition.boff_keys.order_items_for_display`, the single
+        source of truth shared with WARP Results. So BOFF rows that share
+        a physical seat (e.g. Lieutenant Tactical) land under a unified
+        'Boff Tactical' parent here too instead of one parent per raw
+        seat key.
         """
+        from warp.recognition.boff_keys import order_items_for_display
         build_type = self._STYPE_TO_BUILD.get(stype, 'SPACE')
-        canonical = _SLOT_ORDER.get(build_type, [])
-        slot_priority = {sd['name']: 3 + i for i, sd in enumerate(canonical)}
-
-        def key(ri):
-            slot = ri.get('slot', '') or ''
-            si = ri.get('slot_index', 0) or 0
-            if slot in self._META_SLOT_PRIORITY:
-                return (self._META_SLOT_PRIORITY[slot], 0, '', si)
-            if slot in slot_priority:
-                return (slot_priority[slot], 0, '', si)
-            # Unknown slot — push past every canonical entry, then
-            # alphabetise so reruns produce a stable order.
-            return (999, 1, slot, si)
-
-        return sorted(items, key=key)
+        canonical = [sd['name'] for sd in _SLOT_ORDER.get(build_type, [])]
+        flat: list = []
+        for label, group in order_items_for_display(items, canonical):
+            for ri in group:
+                ri['_group_label'] = label
+                flat.append(ri)
+        return flat
 
     def _populate_review_panel(self, items: list, stype: str):
         # Fast Correction Mode is a pure WARP correction loop — the user
@@ -1639,7 +1629,7 @@ class WarpCoreWindow(QMainWindow):
             _wlog.info(
                 f'Fast Correction: populate_review_panel items={len(items)} '
                 f'stype={stype} current_idx={self._current_idx}')
-            self._recognition_items = self._sort_items_by_slot_order(
+            self._recognition_items = self._order_items_for_review(
                 list(items), stype)
             self._review_list.clear()
             self._review_summary.setText('')
@@ -1657,7 +1647,8 @@ class WarpCoreWindow(QMainWindow):
                     confirmed=(ri.get('state') == 'confirmed'),
                     cross_check_failed=ri.get('cross_check_failed', False),
                     auto_confirmed=ri.get('auto_confirmed', False),
-                    conflict_disk_name='')
+                    conflict_disk_name='',
+                    group_label=ri.get('_group_label'))
             # Slot / Idx column neutrality is now enforced inside
             # `_populate_review_item` itself (cols 0-1 always white), and
             # `refresh_parent_of` mirrors that onto each group header — so
@@ -1784,7 +1775,7 @@ class WarpCoreWindow(QMainWindow):
         for aid, ci in confirmed_by_id.items():
             if aid not in seen_ids:
                 merged.append(ci)
-        self._recognition_items = self._sort_items_by_slot_order(merged, stype)
+        self._recognition_items = self._order_items_for_review(merged, stype)
         # Auto-accept high-conf items before drawing the list
         self._apply_auto_accept()
         self._review_list.clear()
@@ -1792,7 +1783,7 @@ class WarpCoreWindow(QMainWindow):
         self._set_review_buttons_enabled(False)
         for ri in self._recognition_items:
             _conflict = ri.get('disk_name', '') if ri.get('state') == 'community_conflict' else ''
-            self._add_review_row(ri['name'], ri['slot'], ri.get('conf', 0.0), confirmed=(ri.get('state') == 'confirmed'), cross_check_failed=ri.get('cross_check_failed', False), auto_confirmed=ri.get('auto_confirmed', False), conflict_disk_name=_conflict)
+            self._add_review_row(ri['name'], ri['slot'], ri.get('conf', 0.0), confirmed=(ri.get('state') == 'confirmed'), cross_check_failed=ri.get('cross_check_failed', False), auto_confirmed=ri.get('auto_confirmed', False), conflict_disk_name=_conflict, group_label=ri.get('_group_label'))
         self._ann_widget.set_review_items(self._recognition_items)
         self._ann_widget.set_selected_row(-1)
         n = len(self._recognition_items)
@@ -1910,21 +1901,29 @@ class WarpCoreWindow(QMainWindow):
     def _populate_review_item(self, item, name: str, slot: str, conf: float, *,
                               confirmed: bool, cross_check_failed: bool,
                               auto_confirmed: bool, conflict_disk_name: str,
-                              idx: int | None = None) -> None:
+                              idx: int | None = None,
+                              group_label: str | None = None) -> None:
         slot_disp = _pretty_slot(slot)
+        # `group_label` (when given) is the seat-aware parent-row label
+        # produced by `order_items_for_display` — e.g. 'Boff Tactical #2'
+        # — and it doubles as the adapter's group key. Without it we
+        # fall back to the slot-as-key behaviour, which is what manual
+        # bbox additions and pre-grouping call sites still rely on.
+        group_id   = group_label if group_label else slot
+        group_disp = group_label if group_label else slot_disp
         item_text, conf_text, status_text, color = self._review_row_visuals(
             name, conf,
             confirmed=confirmed, cross_check_failed=cross_check_failed,
             auto_confirmed=auto_confirmed, conflict_disk_name=conflict_disk_name,
         )
-        # Col 0 carries the slot label only on standalone items (those
+        # Col 0 carries the group label only on standalone items (those
         # not yet added to the tree). Once `addItem` places the item under
         # a parent, the parent owns the Slot column and the child's col 0
         # stays blank — preserve that here so refresh sites don't
         # reintroduce the slot text on every child row.
-        item.setData(0, Qt.ItemDataRole.UserRole, slot)
+        item.setData(0, Qt.ItemDataRole.UserRole, group_id)
         if item.parent() is None:
-            item.setText(0, slot_disp)
+            item.setText(0, group_disp)
         if idx is None:
             try:
                 idx = int(item.text(1)) if item.text(1) else 1
@@ -1979,14 +1978,19 @@ class WarpCoreWindow(QMainWindow):
         if item.parent() is not None:
             self._review_list.refresh_parent_of(item)
 
-    def _add_review_row(self, name: str, slot: str, conf: float, confirmed: bool = False, cross_check_failed: bool = False, auto_confirmed: bool = False, conflict_disk_name: str = ''):
+    def _add_review_row(self, name: str, slot: str, conf: float, confirmed: bool = False, cross_check_failed: bool = False, auto_confirmed: bool = False, conflict_disk_name: str = '', group_label: str | None = None):
         item = QTreeWidgetItem()
-        idx  = self._slot_ordinal(slot)
+        # `_slot_ordinal` counts existing rows sharing the same col-0
+        # UserRole. When seat-grouping is active the UserRole is the
+        # group label (one parent row per physical seat), so we count
+        # within the seat to keep Idx contiguous; without grouping we
+        # fall back to counting by slot, matching legacy behaviour.
+        idx  = self._slot_ordinal(group_label if group_label else slot)
         self._populate_review_item(
             item, name, slot, conf,
             confirmed=confirmed, cross_check_failed=cross_check_failed,
             auto_confirmed=auto_confirmed, conflict_disk_name=conflict_disk_name,
-            idx=idx,
+            idx=idx, group_label=group_label,
         )
         self._review_list.addItem(item)
 
@@ -2131,6 +2135,14 @@ class WarpCoreWindow(QMainWindow):
                 if self._is_current_locked():
                     return True
                 self._on_remove_item()
+                return True
+            # Enter / Return on the bbox list = same as Enter in the name
+            # field: accept the current row and advance to the next
+            # unconfirmed one. Without this, focus-on-list Enter was a
+            # no-op, leaving users stranded on the current row depending
+            # on which widget had focus — inconsistent and surprising.
+            if obj is rl and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
+                self._on_accept()
                 return True
         # Forward wheel events from anywhere in scroll area to the canvas widget
         # (only when WARP CORE is the active window)
@@ -2278,6 +2290,7 @@ class WarpCoreWindow(QMainWindow):
                 confirmed=(ri.get('state') == 'confirmed'),
                 cross_check_failed=ri.get('cross_check_failed', False),
                 auto_confirmed=ri.get('auto_confirmed', False),
+                group_label=ri.get('_group_label'),
             )
         self._exit_manual_bbox_mode()
         self._recognition_cache[path.name] = list(self._recognition_items)
@@ -2659,6 +2672,7 @@ class WarpCoreWindow(QMainWindow):
                 litem, text, slot, conf,
                 confirmed=False, cross_check_failed=cross_check,
                 auto_confirmed=False, conflict_disk_name='',
+                group_label=ri.get('_group_label'),
             )
 
         if self._review_list.currentRow() == row:
@@ -2736,6 +2750,7 @@ class WarpCoreWindow(QMainWindow):
                     litem, name, ri['slot'], conf,
                     confirmed=False, cross_check_failed=_cross_check,
                     auto_confirmed=False, conflict_disk_name='',
+                    group_label=ri.get('_group_label'),
                 )
             # Auto-accept if conf >= threshold and checkbox enabled
             if (name and conf > 0
@@ -2993,6 +3008,7 @@ class WarpCoreWindow(QMainWindow):
                     litem, name, slot, conf,
                     confirmed=False, cross_check_failed=_cross_check,
                     auto_confirmed=False, conflict_disk_name='',
+                    group_label=ri.get('_group_label'),
                 )
             # Auto-accept if threshold met after rematch
             if (name and conf >= 0.40
@@ -3091,13 +3107,15 @@ class WarpCoreWindow(QMainWindow):
                             ri['conf'] = conf
                             # Refresh visual row
                             self._review_list.takeItem(row)
-                            self._add_review_row(name, ri['slot'], conf, confirmed=False)
+                            self._add_review_row(name, ri['slot'], conf, confirmed=False,
+                                                 group_label=ri.get('_group_label'))
                         else:
                             ri['conf'] = conf
                             ri['orig_name'] = name
                             # Refresh visual row but keep confirmed status and user-selected name
                             self._review_list.takeItem(row)
-                            self._add_review_row(ri['name'], ri['slot'], conf, confirmed=True)
+                            self._add_review_row(ri['name'], ri['slot'], conf, confirmed=True,
+                                                 group_label=ri.get('_group_label'))
                             # Bbox-only correction on a confirmed row: resend
                             # the (better) crop with the user-confirmed name
                             # so the backend gets the improved training signal.
@@ -3406,6 +3424,7 @@ class WarpCoreWindow(QMainWindow):
                     litem, name, slot, ri.get('conf', 0.0),
                     confirmed=True, cross_check_failed=False,
                     auto_confirmed=False, conflict_disk_name='',
+                    group_label=ri.get('_group_label'),
                 )
             if name and ri.get('crop_bgr') is not None and slot not in NON_ICON_SLOTS:
                 from warp.recognition.icon_matcher import SETSIconMatcher

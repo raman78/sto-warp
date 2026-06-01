@@ -35,7 +35,7 @@ from PySide6.QtWidgets import (
     QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
-from warp.recognition.boff_keys import group_items_by_seat
+from warp.recognition.boff_keys import group_items_by_seat, order_items_for_display
 from warp.style import (
     BG as _THEME_BG, LBG as _THEME_LBG, ACCENT as _THEME_ACCENT,
     primary_btn_style,
@@ -773,33 +773,14 @@ class ResultsView(QWidget):
 
     def _populate_tree(self, result: ImportResult):
         self._tree.clear()
-        seat_groups: list[tuple[str, list[RecognisedItem]]] = \
-            group_items_by_seat(result.items)
-        by_label: dict[str, list[RecognisedItem]] = {
-            label: items for label, items in seat_groups
-        }
-        spatial_order: list[str] = [label for label, _ in seat_groups]
-
-        meta_slots = ['Ship Name', 'Ship Type', 'Ship Tier']
+        # Ordering + seat-aware BOFF grouping live in
+        # warp.recognition.boff_keys.order_items_for_display — shared
+        # with WARP CORE so the two UIs cannot drift on slot ordering.
         canonical = [sd['name'] for sd in SLOT_ORDER.get(result.build_type, [])]
-        non_boff_canonical = [s for s in canonical if not s.startswith('Boff')]
-        boff_in_order = [lbl for lbl in spatial_order if lbl.startswith('Boff')]
-        seen: set[str] = set()
-        ordered_labels: list[str] = []
-        for s in meta_slots + non_boff_canonical:
-            if s in by_label and s not in seen:
-                ordered_labels.append(s); seen.add(s)
-        for lbl in boff_in_order:
-            if lbl not in seen:
-                ordered_labels.append(lbl); seen.add(lbl)
-        for lbl in sorted(by_label):
-            if lbl not in seen:
-                ordered_labels.append(lbl); seen.add(lbl)
+        ordered_groups = order_items_for_display(result.items, canonical)
 
         parent_brush = QBrush(QColor(_THEME_LBG))
-        for slot in ordered_labels:
-            entries = sorted(by_label[slot],
-                             key=lambda it: (it.slot_index, it.name))
+        for slot, entries in ordered_groups:
             parent = QTreeWidgetItem(self._tree)
             parent.setText(0, slot)
             parent.setText(1, str(len(entries)))

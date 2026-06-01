@@ -158,6 +158,18 @@ def is_ground_seat(slot_name: str) -> bool:
 _VIRTUAL_NAMES = frozenset({'', '__empty__', '__inactive__'})
 
 
+def _field(item, name: str, default=''):
+    """Attr-or-key accessor — lets group/order helpers consume both
+    RecognisedItem objects (WARP results view) and the plain dicts
+    `_recognition_items` carries inside WARP CORE. Keeps the two UIs
+    on a single ordering / grouping code path without forcing CORE to
+    materialise RecognisedItem instances for its in-flight edit state.
+    """
+    if isinstance(item, dict):
+        return item.get(name, default)
+    return getattr(item, name, default)
+
+
 def _seat_label_from_items(seat_key: str, items) -> str:
     """Display label for a physical seat — Universal seats are resolved
     to their content's voted profession so the label matches what
@@ -173,9 +185,9 @@ def _seat_label_from_items(seat_key: str, items) -> str:
         # `it.slot` carries 'Boff <prof>' for non-virtual abilities).
         from collections import Counter
         prof_slots = [
-            getattr(it, 'slot', '')
+            _field(it, 'slot', '')
             for it in items
-            if getattr(it, 'name', '') not in _VIRTUAL_NAMES
+            if _field(it, 'name', '') not in _VIRTUAL_NAMES
         ]
         prof_slots = [s for s in prof_slots
                       if s.startswith('Boff ') and s != 'Boff Universal']
@@ -212,8 +224,8 @@ def group_items_by_seat(items):
     """
     raw: dict[tuple, list] = {}
     for it in items:
-        slot = getattr(it, 'slot', '') or ''
-        seat_key = getattr(it, 'seat_key', '') or ''
+        slot = _field(it, 'slot', '') or ''
+        seat_key = _field(it, 'seat_key', '') or ''
         # Fallback: when remap left the item with a seat-keyed `slot` and
         # no `seat_key` (e.g. ground ability unknown to boff_abilities cache
         # so the profession remap didn't fire), use `slot` itself as the
@@ -228,8 +240,11 @@ def group_items_by_seat(items):
         raw.setdefault(key, []).append(it)
 
     def _top_y(item_list):
-        ys = [it.bbox[1] for it in item_list
-              if getattr(it, 'bbox', None) and len(it.bbox) >= 2]
+        ys = []
+        for it in item_list:
+            bbox = _field(it, 'bbox', None)
+            if bbox and len(bbox) >= 2:
+                ys.append(bbox[1])
         return min(ys) if ys else 1_000_000_000
 
     ordered_keys = sorted(raw.keys(), key=lambda k: _top_y(raw[k]))
@@ -258,6 +273,66 @@ def group_items_by_seat(items):
             label = base_label
         result.append((label, item_list))
     return result
+
+
+_META_SLOTS: tuple[str, ...] = ('Ship Name', 'Ship Type', 'Ship Tier')
+
+
+def order_items_for_display(
+    items,
+    canonical_slots: list[str],
+    *,
+    meta_slots: tuple[str, ...] = _META_SLOTS,
+) -> list[tuple[str, list]]:
+    """Single source of truth for the recognition-results display order.
+
+    Used by both WARP Results (`results_view._populate_tree`) and WARP
+    CORE / Fast Correction (`trainer_window._populate_review_panel`) so
+    the two UIs stay byte-identical in slot ordering as the canonical
+    SLOT_ORDER evolves.
+
+    Returns `list[(label, [items])]` where:
+      - groups are emitted in this order: meta slots (Ship Name / Type /
+        Tier) first, then non-BOFF canonical slots in `canonical_slots`
+        order, then BOFF seat groups in top-down Y order (inherited from
+        `group_items_by_seat`), then any unknown slots alphabetically;
+      - within each group, items are sorted by `(slot_index, name)`,
+        matching what `_populate_tree` already does for child rows.
+
+    Group labels come from `group_items_by_seat`, so BOFF parents read as
+    'Boff Tactical' etc. (with #1/#2 suffix when multiple seats share a
+    profession). Labels are unique per result, so callers may use the
+    label as a stable parent-row key.
+
+    `canonical_slots` should be `[sd['name'] for sd in SLOT_ORDER[bt]]`.
+    Importing SLOT_ORDER here would pull `warp.warp_importer` (heavy)
+    into this dependency-light module — callers pass the list instead.
+    """
+    groups = group_items_by_seat(items)
+    by_label: dict[str, list] = {lbl: list(lst) for lbl, lst in groups}
+    boff_y_order = [lbl for lbl, _ in groups if lbl.startswith('Boff')]
+    canonical_non_boff = [s for s in canonical_slots if not s.startswith('Boff')]
+
+    seen: set[str] = set()
+    ordered: list[tuple[str, list]] = []
+
+    def _emit(label: str) -> None:
+        if label in by_label and label not in seen:
+            entries = sorted(
+                by_label[label],
+                key=lambda it: (_field(it, 'slot_index', 0) or 0,
+                                _field(it, 'name', '') or ''),
+            )
+            ordered.append((label, entries))
+            seen.add(label)
+
+    for label in list(meta_slots) + canonical_non_boff:
+        _emit(label)
+    for label in boff_y_order:
+        _emit(label)
+    for label in sorted(by_label):
+        _emit(label)
+    return ordered
 
 
 def pretty_slot(slot_name: str) -> str:
