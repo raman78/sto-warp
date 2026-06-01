@@ -361,6 +361,11 @@ class RecognitionWorker(QThread):
                           # back to slot-only grouping, collapsing all seats
                           # of one profession into a single parent row.
                           'seat_key': getattr(ri, 'seat_key', '') or '',
+                          # slot_index = position within the slot (left-to-right
+                          # in BOFF seats, top-to-bottom in trait columns). Used
+                          # by `order_items_for_display` to sort group children
+                          # in detection order instead of falling back to name.
+                          'slot_index': getattr(ri, 'slot_index', 0) or 0,
                           'src': getattr(ri, 'src', '')})
         # Summary table: per-stage scores + Δ vs previous run for this image.
         try:

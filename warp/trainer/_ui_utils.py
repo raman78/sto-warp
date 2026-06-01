@@ -7,13 +7,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtGui import QBrush, QPalette
+from PySide6.QtGui import QBrush, QColor, QPalette
 from PySide6.QtWidgets import (
     QAbstractItemView, QHeaderView, QStyledItemDelegate, QTreeWidget,
     QTreeWidgetItem,
 )
 
 from warp import userdata
+from warp.style import LBG as _THEME_LBG
 
 
 class _ColorPreservingDelegate(QStyledItemDelegate):
@@ -119,8 +120,12 @@ class _ReviewListAdapter(QTreeWidget):
         p.setFlags(p.flags() & ~Qt.ItemFlag.ItemIsSelectable)
         f = p.font(0)
         f.setBold(True)
+        # Tint group-header rows with the panel-background colour so they
+        # read as headers, matching WARP Results' parent styling.
+        parent_brush = QBrush(QColor(_THEME_LBG))
         for c in range(self.columnCount()):
             p.setFont(c, f)
+            p.setBackground(c, parent_brush)
         self._slot_parents[slot_raw] = p
         return p
 
