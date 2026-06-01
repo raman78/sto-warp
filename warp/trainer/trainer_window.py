@@ -3004,6 +3004,10 @@ class WarpCoreWindow(QMainWindow):
         self._review_list.blockSignals(True)
         self._review_list.setCurrentRow(-1)
         self._review_list.blockSignals(False)
+        # blockSignals also silences itemSelectionChanged, which drives the
+        # bold-on-selected refresh — run it manually so the old row's bold
+        # font is cleared.
+        self._review_list._refresh_bold_selected()
         self._set_review_buttons_enabled(False)
         self._ann_widget.clear_highlight()
 
@@ -3138,6 +3142,11 @@ class WarpCoreWindow(QMainWindow):
                     self._review_list.blockSignals(True)
                     self._review_list.setCurrentRow(row)
                     self._review_list.blockSignals(False)
+                    # blockSignals also silences itemSelectionChanged,
+                    # which drives the bold-on-selected refresh — run it
+                    # manually so the new row gets bold and the previous
+                    # one loses it.
+                    self._review_list._refresh_bold_selected()
                     self._ann_widget.set_highlighted_row(row)
                     self._set_review_buttons_enabled(True)
                     break
@@ -3729,7 +3738,10 @@ class WarpCoreWindow(QMainWindow):
         self._tier_combo.setVisible(is_tier)
         self._ship_type_combo.setVisible(is_ship_type)
         self._name_edit.setVisible(not is_tier and not is_ship_type)
-        self._name_edit.setEnabled(not is_non_icon)
+        # When the current screenshot is Mark Done-locked the field must
+        # stay disabled regardless of slot — otherwise selecting another
+        # item silently re-enables typing on a locked screenshot.
+        self._name_edit.setEnabled(not is_non_icon and not self._is_current_locked())
 
         if is_tier:
             self._name_label.setText('Tier:')

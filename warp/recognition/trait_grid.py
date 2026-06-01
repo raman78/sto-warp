@@ -476,10 +476,15 @@ def detect_traits(img, icon_matcher, app_cache, build_type: str | None = None):
         rs_groups = _cluster_resweep_groups(rs_rows, icon_h)
         merged = _merge_starship_overflow(rs_groups, icon_h)
 
-        labels = []
+        # Classify each row-group, then deduplicate per panel: a trait
+        # section can only appear ONCE per panel (the game UI never stacks
+        # two "Starship Traits" sections on the same grid). When ML votes
+        # accidentally classify a noise row-group as the same section as a
+        # real one, the duplicate must be dropped — keep the higher-scored
+        # group. The structural 5+2 shortcut scores +inf so it always wins
+        # against an ML-only match.
+        classified: list[tuple[str | None, float, list]] = []
         for g in merged:
-            # Structural shortcut: a 2-row group with [5,≤2] cols 0-1 IS a
-            # Starship Traits overflow pair.
             is_starship_struct = (
                 len(g) == 2 and len(g[0]) == 5
                 and 1 <= len(g[1]) <= 2
@@ -487,18 +492,34 @@ def detect_traits(img, icon_matcher, app_cache, build_type: str | None = None):
             )
             if is_starship_struct:
                 slot = 'Starship Traits'
+                score = float('inf')
             else:
-                slot, _votes = _classify_group_section(
+                slot, votes = _classify_group_section(
                     g, img, icon_matcher, name_to_section)
-            # Drop slots that don't belong to the requested build_type
-            # group (prevents space traits from leaking onto ground panels
-            # and vice versa).
+                score = float(votes.get(slot, 0.0)) if slot else 0.0
             if slot is not None and allowed_slots is not None \
                     and slot not in allowed_slots:
                 slot = None
-            labels.append(slot)
+                score = 0.0
+            classified.append((slot, score, g))
+
+        best_by_slot: dict[str, tuple[float, list]] = {}
+        for slot, score, g in classified:
             if slot is None:
                 continue
+            if slot not in best_by_slot or score > best_by_slot[slot][0]:
+                best_by_slot[slot] = (score, g)
+
+        labels = []
+        for slot, score, g in classified:
+            if slot is None:
+                labels.append(None)
+            elif best_by_slot[slot][1] is g:
+                labels.append(slot)
+            else:
+                labels.append(f'{slot} (dup-dropped)')
+
+        for slot, (_score, g) in best_by_slot.items():
             sections[slot].extend(_emit_bboxes(g, cols, icon_w, icon_h))
 
         panel_summaries.append({
