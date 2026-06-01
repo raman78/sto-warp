@@ -1444,19 +1444,24 @@ class WarpCoreWindow(QMainWindow):
         self.statusBar().showMessage(
             f'Matching icons against SETS library —  {icon} {label}   {_disp_name(path.name)}'
         )
-        # Filter out legacy BOFF rows (profession-only slot, no seat_key)
-        # from both the worker's skip-list AND the preserved list so the
-        # layout pass re-detects those bboxes with seat-keyed slots +
-        # seat_key. The disk-confirmed name is re-applied to the fresh
-        # dict by the bbox-fallback in `_populate_review_panel`, which
-        # also re-reads disk annotations — so no user confirmation is
-        # lost; only the slot identifier gets upgraded to today's
-        # seat-keyed form, restoring per-seat grouping.
-        def _is_legacy_boff(ri: dict) -> bool:
-            return ((ri.get('slot', '') or '').startswith('Boff')
-                    and not (ri.get('seat_key') or ''))
+        # Filter out legacy rows missing detector-derived display fields
+        # (seat_key for BOFFs, slot_index for everything) so the layout
+        # pass re-detects them with today's geometry. The disk-confirmed
+        # name is re-applied to the fresh dict by `_populate_review_panel`,
+        # which re-reads disk annotations and re-attaches fresh
+        # seat_key / slot_index after the merge — no user confirmation
+        # is lost; only the per-group sort key gets upgraded to today's
+        # detection order, restoring L→R BOFF / T→B trait / numeric EQ
+        # ordering within each parent row.
+        def _is_legacy(ri: dict) -> bool:
+            is_boff = (ri.get('slot', '') or '').startswith('Boff')
+            if is_boff and not (ri.get('seat_key') or ''):
+                return True
+            if ri.get('slot_index') is None:
+                return True
+            return False
         _preserve = [ri for ri in (preserve_existing or [])
-                     if not _is_legacy_boff(ri)]
+                     if not _is_legacy(ri)]
         skip_bboxes = [ri.get('bbox') for ri in _preserve
                        if ri.get('bbox')]
         self._recog_worker = RecognitionWorker(path, stype, self._sets, parent=self,
