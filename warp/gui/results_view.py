@@ -788,16 +788,13 @@ class ResultsView(QWidget):
         for slot, entries in ordered_groups:
             parent = QTreeWidgetItem(self._tree)
             parent.setText(0, slot)
+            # Parent rows are pure group headers — only the label and
+            # child count. Single-child groups (Ship Name / Tier / Type)
+            # used to mirror the child's name/confidence here, which
+            # made them visually different from multi-child groups
+            # (Devices, Fore Weapons, …) where the value already lives
+            # in the child row. Consistent now: always read children.
             parent.setText(1, str(len(entries)))
-            if len(entries) == 1:
-                _name = entries[0].name or '—'
-                if getattr(entries[0], 'match_origin', '') == 'user':
-                    _name = f'✓ {_name}'
-                    parent.setForeground(2, QBrush(QColor('#7effc8')))
-                    parent.setToolTip(
-                        2, 'Match from your own WARP CORE correction (live-seed)')
-                parent.setText(2, _name)
-                parent.setText(3, f'{entries[0].confidence:.0%}')
             for col in range(self._tree.columnCount()):
                 parent.setBackground(col, parent_brush)
             f = parent.font(0)

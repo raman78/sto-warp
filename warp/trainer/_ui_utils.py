@@ -135,29 +135,25 @@ class _ReviewListAdapter(QTreeWidget):
 
     def refresh_parent_of(self, item: QTreeWidgetItem) -> None:
         """Public helper — call after mutating a child so the parent's
-        Idx / Item / Conf / Status summary stays in sync. Idempotent."""
+        Idx column stays in sync. Idempotent.
+
+        Parent rows are pure group headers: they show only the group
+        label and the child count. Item / Conf / Status columns stay
+        empty so single-child groups (Ship Name / Type / Tier) read the
+        same as multi-child ones (Devices, Fore Weapons, …) — the user
+        always finds the value in the child row.
+        """
         parent = item.parent()
         if parent is None:
             return
         n = parent.childCount()
         parent.setText(1, str(n) if n > 1 else '')
-        if n == 1:
-            child = parent.child(0)
-            parent.setText(2, child.text(2))
-            parent.setText(3, child.text(3))
-            parent.setText(4, child.text(4))
-            # Mirror the child's foreground onto the parent so the
-            # collapsed-state summary line matches the child's status.
-            for c in range(self.columnCount()):
-                parent.setForeground(c, child.foreground(c))
-        else:
-            parent.setText(2, '')
-            parent.setText(3, '')
-            parent.setText(4, '')
-            # Reset parent foreground to default for multi-child slots.
-            blank = QBrush()
-            for c in range(self.columnCount()):
-                parent.setForeground(c, blank)
+        parent.setText(2, '')
+        parent.setText(3, '')
+        parent.setText(4, '')
+        blank = QBrush()
+        for c in range(self.columnCount()):
+            parent.setForeground(c, blank)
 
     # ── QListWidget-style shims ─────────────────────────────────────
 

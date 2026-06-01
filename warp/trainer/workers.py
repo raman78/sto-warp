@@ -353,6 +353,14 @@ class RecognitionWorker(QThread):
                           'state': 'pending', 'thumb': ri.thumbnail, 'crop_bgr': crop_bgr,
                           'orig_name': ri.name, 'ship_name': result.ship_name,
                           'cross_check_failed': cross_check,
+                          # Carry the seat_key set by `_remap_boff_seat_slots`
+                          # so the trainer review tree groups BOFF abilities by
+                          # physical seat (Boff Tactical #1 / #2, …) the same
+                          # way WARP Results does. Without it CORE's dicts saw
+                          # an empty seat_key and `group_items_by_seat` fell
+                          # back to slot-only grouping, collapsing all seats
+                          # of one profession into a single parent row.
+                          'seat_key': getattr(ri, 'seat_key', '') or '',
                           'src': getattr(ri, 'src', '')})
         # Summary table: per-stage scores + Δ vs previous run for this image.
         try:
