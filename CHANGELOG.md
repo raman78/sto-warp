@@ -18,9 +18,9 @@ details live in the git history.
   is a thin wrapper around the pipx-installed binary; no code signing
   or notarisation is involved, so it launches without the "damaged
   app" Gatekeeper warning that signed-but-unnotarised downloads would
-  trigger. After a `pipx upgrade` the launcher prunes any stale
-  bundle that still points at the same install, so the user is never
-  left with duplicates in Launchpad.
+  trigger. After a `pipx upgrade` any stale bundle pointing at the
+  same install is pruned automatically, so no duplicates accumulate
+  in Launchpad.
 
 ### Changed
 - **Rounded-corner app icon across all platforms** — the application
@@ -29,9 +29,22 @@ details live in the git history.
   The change applies consistently to the Linux `.desktop` icon, the
   macOS `.icns` bundle icon, the Windows Start Menu shortcut `.ico`,
   *and* the live window / taskbar / title-bar icon visible while
-  sto-warp is running. Linux and Windows users on 1.0.12 get the
-  rounded icon automatically on their next `pipx upgrade` or after
+  sto-warp is running. Linux and Windows installs on 1.0.12 pick up
+  the rounded icon automatically on the next `pipx upgrade` or after
   re-running `sto-warp install-desktop`.
+
+### Fixed
+- Clicking a slot on the canvas in WARP CORE (and in Fast Correction
+  Mode) now reliably bolds the matching row in the review list. The
+  bold previously stayed on whichever row was selected before the
+  click.
+- Switching between items on a Mark Done-locked screenshot no longer
+  re-enables the locked Item name field — the lock now persists for
+  every item in the screenshot, not just the one selected when the
+  screenshot was marked done.
+- Starship traits no longer get counted twice when a nearby noise
+  area is misclassified as a second "Starship Traits" section. The
+  structural detection wins and the duplicate is dropped.
 
 ## [1.0.12] — 2026-05-31
 
