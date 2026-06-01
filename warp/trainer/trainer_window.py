@@ -255,8 +255,13 @@ class WarpCoreWindow(QMainWindow):
         self._btn_done.setEnabled(False)
         self._btn_done.clicked.connect(self._on_done_toggle)
         ll.addWidget(self._btn_done)
+        # Send to WARP belongs to Fast Correction Mode only — training mode
+        # is for annotating ML data, not round-tripping results back to WARP.
+        # `set_fast_correction_mode` reveals it; `exit_fast_correction_mode`
+        # hides it again.
         self._btn_send_to_warp = QPushButton('↗ Send to WARP')
         self._btn_send_to_warp.setEnabled(False)
+        self._btn_send_to_warp.setVisible(False)
         self._btn_send_to_warp.setToolTip(
             'Mark this screenshot as Done first.')
         self._btn_send_to_warp.clicked.connect(self._on_send_to_warp)
@@ -651,6 +656,7 @@ class WarpCoreWindow(QMainWindow):
         # Warm-amber chrome + banner.
         self.setStyleSheet(accent_qss('fast_correction'))
         self._fast_banner.setVisible(True)
+        self._btn_send_to_warp.setVisible(True)
         self.setWindowTitle('WARP CORE — Fast Correction Mode')
         if self._file_list.count():
             self._file_list.setCurrentRow(0)
@@ -674,6 +680,7 @@ class WarpCoreWindow(QMainWindow):
         self.setStyleSheet('')
         apply_dark_style(self)
         self._fast_banner.setVisible(False)
+        self._btn_send_to_warp.setVisible(False)
         for a in (self._action_open_screenshot, self._action_open_folder):
             a.setVisible(True)
         self.setWindowTitle('WARP CORE — ML Trainer')
