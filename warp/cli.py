@@ -29,16 +29,6 @@ def main(argv: list[str] | None = None) -> int:
                    help='Install or refresh the menu entry '
                         '(Linux .desktop / Windows Start Menu .lnk).')
 
-    p_mig = sub.add_parser(
-        'migrate-from-sets-warp',
-        help='Copy install_id and caches from a sets-warp checkout.')
-    p_mig.add_argument(
-        '--overwrite-id', action='store_true',
-        help='Replace existing sto-warp install_id (backed up as install_id.txt.bak).')
-    p_mig.add_argument(
-        '--path', default=None,
-        help='Path to the sets-warp checkout (defaults to $SETS_WARP_ROOT or common locations).')
-
     args = parser.parse_args(argv)
 
     if args.cmd == 'check':
@@ -46,19 +36,6 @@ def main(argv: list[str] | None = None) -> int:
         from warp.recognition import boff_keys, boff_marker, eq_geometry  # noqa: F401
         log.info('sto-warp check: OK')
         print(f'sto-warp {__version__} — foundation modules import OK.')
-        return 0
-
-    if args.cmd == 'migrate-from-sets-warp':
-        from pathlib import Path
-        from warp.userdata import migrate_from_sets_warp
-        root = Path(args.path).expanduser() if args.path else None
-        moved = migrate_from_sets_warp(
-            overwrite_install_id=args.overwrite_id, sets_warp_root=root)
-        if not moved:
-            print('migrate-from-sets-warp: nothing migrated (no sets-warp checkout found).')
-            return 1
-        for key, did in moved.items():
-            print(f'  {key:<16} {"copied" if did else "skipped (already exists)"}')
         return 0
 
     if args.cmd == 'install-desktop':

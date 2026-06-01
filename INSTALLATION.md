@@ -6,10 +6,13 @@ To make this as easy as possible, we provide universal installation scripts for 
 
 > **A note on PyTorch.** sto-warp's recognition pipeline is CPU-only by
 > design. The Windows `.exe` installer ships a CPU-only build of PyTorch
-> (~400 MB total). On Linux, the default `pipx install` pulls the
-> standard PyPI `torch` wheel which bundles the CUDA runtime (~2 GB) —
-> harmless but bigger than needed. To save disk space, install with the
-> CPU-only index instead:
+> (~400 MB total). On macOS the PyPI `torch` wheel is CPU-only by
+> default (Apple Silicon and modern Intel Macs do not support CUDA), so
+> `pipx install sto-warp` pulls the compact build automatically. On
+> Linux, the default `pipx install` pulls the standard PyPI `torch`
+> wheel which bundles the CUDA runtime (~2 GB) — harmless but bigger
+> than needed. To save disk space on Linux, install with the CPU-only
+> index instead:
 >
 > ```bash
 > pipx install sto-warp \
@@ -106,6 +109,14 @@ Invoke-WebRequest -Uri "https://raw.githubusercontent.com/raman78/sto-warp/main/
 
 If you prefer to handle the installation yourself, ensure you have Python 3.14+ installed on your system.
 
+> **macOS note.** Python 3.14 is not pre-installed on macOS — the
+> system `python3` is usually older. Install a recent build with
+> `brew install python@3.14` (Homebrew) or download the official
+> installer from [python.org](https://www.python.org/downloads/macos/).
+> The `install.sh` one-command script only checks that *some*
+> `python3` exists; if the version is below 3.14, `pipx install`
+> will fail with a version-mismatch error.
+
 1. **Install pipx**
    Follow the [official pipx installation instructions](https://pipx.pypa.io/stable/installation/) for your operating system.
 
@@ -131,6 +142,28 @@ sto-warp check        # imports the recognition pipeline and reports OK
 If `sto-warp` is not found, the `~/.local/bin` folder (where `pipx`
 places its shims) is probably missing from `PATH`. Run
 `pipx ensurepath` once and reopen the terminal.
+
+---
+
+## ⌨️ Commands
+
+Day-to-day use only needs the bare `sto-warp` command (or the menu
+entry on your desktop). The full list, for completeness:
+
+| Command | What it does |
+|---|---|
+| `sto-warp` | Open the combined WARP + WARP CORE tabbed window — WARP (recognition) and WARP CORE (trainer) side by side. This is the default and what the desktop / Launchpad / Start Menu shortcut runs. |
+| `sto-warp launcher` | Explicit alias for the default — exactly identical to running `sto-warp` with no arguments. Listed as its own subcommand so `sto-warp --help` documents the default behaviour. |
+| `sto-warp gui` | Standalone WARP recognition window only, no trainer tab. Useful when you just want to import screenshots without the training UI in the way. |
+| `sto-warp warp-core` | Standalone WARP CORE trainer window only — review, correct and feed back training data without WARP loaded. |
+| `sto-warp check` | Import the recognition pipeline and report OK / errors. Quick sanity check after install or upgrade, doesn't open any window. |
+| `sto-warp install-desktop` | (Re)write the OS menu entry — `.desktop` on Linux, `.lnk` on Windows, `.app` bundle on macOS. Run this if the icon disappeared, the install moved, or the shortcut is otherwise stale. |
+| `sto-warp --version` | Print the installed sto-warp version. |
+| `sto-warp --help` | Argparse-generated help screen listing the above. |
+
+All commands log to `~/.config/warp/warp_*.log` in addition to the
+terminal, so window-launched sessions also leave a trail you can
+inspect later.
 
 ---
 
@@ -202,24 +235,6 @@ and re-installs never lose user data:
 
 Removing sto-warp via `pipx uninstall` leaves these folders intact.
 Delete them by hand only if a true clean slate is desired.
-
----
-
-## 📦 Migrating from sets-warp
-
-Users coming from the older sets-warp checkout (where WARP lived
-inside the build planner) can carry their install ID and caches over
-in one command:
-
-```bash
-sto-warp migrate-from-sets-warp
-```
-
-This looks for a sets-warp checkout in the usual locations (or the
-`$SETS_WARP_ROOT` environment variable) and copies whatever is found
-into the sto-warp folders listed above. Existing sto-warp data is
-preserved; pass `--overwrite-id` only when intentionally adopting the
-sets-warp install ID.
 
 ---
 

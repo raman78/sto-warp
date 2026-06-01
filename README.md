@@ -32,6 +32,11 @@ curl -sSL https://raw.githubusercontent.com/raman78/sto-warp/main/install.sh | b
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/raman78/sto-warp/main/install.ps1" -OutFile "install.ps1"; .\install.ps1; Remove-Item "install.ps1"
 ```
 
+On first launch sto-warp registers itself in your system menu — Start
+Menu on Windows, Launchpad / Spotlight on macOS, Activities / KRunner
+on Linux — so subsequent runs can be started by clicking the icon
+instead of opening a terminal.
+
 For manual installation methods and more details, see `INSTALLATION.md`.
 
 ## Data and models

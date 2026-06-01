@@ -40,6 +40,40 @@ def _icon(name: str) -> QIcon:
     return QIcon()
 
 
+def _rounded_app_icon() -> QIcon:
+    """Multi-resolution QIcon with the squircle mask baked in.
+
+    The XDG .desktop entry / macOS .app bundle / Windows .lnk all carry
+    a rounded-corner version of the bundled PNG; without this helper the
+    application's own taskbar / title-bar icon would still be the raw
+    hard-square original, breaking the look in KDE / GNOME / Plasma
+    Wayland panels. We render the mask once at 512 px (single ~50 ms
+    Pillow pass) and feed Qt the downsampled siblings so taskbars and
+    Alt-Tab pickers grab a sharp variant at every size.
+    """
+    try:
+        from io import BytesIO
+        from PIL import Image
+        from PySide6.QtGui import QImage, QPixmap
+        from warp.gui.icon_round import rounded_icon
+        src = resource_path('SETS_icon_small.png')
+        if not src.is_file():
+            return QIcon()
+        base = rounded_icon(src, size=512)
+        icon = QIcon()
+        for size in (512, 256, 128, 64, 32):
+            scaled = base if size == 512 else base.resize((size, size), Image.LANCZOS)
+            buf = BytesIO()
+            scaled.save(buf, format='PNG')
+            img = QImage.fromData(buf.getvalue(), 'PNG')
+            if not img.isNull():
+                icon.addPixmap(QPixmap.fromImage(img))
+        return icon
+    except Exception as e:
+        log.debug(f'Launcher: rounded app icon load failed: {e}')
+        return _icon('SETS_icon_small.png')
+
+
 def _find_sets_root() -> Path:
     p = Path(__file__).resolve()
     for _ in range(8):
@@ -57,9 +91,14 @@ class LauncherWindow(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle('sto-warp')
-        _app_icon = _icon('SETS_icon_small.png')
+        _app_icon = _rounded_app_icon()
         if not _app_icon.isNull():
             self.setWindowIcon(_app_icon)
+            # Also set on QApplication so dialogs / detached windows that
+            # inherit the default icon match the rounded launcher shape.
+            app = QApplication.instance()
+            if app is not None:
+                app.setWindowIcon(_app_icon)
 
         # Shared SETS-app shim — both windows reference the same cargo
         # cache and the same `_warp_core_window` pointer used by sync.

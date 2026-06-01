@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.13] — 2026-06-01
+
+### Added
+- **Native macOS launcher** — on first launch sto-warp now drops a
+  `sto-warp.app` bundle into `~/Applications/`, so the app surfaces in
+  Launchpad, Spotlight, and the Dock alongside other Mac applications.
+  Previously the app could only be started from a terminal. The bundle
+  is a thin wrapper around the pipx-installed binary; no code signing
+  or notarisation is involved, so it launches without the "damaged
+  app" Gatekeeper warning that signed-but-unnotarised downloads would
+  trigger. After a `pipx upgrade` the launcher prunes any stale
+  bundle that still points at the same install, so the user is never
+  left with duplicates in Launchpad.
+
+### Changed
+- **Rounded-corner app icon across all platforms** — the application
+  icon now has a soft squircle shape that matches the look of native
+  applications on macOS (Big Sur+), KDE Plasma, and modern GNOME.
+  The change applies consistently to the Linux `.desktop` icon, the
+  macOS `.icns` bundle icon, the Windows Start Menu shortcut `.ico`,
+  *and* the live window / taskbar / title-bar icon visible while
+  sto-warp is running. Linux and Windows users on 1.0.12 get the
+  rounded icon automatically on their next `pipx upgrade` or after
+  re-running `sto-warp install-desktop`.
+
 ## [1.0.12] — 2026-05-31
 
 ### Added
