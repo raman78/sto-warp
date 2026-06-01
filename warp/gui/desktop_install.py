@@ -1,17 +1,22 @@
-"""First-run XDG desktop entry installer (Linux only).
+"""First-run desktop / Launchpad / Start Menu integrator.
 
 Modern pip / PEP 517 build backends don't expose a post-install hook,
 so we follow the pattern used by SETS-WARP: on the first launcher run,
-drop an `~/.local/share/applications/sto-warp.desktop` entry and copy
-the app icon to `~/.local/share/icons/` so it shows up in menus,
-launchers (KRunner, GNOME Activities, Plasma kickoff, …) and KDE/GNOME
-Activities.
+register the app with the host OS so it shows up alongside other
+GUI applications.
 
-Idempotent: re-runs are no-ops once the .desktop file exists. The
-install is keyed by an 8-char hash of `sys.executable` so two parallel
-installs (e.g. pipx vs editable venv) don't overwrite each other.
+  - Linux  → write an `~/.local/share/applications/sto-warp.desktop`
+             entry + rounded-corner icon under `~/.local/share/icons/`.
+  - macOS  → delegate to `macos_app_bundle.install_macos_app_bundle`
+             which drops a `.app` into `~/Applications/`.
+  - Windows → delegate to `windows_shortcut.install_windows_shortcut`
+             which drops a `.lnk` into the Start Menu Programs folder.
 
-No-op on macOS / Windows / non-Linux platforms.
+Idempotent: re-runs are no-ops once the entry exists. The install is
+keyed by an 8-char hash of `sys.executable` so two parallel installs
+(e.g. pipx vs editable venv) don't overwrite each other.
+
+No-op on platforms other than the three above.
 """
 from __future__ import annotations
 
@@ -22,6 +27,7 @@ import sys
 from pathlib import Path
 
 from warp.debug import syslog as log
+from warp.gui.icon_round import rounded_icon
 from warp.resources import resource_path
 
 _DESKTOP_TEMPLATE = """\
@@ -103,6 +109,9 @@ def install_desktop_entry(force: bool = False) -> Path | None:
     if sys.platform == 'win32':
         from warp.gui.windows_shortcut import install_windows_shortcut
         return install_windows_shortcut(force=force)
+    if sys.platform == 'darwin':
+        from warp.gui.macos_app_bundle import install_macos_app_bundle
+        return install_macos_app_bundle(force=force)
     if sys.platform != 'linux':
         return None
 
@@ -126,18 +135,19 @@ def install_desktop_entry(force: bool = False) -> Path | None:
     if desktop_path.is_file() and not force:
         return desktop_path
 
-    # Copy the app icon next to other user icons so the entry has a stable
-    # absolute path regardless of where the wheel lives.
+    # Write a rounded-corner copy of the app icon next to other user icons
+    # so the entry has a stable absolute path regardless of where the
+    # wheel lives. The squircle mask matches the macOS / Windows variants.
     icon_path: Path | str = ''
     try:
         src = resource_path('SETS_icon_small.png')
         if src.is_file():
             icons_dir.mkdir(parents=True, exist_ok=True)
             dst = icons_dir / 'sto-warp.png'
-            shutil.copy2(src, dst)
+            rounded_icon(src, size=512).save(dst, format='PNG')
             icon_path = dst
     except Exception as e:
-        log.debug(f'Desktop installer: icon copy failed: {e}')
+        log.debug(f'Desktop installer: icon prep failed: {e}')
 
     try:
         apps_dir.mkdir(parents=True, exist_ok=True)

@@ -179,8 +179,13 @@ is upgraded. Genuinely parallel installs that target a different
 binary path (for example a separate development checkout) are left
 alone.
 
-**macOS.** No native menu entry is created on macOS yet. Launch
-from the terminal with `sto-warp`.
+**macOS.** On first launch sto-warp drops a `sto-warp.app` bundle
+into `~/Applications/` so the app shows up in Launchpad, Spotlight,
+and the Dock. The bundle is just a thin wrapper around the pipx
+shim — no code signing or notarisation involved, so it launches
+without the "damaged app" Gatekeeper warning that signed-but-
+unnotarised downloads would trigger. After a `pipx upgrade` the
+launcher prunes any stale bundle that points at the same shim.
 
 ---
 

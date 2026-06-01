@@ -84,9 +84,10 @@ def _prepare_icon() -> str:
         dst = dst_dir / 'sto-warp.ico'
         if dst.is_file() and dst.stat().st_mtime >= src.stat().st_mtime:
             return str(dst)
-        from PIL import Image
-        img = Image.open(src).convert('RGBA')
-        # Standard Windows icon sizes — Explorer / taskbar pick the right one.
+        from warp.gui.icon_round import rounded_icon
+        # Bake the squircle mask in at 256 px once; ICO encoder downsamples
+        # for the smaller sizes Explorer / taskbar pick from.
+        img = rounded_icon(src, size=256)
         sizes = [(16, 16), (24, 24), (32, 32), (48, 48), (64, 64), (128, 128), (256, 256)]
         img.save(dst, format='ICO', sizes=sizes)
         return str(dst)
