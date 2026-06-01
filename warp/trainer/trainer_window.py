@@ -1731,12 +1731,15 @@ class WarpCoreWindow(QMainWindow):
         seen_ids: set[str] = set()
         for ri in items:
             bbox = ri.get('bbox')
-            # Capture fresh detector's seat_key before any merge branch
+            # Capture fresh detector geometry before any merge branch
             # reassigns `ri` from a disk-confirmed dict. Legacy
-            # annotations don't carry seat_key (the field is newer than
-            # the JSON schema), so `ri = dict(confirmed)` would drop it
-            # and collapse per-seat grouping back to one profession row.
+            # annotations don't carry seat_key / slot_index (both are
+            # newer than the JSON schema), so `ri = dict(confirmed)`
+            # would drop them and:
+            #   - collapse per-seat grouping back to one profession row
+            #   - lose left-to-right child order (sort falls to name)
             _fresh_seat_key = (ri.get('seat_key') or '') if isinstance(ri, dict) else ''
+            _fresh_slot_index = ri.get('slot_index') if isinstance(ri, dict) else None
             if bbox:
                 aid = _Ann(bbox=bbox, slot=ri.get('slot',''), name=ri.get('name','')).ann_id
                 # Bbox-IoU fallback: when the fresh seat-keyed slot
@@ -1840,14 +1843,24 @@ class WarpCoreWindow(QMainWindow):
                             ri['ann_id'] = confirmed.get('ann_id', aid)
                     else:
                         ri = dict(confirmed)
-                # Re-attach fresh seat_key after any disk-merge branch:
-                # `ri = dict(confirmed)` returns a legacy dict with no
-                # seat_key, but `group_items_by_seat` needs it to split
-                # rows per physical seat instead of collapsing all
-                # Tac/Eng/Sci items into one profession row.
-                if _fresh_seat_key and not ri.get('seat_key'):
+                # Re-attach fresh detector fields after any disk-merge
+                # branch: `ri = dict(confirmed)` returns a legacy dict
+                # with no seat_key / slot_index, but the display layer
+                # needs both — seat_key for per-seat grouping,
+                # slot_index for left-to-right child order within a
+                # group.
+                _need_reattach = (
+                    (_fresh_seat_key and not ri.get('seat_key'))
+                    or (_fresh_slot_index is not None
+                        and ri.get('slot_index') is None)
+                )
+                if _need_reattach:
                     ri = dict(ri)
-                    ri['seat_key'] = _fresh_seat_key
+                    if _fresh_seat_key and not ri.get('seat_key'):
+                        ri['seat_key'] = _fresh_seat_key
+                    if _fresh_slot_index is not None \
+                            and ri.get('slot_index') is None:
+                        ri['slot_index'] = _fresh_slot_index
                 seen_ids.add(aid)
             merged.append(ri)
         for aid, ci in confirmed_by_id.items():
