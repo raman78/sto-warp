@@ -168,6 +168,34 @@ class _ReviewListAdapter(QTreeWidget):
             self.takeTopLevelItem(idx)
         self._slot_parents.pop(slot_raw, None)
 
+    def visual_row_order(self) -> list[int]:
+        """Walk the tree top-down and return `_flat` indices in the
+        order children appear visually. Length equals `len(self._flat)`
+        when the tree is consistent. Callers that mirror `_flat` (e.g.
+        the trainer's `_recognition_items`) use this after a visual
+        re-arrangement to bring their own list back in sync.
+        """
+        order: list[int] = []
+        flat_idx = {it: i for i, it in enumerate(self._flat)}
+        for top_i in range(self.topLevelItemCount()):
+            parent = self.topLevelItem(top_i)
+            for ch_i in range(parent.childCount()):
+                ch = parent.child(ch_i)
+                if ch in flat_idx:
+                    order.append(flat_idx[ch])
+        return order
+
+    def apply_row_order(self, order: list[int]) -> None:
+        """Reorder `_flat` using `order` (a permutation of `range(len
+        (_flat))` — typically the output of `visual_row_order`). After
+        the call, `_flat[i]` is the item visually at row i, so
+        `currentRow()` and `row(item)` return positions matching what
+        the user sees.
+        """
+        if sorted(order) != list(range(len(self._flat))):
+            return
+        self._flat = [self._flat[i] for i in order]
+
     def resort_group(self, parent: QTreeWidgetItem,
                      key_func) -> None:
         """Re-order `parent`'s children using `key_func(child) → tuple`.

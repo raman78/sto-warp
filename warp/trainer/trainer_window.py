@@ -2503,8 +2503,10 @@ class WarpCoreWindow(QMainWindow):
     def _resort_group_of(self, item):
         """Re-sort the tree-group containing `item` by spatial bbox order
         (y, then x) so a row that was just added or reparented lands in
-        L→R / T→B position within its group instead of being appended at
-        the end."""
+        L→R / T→B position within its group. Then resync `_flat` and
+        `_recognition_items` to match the new visual order so Enter-
+        advance and every other row-indexed code path walk the list in
+        the order the user actually sees."""
         parent = item.parent() if item is not None else None
         if parent is None:
             return
@@ -2519,6 +2521,36 @@ class WarpCoreWindow(QMainWindow):
             return (0, 0)
 
         rl.resort_group(parent, _key)
+        self._resync_recognition_with_visual()
+
+    def _resync_recognition_with_visual(self):
+        """Permute `_flat` (in the adapter) and `_recognition_items` (here)
+        to match the tree's current visual top-down order. Cheap (one
+        walk) and keeps every row-indexed caller — Enter-advance,
+        `_review_row_changed`, ann_widget highlight, recognition cache —
+        aligned with what the user sees."""
+        order = self._review_list.visual_row_order()
+        if len(order) != len(self._recognition_items):
+            return
+        if order == list(range(len(order))):
+            return
+        self._recognition_items = [self._recognition_items[i] for i in order]
+        self._review_list.apply_row_order(order)
+        # ann_widget paints bboxes keyed off `_recognition_items` row
+        # order (selected_row, highlighted_row), so it needs the fresh
+        # list too — otherwise canvas highlights point at the wrong bbox
+        # after the resort. Also refresh the highlight from the current
+        # row, because `currentItemChanged` does NOT fire on a pure
+        # _flat permutation (the QTreeWidgetItem object hasn't changed),
+        # leaving ann_widget's cached row index stale.
+        self._ann_widget.set_review_items(self._recognition_items)
+        cur_row = self._review_list.currentRow()
+        if 0 <= cur_row < len(self._recognition_items) \
+                and self._recognition_items[cur_row].get('bbox'):
+            self._ann_widget.set_highlighted_row(cur_row)
+        if self._current_idx >= 0:
+            fname = self._screenshots[self._current_idx].name
+            self._recognition_cache[fname] = list(self._recognition_items)
 
     def _advance_to_next_unconfirmed(self, current_row: int):
         # Auto-confirmed rows (yellow) are program decisions awaiting human
@@ -2804,12 +2836,20 @@ class WarpCoreWindow(QMainWindow):
             self._data_mgr.save()
         self._add_review_row(name, slot, conf, confirmed=_auto, cross_check_failed=_cross_check,
                              auto_confirmed=_auto_conf_flag)
-        new_row = len(self._recognition_items) - 1
         # Spatial sort within the group so the freshly-added bbox slides
         # into L→R / T→B position instead of always landing at the end.
-        _new_item = self._review_list.item(new_row)
-        if _new_item is not None:
+        # The sort also permutes `_recognition_items` so we must re-fetch
+        # the row index from the QTreeWidgetItem before selecting.
+        # NON_ICON slots are single-instance per screen — no spatial sort
+        # is possible (or needed) within a one-child group, and skipping
+        # the permutation keeps `new_row` stable for the pending OCRWorker
+        # started further down.
+        _new_item = self._review_list.item(len(self._recognition_items) - 1)
+        if _new_item is not None and slot not in NON_ICON_SLOTS:
             self._resort_group_of(_new_item)
+            new_row = self._review_list.row(_new_item)
+        else:
+            new_row = len(self._recognition_items) - 1
         self._review_list.setCurrentRow(new_row)
         self._set_review_buttons_enabled(True)
         if self._current_idx >= 0:
@@ -3175,8 +3215,13 @@ class WarpCoreWindow(QMainWindow):
                     ri['_group_label'] = slot
                     self._review_list.reparent_item(
                         litem, slot, _pretty_slot(slot))
-                    self._resort_group_of(litem)
-                
+                    # NON_ICON_SLOTS (Ship Name/Type/Tier) are single-
+                    # instance per screenshot — no within-group spatial
+                    # sort needed, and skipping the resort here avoids
+                    # invalidating the `row` index that the pending
+                    # OCRWorker still holds (worker completion looks up
+                    # `_recognition_items[row]`, which would point at a
+                    # different item after a resort permutation).
                 worker = OCRWorker(row, crop_bgr, slot, v_tiers, v_types, parent=self)
                 worker.finished.connect(self._on_ocr_finished)
                 worker.start()
@@ -3219,13 +3264,16 @@ class WarpCoreWindow(QMainWindow):
                 self._review_list.reparent_item(
                     litem, slot, _pretty_slot(slot))
                 self._resort_group_of(litem)
-            # Auto-accept if threshold met after rematch
+            # Auto-accept if threshold met after rematch. `row` is stale
+            # after the resort permuted `_recognition_items`; re-fetch
+            # from the QTreeWidgetItem so Accept targets the right row.
             if (name and conf >= 0.40
                     and getattr(self, '_chk_auto_accept', None)
                     and self._chk_auto_accept.isChecked()
                     and conf >= self._spin_auto_conf.value()
                     and slot not in NON_ICON_SLOTS):
-                self._review_list.setCurrentRow(row)
+                fresh_row = self._review_list.row(litem) if litem else row
+                self._review_list.setCurrentRow(fresh_row)
                 self._on_accept()
         except Exception as e:
             from warp.debug import log as _sl
