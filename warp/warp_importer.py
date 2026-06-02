@@ -292,7 +292,7 @@ SLOT_ORDER = {
     # build-summary card containing both gets fully captured. Downstream
     # build writer routes each slot to its proper export (space build vs
     # ground build) by slot name.
-    'TRAITS':        SPACE_TRAITS_SLOT_ORDER + GROUND_TRAITS_SLOT_ORDER,
+    'TRAITS':        GROUND_TRAITS_SLOT_ORDER + SPACE_TRAITS_SLOT_ORDER,
     'BOFFS':         BOFFS_SLOT_ORDER,
     'SPACE_BOFFS':   BOFFS_SLOT_ORDER,   # same slot structure, different write target
     'GROUND_BOFFS':  BOFFS_SLOT_ORDER,
@@ -301,7 +301,8 @@ SLOT_ORDER = {
     # layout_detector returns only the bboxes it actually finds, so unused slots
     # simply produce 0 bboxes and are silently skipped.
     'SPACE_MIXED':  (SPACE_SLOT_ORDER + BOFFS_SLOT_ORDER +
-                     SPACE_TRAITS_SLOT_ORDER + SPEC_SLOT_ORDER),
+                     GROUND_TRAITS_SLOT_ORDER + SPACE_TRAITS_SLOT_ORDER +
+                     SPEC_SLOT_ORDER),
     'GROUND_MIXED': (GROUND_SLOT_ORDER + BOFFS_SLOT_ORDER +
                      GROUND_TRAITS_SLOT_ORDER + SPEC_SLOT_ORDER),
 }
@@ -1239,9 +1240,9 @@ _SLOT_LOG_ORDER: tuple[str, ...] = (
     'Devices', 'Hangars',
     'Engineering Consoles', 'Science Consoles', 'Tactical Consoles',
     'Universal Consoles',
-    'Personal Space Traits', 'Personal Ground Traits', 'Starship Traits',
-    'Space Reputation', 'Ground Reputation',
-    'Active Space Rep', 'Active Ground Rep',
+    'Personal Ground Traits', 'Personal Space Traits', 'Starship Traits',
+    'Ground Reputation', 'Space Reputation',
+    'Active Ground Rep', 'Active Space Rep',
     'Boff Tactical', 'Boff Engineering', 'Boff Science',
     'Boff Command', 'Boff Intelligence', 'Boff Pilot',
     'Boff Miracle Worker', 'Boff Temporal',

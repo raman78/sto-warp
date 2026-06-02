@@ -1636,13 +1636,22 @@ class WarpCoreWindow(QMainWindow):
         from warp.recognition.boff_keys import order_items_for_display
         from warp.warp_importer import DISPLAY_CANONICAL_ORDER
         build_type = self._STYPE_TO_BUILD.get(stype, 'SPACE')
-        canonical = [sd['name'] for sd in _SLOT_ORDER.get(build_type, [])]
+        # Display-only override: a 'TRAITS' screen mixes ground + space
+        # traits, but `_STYPE_TO_BUILD` maps it to 'SPACE_TRAITS' for
+        # the calibration / icon-matcher paths. For the review panel we
+        # want the full mixed canonical so ground rows land with the
+        # other trait rows instead of falling through to the alphabetical
+        # fallback at the end.
+        canonical_bt = 'TRAITS' if stype == 'TRAITS' else build_type
+        canonical = [sd['name'] for sd in _SLOT_ORDER.get(canonical_bt, [])]
         flat: list = []
         _boff_diag: list[str] = []
+        _group_order: list[str] = []
         for label, group in order_items_for_display(
             items, canonical,
             fallback_canonical_slots=DISPLAY_CANONICAL_ORDER,
         ):
+            _group_order.append(f'{label}({len(group)})')
             for ri in group:
                 ri['_group_label'] = label
                 flat.append(ri)
@@ -1651,8 +1660,11 @@ class WarpCoreWindow(QMainWindow):
                 bb = first.get('bbox') if isinstance(first, dict) else None
                 sk = first.get('seat_key', '') if isinstance(first, dict) else ''
                 _boff_diag.append(f'{label!r}@bbox={bb} sk={sk!r}')
+        from warp.debug import log as _sl
+        _sl.info(f'order_for_review bt={build_type} canonical_bt={canonical_bt} '
+                 f'canonical={canonical[:8]}{"..." if len(canonical) > 8 else ""}')
+        _sl.info('order_for_review groups: ' + ' → '.join(_group_order))
         if _boff_diag:
-            from warp.debug import log as _sl
             _sl.info('order_for_review BOFF order: '
                      + ' | '.join(_boff_diag))
         return flat
@@ -2577,7 +2589,10 @@ class WarpCoreWindow(QMainWindow):
         from warp.recognition.boff_keys import order_items_for_display
         from warp.warp_importer import DISPLAY_CANONICAL_ORDER
         build_type = self._STYPE_TO_BUILD.get(stype, 'SPACE')
-        canonical = [sd['name'] for sd in _SLOT_ORDER.get(build_type, [])]
+        # Match `_order_items_for_review`: a TRAITS screen uses the
+        # mixed ground+space canonical for display ordering.
+        canonical_bt = 'TRAITS' if stype == 'TRAITS' else build_type
+        canonical = [sd['name'] for sd in _SLOT_ORDER.get(canonical_bt, [])]
         ordered = order_items_for_display(
             self._recognition_items, canonical,
             fallback_canonical_slots=DISPLAY_CANONICAL_ORDER,
