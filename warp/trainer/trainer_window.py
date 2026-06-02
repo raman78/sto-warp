@@ -2500,6 +2500,26 @@ class WarpCoreWindow(QMainWindow):
         self._ann_widget.set_draw_mode(False)
         self._ann_widget.set_selected_row(-1)
 
+    def _resort_group_of(self, item):
+        """Re-sort the tree-group containing `item` by spatial bbox order
+        (y, then x) so a row that was just added or reparented lands in
+        L→R / T→B position within its group instead of being appended at
+        the end."""
+        parent = item.parent() if item is not None else None
+        if parent is None:
+            return
+        rl = self._review_list
+
+        def _key(ch):
+            row = rl.row(ch)
+            if 0 <= row < len(self._recognition_items):
+                bbox = self._recognition_items[row].get('bbox')
+                if bbox and len(bbox) >= 2:
+                    return (bbox[1], bbox[0])
+            return (0, 0)
+
+        rl.resort_group(parent, _key)
+
     def _advance_to_next_unconfirmed(self, current_row: int):
         # Auto-confirmed rows (yellow) are program decisions awaiting human
         # review — treat them as still needing advance, otherwise Enter
@@ -2785,6 +2805,11 @@ class WarpCoreWindow(QMainWindow):
         self._add_review_row(name, slot, conf, confirmed=_auto, cross_check_failed=_cross_check,
                              auto_confirmed=_auto_conf_flag)
         new_row = len(self._recognition_items) - 1
+        # Spatial sort within the group so the freshly-added bbox slides
+        # into L→R / T→B position instead of always landing at the end.
+        _new_item = self._review_list.item(new_row)
+        if _new_item is not None:
+            self._resort_group_of(_new_item)
         self._review_list.setCurrentRow(new_row)
         self._set_review_buttons_enabled(True)
         if self._current_idx >= 0:
@@ -3150,6 +3175,7 @@ class WarpCoreWindow(QMainWindow):
                     ri['_group_label'] = slot
                     self._review_list.reparent_item(
                         litem, slot, _pretty_slot(slot))
+                    self._resort_group_of(litem)
                 
                 worker = OCRWorker(row, crop_bgr, slot, v_tiers, v_types, parent=self)
                 worker.finished.connect(self._on_ocr_finished)
@@ -3192,6 +3218,7 @@ class WarpCoreWindow(QMainWindow):
                 )
                 self._review_list.reparent_item(
                     litem, slot, _pretty_slot(slot))
+                self._resort_group_of(litem)
             # Auto-accept if threshold met after rematch
             if (name and conf >= 0.40
                     and getattr(self, '_chk_auto_accept', None)

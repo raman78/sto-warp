@@ -168,6 +168,24 @@ class _ReviewListAdapter(QTreeWidget):
             self.takeTopLevelItem(idx)
         self._slot_parents.pop(slot_raw, None)
 
+    def resort_group(self, parent: QTreeWidgetItem,
+                     key_func) -> None:
+        """Re-order `parent`'s children using `key_func(child) → tuple`.
+
+        Visual-only — `_flat` (and therefore `currentRow()` /
+        `_recognition_items` alignment) stays untouched. Use after
+        inserting or reparenting a row so the group keeps spatial
+        L→R / T→B order even when items arrive out of order.
+        """
+        children = [parent.child(i) for i in range(parent.childCount())]
+        ordered  = sorted(children, key=key_func)
+        if children == ordered:
+            return
+        for ch in children:
+            parent.removeChild(ch)
+        for ch in ordered:
+            parent.addChild(ch)
+
     def reparent_item(self, item: QTreeWidgetItem, slot_raw: str,
                       slot_pretty: str) -> None:
         """Move a leaf item to a different group parent (creating it if
