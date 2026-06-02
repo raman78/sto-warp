@@ -1212,11 +1212,11 @@ class WarpCoreWindow(QMainWindow):
         self._current_idx = row; path = self._screenshots[row]; stype = self._screen_types.get(path.name, 'UNKNOWN')
         # Update Done toggle button state
         is_done = path.name in self._screenshots_done
-        self._btn_done.setEnabled(True)
         self._btn_done.blockSignals(True)
         self._btn_done.setChecked(is_done)
         self._btn_done.setText('↩ Back to Edit' if is_done else '✓ Mark Done')
         self._btn_done.blockSignals(False)
+        self._refresh_mark_done_btn()
         self._ann_widget.set_locked(is_done)
         self._ann_widget.load_image(path); self._exit_manual_bbox_mode(); self._update_screen_type_ui(stype)
         from PySide6.QtCore import QTimer
@@ -1719,6 +1719,7 @@ class WarpCoreWindow(QMainWindow):
             self._refresh_slot_combo(stype)
             if n > 0:
                 self._review_list.setCurrentRow(0)
+            self._refresh_mark_done_btn()
             return
         confirmed_by_id: dict[str, dict] = {}
         if self._current_idx >= 0:
@@ -1966,6 +1967,7 @@ class WarpCoreWindow(QMainWindow):
         # For confirmed NON_ICON_SLOT items with empty name (e.g. Ship Type confirmed
         # before OCR finished), re-run OCR now so the name is filled in.
         self._ocr_empty_non_icon_items()
+        self._refresh_mark_done_btn()
 
     # ── Review list (5-column QTreeWidget) helpers ─────────────────────
     #
@@ -3813,6 +3815,7 @@ class WarpCoreWindow(QMainWindow):
             _keep = (self._recognition_items[_cur]['slot']
                      if 0 <= _cur < len(self._recognition_items) else '')
             self._refresh_slot_combo(_stype, keep_slot=_keep)
+        self._refresh_mark_done_btn()
         # Deferred focus — after all signals settle, return focus to list
         from PySide6.QtCore import QTimer
         QTimer.singleShot(0, self._review_list.setFocus)
@@ -4355,25 +4358,79 @@ class WarpCoreWindow(QMainWindow):
             return QColor('#7ec8ff')   # light blue — in progress
         return QColor(Qt.GlobalColor.white)
 
+    _MARK_DONE_TAIL_SEP = '  ·  Mark Done: '
+
+    def _refresh_mark_done_btn(self):
+        """Visually gate the Mark Done button on the current screenshot.
+
+        Disabled (greyed out) whenever any review row is not yet
+        user-confirmed — i.e. anything that is not (state=='confirmed'
+        AND auto_confirmed is False). Covers Match / Low / Unmatched /
+        Type ✕ / Conflict / Auto rows alike. When the screenshot is
+        already Done, the button stays enabled so the user can toggle
+        Back to Edit.
+
+        Also updates the review summary with how many items remain to
+        confirm before Mark Done un-greys.
+        """
+        # Strip any prior Mark Done tail before recomputing — every
+        # caller of setText writes a fresh base string, so we manage
+        # the suffix here in one place.
+        base = self._review_summary.text()
+        cut = base.find(self._MARK_DONE_TAIL_SEP)
+        if cut != -1:
+            base = base[:cut]
+        suffix = ''
+
+        if self._current_idx < 0:
+            self._btn_done.setEnabled(False)
+            self._btn_done.setToolTip('')
+            self._review_summary.setText(base)
+            return
+        path = self._screenshots[self._current_idx]
+        if path.name in self._screenshots_done:
+            self._btn_done.setEnabled(True)
+            self._btn_done.setToolTip('')
+            self._review_summary.setText(base)
+            return
+        pending = sum(
+            1 for ri in self._recognition_items
+            if not (ri.get('state') == 'confirmed'
+                    and not ri.get('auto_confirmed'))
+        )
+        if pending:
+            self._btn_done.setEnabled(False)
+            self._btn_done.setToolTip(
+                f'Mark Done blocked: {pending} item(s) still not '
+                f'confirmed — confirm them first.')
+            suffix = f'{self._MARK_DONE_TAIL_SEP}{pending} to confirm'
+        else:
+            self._btn_done.setEnabled(True)
+            self._btn_done.setToolTip('')
+            if self._recognition_items:
+                suffix = f'{self._MARK_DONE_TAIL_SEP}ready'
+        self._review_summary.setText(base + suffix)
+
     def _on_done_toggle(self, checked: bool):
         if self._current_idx < 0:
             self._btn_done.setChecked(False)
             return
         path = self._screenshots[self._current_idx]
         if checked:
-            pending_auto = [
-                a for a in self._data_mgr.get_annotations(path)
-                if a.state == AnnotationState.CONFIRMED and a.auto_confirmed
+            pending = [
+                ri for ri in self._recognition_items
+                if not (ri.get('state') == 'confirmed'
+                        and not ri.get('auto_confirmed'))
             ]
-            if pending_auto:
+            if pending:
                 self._btn_done.blockSignals(True)
                 self._btn_done.setChecked(False)
                 self._btn_done.blockSignals(False)
-                msg = (f'Mark Done blocked: {len(pending_auto)} auto-detected '
-                       f'item(s) still not confirmed — confirm them first.')
+                msg = (f'Mark Done blocked: {len(pending)} item(s) still '
+                       f'not confirmed — confirm them first.')
                 self.statusBar().showMessage(msg, 6000)
                 log.info(f'mark_done: blocked for {path.name} — '
-                         f'{len(pending_auto)} auto_confirmed item(s) unverified')
+                         f'{len(pending)} unconfirmed item(s)')
                 return
             self._screenshots_done.add(path.name)
             self._learn_layout_for(path)
@@ -4392,6 +4449,7 @@ class WarpCoreWindow(QMainWindow):
         self._update_screen_type_ui(stype)
         self._update_file_list_color(self._current_idx)
         self._update_add_bbox_btn()
+        self._refresh_mark_done_btn()
 
     def _on_send_to_warp(self):
         """Build an ImportResult from confirmed annotations and emit
