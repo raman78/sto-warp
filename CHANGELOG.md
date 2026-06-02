@@ -8,6 +8,51 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.14] — 2026-06-02
+
+### Added
+- The WARP CORE Recognition Review panel now groups BOFF abilities by
+  physical bridge officer seat instead of by profession. Each
+  expandable header names the seat (e.g. **Boff Tactical #1**, **Boff
+  Engineering+Temporal**) and lists its abilities in the same
+  left-to-right order they appear on the in-game UI. Clicking a group
+  header highlights every bbox inside that seat on the canvas preview
+  at once, so the seat layout can be verified at a glance.
+
+### Changed
+- Adding a bbox or changing a row's slot now moves the row to its
+  correct position in the review tree, matching the in-game reading
+  order, instead of leaving it at the bottom of the group it ended
+  up in.
+- Pressing **Enter** on the review list now skips past rows already
+  auto-accepted by recognition and lands on the next row still
+  waiting for confirmation, so working through a batch is faster.
+- When a build has multiple BOFF seats of the same profession at
+  different ranks (e.g. two Tactical seats — Lieutenant Commander
+  and Lieutenant), the larger detected cluster of abilities is now
+  assigned to the higher-rank seat on SETS export. The first cluster
+  by index used to always take the first seat, which often swapped
+  the two on Avenger-class builds.
+- The **↗ Send to WARP** button is now hidden when the trainer is
+  not in Fast Correction Mode. It used to sit visible but inert on
+  the standing trainer tab.
+
+### Fixed
+- BOFF review groups now sort in proper top-to-bottom,
+  left-to-right reading order even on screenshots where equipment
+  row pitch is close to the gap between BOFF seat rows. On affected
+  builds the middle-row left seat could previously appear before
+  the top-row left seat.
+- Starship Traits are no longer miscounted when the visible top row
+  of the trait panel has only 4 active icons instead of the
+  expected 5 — the layout merge no longer drops or duplicates icons
+  from the row underneath.
+- Old confirmed annotations saved before per-seat grouping shipped
+  now backfill their seat assignment automatically on the next
+  Auto-Detect of the matching screenshot, so the review tree
+  immediately reflects per-seat grouping without needing a manual
+  re-confirm.
+
 ## [1.0.13] — 2026-06-01
 
 ### Added
