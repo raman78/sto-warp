@@ -311,9 +311,17 @@ def _cluster_resweep_groups(rows, icon_h):
 
 
 def _merge_starship_overflow(groups, icon_h, gap_lo=0.5, gap_hi=1.5):
-    """Detect [5] + [≤2 cols⊆{0,1}] pairs separated by the ship-name divider
-    gap ≈ 0.6-1.3×icon_h, merge them. Phase-2 finding: ship-name divider is
-    a unique structural signal for Starship Traits."""
+    """Detect [4|5] + [≤2 cols⊆{0,1}] pairs separated by the ship-name
+    divider gap ≈ 0.6-1.3×icon_h, merge them. Phase-2 finding: ship-name
+    divider is a unique structural signal for Starship Traits.
+
+    Top-row size 4 is accepted because the right-most slot can be locked
+    (inactive) — the CC detector then sees only 4 connected components
+    even though the layout grid is 5 wide. False positives from
+    Personal Space Traits' trailing 4+1 row stay blocked by the gap
+    check (ship-name divider is materially taller than intra-section
+    row spacing).
+    """
     if len(groups) < 2:
         return list(groups)
     merged = []
@@ -324,7 +332,7 @@ def _merge_starship_overflow(groups, icon_h, gap_lo=0.5, gap_hi=1.5):
             continue
         if i + 1 < len(groups):
             ng = groups[i + 1]
-            if (len(g) == 1 and len(g[0]) == 5 and len(ng) == 1):
+            if (len(g) == 1 and len(g[0]) in (4, 5) and len(ng) == 1):
                 ncols = sorted(ci for ci, _ in ng[0])
                 if len(ncols) <= 2 and all(c in (0, 1) for c in ncols):
                     g_bot = max(b[1] + b[3] for _, b in g[0])
@@ -486,7 +494,7 @@ def detect_traits(img, icon_matcher, app_cache, build_type: str | None = None):
         classified: list[tuple[str | None, float, list]] = []
         for g in merged:
             is_starship_struct = (
-                len(g) == 2 and len(g[0]) == 5
+                len(g) == 2 and len(g[0]) in (4, 5)
                 and 1 <= len(g[1]) <= 2
                 and all(ci in (0, 1) for ci, _ in g[1])
             )
