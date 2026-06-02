@@ -848,6 +848,12 @@ class WarpCoreWindow(QMainWindow):
                 'ship_name':   '',
                 'cross_check_failed': False,
                 'auto_confirmed':     False,
+                # Carry layout metadata so the group view in Fast Mode
+                # orders slots L→R / by seat, matching what WARP results
+                # showed. Without these the trainer falls back to insertion
+                # order, which collapses group structure.
+                'seat_key':    getattr(it, 'seat_key', '') or '',
+                'slot_index':  int(getattr(it, 'slot_index', -1) if getattr(it, 'slot_index', None) is not None else -1),
             })
         return out
 

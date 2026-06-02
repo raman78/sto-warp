@@ -1889,6 +1889,13 @@ class WarpImporter:
                 for i, c in enumerate(conf_boxes):
                     if not used[i]:
                         merged.append(c)
+                # Sort by spatial position so slot_index becomes L→R / T→B.
+                # Without this, detected bboxes come first and unmatched
+                # confirmed are appended at the end — producing non-spatial
+                # slot_index (e.g. Science Consoles with disk-recovered
+                # positions getting idx 2,3,4 while detector-only positions
+                # get 0,1).
+                merged.sort(key=lambda b: (b[0], b[1]))
                 layout[slot] = merged
 
         # If ShipDB gave generic fallback (ship_name empty), refine profile
