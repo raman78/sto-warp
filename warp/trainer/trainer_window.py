@@ -2501,8 +2501,14 @@ class WarpCoreWindow(QMainWindow):
         self._ann_widget.set_selected_row(-1)
 
     def _advance_to_next_unconfirmed(self, current_row: int):
+        # Auto-confirmed rows (yellow) are program decisions awaiting human
+        # review — treat them as still needing advance, otherwise Enter
+        # strands the user on screens where every row was auto-accepted
+        # (typical for BOFF, where most abilities clear the conf threshold).
         for i in range(current_row + 1, len(self._recognition_items)):
-            if self._recognition_items[i]['state'] in ('pending', 'community_conflict'):
+            ri = self._recognition_items[i]
+            if (ri['state'] in ('pending', 'community_conflict')
+                    or ri.get('auto_confirmed')):
                 self._review_list.setCurrentRow(i)
                 return
 
