@@ -422,6 +422,7 @@ class WarpCoreWindow(QMainWindow):
             f'background-color: {ACCENT}; color: #1a1a1a; }}'
         )
         self._review_list.currentRowChanged.connect(self._on_review_row_changed)
+        self._review_list.parentRowSelected.connect(self._on_review_parent_selected)
         self._review_list.installEventFilter(self)
         # ann_widget event filter set after creation in _make_center_panel.
         # QTreeWidget.itemClicked passes (item, col); the old handler only
@@ -1698,15 +1699,25 @@ class WarpCoreWindow(QMainWindow):
                 if ann.state == AnnotationState.CONFIRMED:
                     log.debug(f'populate: confirmed from disk slot={ann.slot!r} '
                               f'bbox={ann.bbox} name={ann.name!r} ann_id={ann.ann_id}')
-                    confirmed_by_id[ann.ann_id] = {
-                    'name': ann.name, 'slot': ann.slot, 'bbox': ann.bbox,
-                    'state': 'confirmed',
-                    'auto_confirmed': ann.auto_confirmed,
-                    'community_rejected': ann.community_rejected,
-                    'conf': ann.ml_conf,          # real ML confidence, 0.0 if unknown
-                    'orig_name': ann.ml_name or ann.name,  # what ML originally saw
-                    'thumb': None, 'crop_bgr': None, 'ship_name': '', 'ann_id': ann.ann_id,
-                }
+                    _entry: dict = {
+                        'name': ann.name, 'slot': ann.slot, 'bbox': ann.bbox,
+                        'state': 'confirmed',
+                        'auto_confirmed': ann.auto_confirmed,
+                        'community_rejected': ann.community_rejected,
+                        'conf': ann.ml_conf,          # real ML confidence, 0.0 if unknown
+                        'orig_name': ann.ml_name or ann.name,  # what ML originally saw
+                        'thumb': None, 'crop_bgr': None, 'ship_name': '', 'ann_id': ann.ann_id,
+                    }
+                    # Layout fields are optional on disk (legacy entries
+                    # may lack them). Only carry forward when present so
+                    # the existing `if ri.get('seat_key')` checks down
+                    # the merge path keep their "missing → re-derive"
+                    # semantics for old data.
+                    if ann.seat_key:
+                        _entry['seat_key'] = ann.seat_key
+                    if ann.slot_index >= 0:
+                        _entry['slot_index'] = ann.slot_index
+                    confirmed_by_id[ann.ann_id] = _entry
         from warp.trainer.training_data import Annotation as _Ann
         # Build a parallel index of disk-confirmed entries keyed by bbox
         # so we can recover from slot-format drift: an annotation saved
@@ -1734,6 +1745,11 @@ class WarpCoreWindow(QMainWindow):
             return best_aid
         merged: list[dict] = []
         seen_ids: set[str] = set()
+        # Track disk-confirmed entries that gained seat_key / slot_index
+        # via fresh Auto-Detect — flushed once after the loop so the
+        # next restart can render the per-seat layout straight from
+        # annotations.json without forcing the user to re-detect.
+        _layout_backfilled = False
         for ri in items:
             bbox = ri.get('bbox')
             # Capture fresh detector geometry before any merge branch
@@ -1866,8 +1882,34 @@ class WarpCoreWindow(QMainWindow):
                     if _fresh_slot_index is not None \
                             and ri.get('slot_index') is None:
                         ri['slot_index'] = _fresh_slot_index
+                    # Persist the layout fields onto the matching disk
+                    # annotation so a future cold load skips the
+                    # re-attach path entirely. Only fires when the merge
+                    # actually consumed a confirmed entry (state would
+                    # have flipped from pending), so we don't write
+                    # seat_key onto unrelated fresh items.
+                    disk_aid = ri.get('ann_id') or aid
+                    if (ri.get('state') == 'confirmed'
+                            and disk_aid in {*confirmed_by_id.keys()}
+                            and self._current_idx >= 0):
+                        if self._data_mgr.update_layout_fields(
+                            self._screenshots[self._current_idx],
+                            disk_aid,
+                            seat_key=ri.get('seat_key', '') or '',
+                            slot_index=ri.get('slot_index')
+                                if isinstance(ri.get('slot_index'), int)
+                                else -1,
+                        ):
+                            _layout_backfilled = True
                 seen_ids.add(aid)
             merged.append(ri)
+        if _layout_backfilled:
+            try:
+                self._data_mgr.save()
+                log.info('populate: persisted backfilled seat_key/slot_index '
+                         'to annotations.json')
+            except Exception as _e:
+                log.warning(f'populate: layout-field save failed: {_e}')
         for aid, ci in confirmed_by_id.items():
             if aid not in seen_ids:
                 merged.append(ci)
@@ -2095,6 +2137,30 @@ class WarpCoreWindow(QMainWindow):
             self._review_list.setCurrentRow(-1)
             self._ann_widget.clear_highlight()
         self._selection_just_changed = False
+
+    def _on_review_parent_selected(self, parent):
+        """Group-header click — highlight every child bbox at once.
+
+        Mirrors WARP Results' behaviour: selecting a slot/seat header in
+        the tree paints all its rows on the canvas so the user can see
+        the whole group's geometry at a glance. `parent=None` clears the
+        group highlight; emitted by the adapter when selection moves
+        back to a leaf or empties.
+        """
+        aw = getattr(self, '_ann_widget', None)
+        if aw is None:
+            return
+        if parent is None:
+            aw.set_highlighted_rows(())
+            return
+        rows = self._review_list.child_rows_of(parent)
+        aw.set_highlighted_rows(rows)
+        # `_on_review_item_clicked` toggles selection off when the
+        # subsequent itemClicked sees no fresh selection change — the
+        # leaf handler sets this flag for that purpose. Parent clicks
+        # need the same protection, otherwise the highlight blinks on
+        # and off in a single click.
+        self._selection_just_changed = True
 
     def _on_review_row_changed(self, row: int):
         if row == -1:

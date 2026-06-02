@@ -49,6 +49,10 @@ class _ReviewListAdapter(QTreeWidget):
     """
 
     currentRowChanged = Signal(int)
+    # Emitted when a parent (group header) row is selected, or None
+    # when selection returns to a leaf / empty. Lets callers light up
+    # every child bbox at once — mirrors WARP Results' group-click UX.
+    parentRowSelected = Signal(object)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -92,10 +96,35 @@ class _ReviewListAdapter(QTreeWidget):
     # ── Internals ───────────────────────────────────────────────────
 
     def _on_current_item_changed(self, current, _previous):
-        if current is None or current not in self._flat:
+        if current is None:
+            self.parentRowSelected.emit(None)
             self.currentRowChanged.emit(-1)
             return
-        self.currentRowChanged.emit(self._flat.index(current))
+        if current in self._flat:
+            # Leaf selected — drop any prior group highlight first, then
+            # emit the single-row signal so handlers run in the right
+            # order (clear multi → set single).
+            self.parentRowSelected.emit(None)
+            self.currentRowChanged.emit(self._flat.index(current))
+            return
+        # Parent (group header) selected — clear any single-row state
+        # first, then emit the group signal.
+        self.currentRowChanged.emit(-1)
+        self.parentRowSelected.emit(current)
+
+    def child_rows_of(self, parent) -> list[int]:
+        """Return flat-list indices for every leaf under `parent`.
+
+        Used by callers reacting to `parentRowSelected` so they can
+        translate a group header back into the recognition-items rows
+        the parent groups.
+        """
+        rows: list[int] = []
+        for i in range(parent.childCount()):
+            ch = parent.child(i)
+            if ch in self._flat:
+                rows.append(self._flat.index(ch))
+        return rows
 
     def _refresh_bold_selected(self):
         sel = set(self.selectedItems())
@@ -116,8 +145,9 @@ class _ReviewListAdapter(QTreeWidget):
         p = QTreeWidgetItem(self)
         p.setText(0, slot_pretty)
         p.setData(0, Qt.ItemDataRole.UserRole, slot_raw)
-        # Parents are not user-selectable — they're headers, not items.
-        p.setFlags(p.flags() & ~Qt.ItemFlag.ItemIsSelectable)
+        # Parents are selectable — clicking a group header highlights
+        # every child bbox at once (see `parentRowSelected`). Selection
+        # styling falls through to the tree's stylesheet.
         f = p.font(0)
         f.setBold(True)
         # Tint group-header rows with the panel-background colour so they

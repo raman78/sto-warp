@@ -87,6 +87,13 @@ class Annotation:
     # irrelevant because there's no conflict). Empty = no conflict ever
     # resolved here.
     community_rejected: str = ""
+    # Layout metadata — persisted so the per-seat grouping survives a
+    # restart without forcing the user to re-run Auto-Detect. seat_key
+    # uses the same format `_remap_boff_seat_slots` produces (e.g.
+    # 'Boff Seat L[T]_483'); slot_index is the in-row left→right ordinal
+    # for sort-stable display. Empty / -1 = unknown (legacy entry).
+    seat_key:   str = ""
+    slot_index: int = -1
 
     def __post_init__(self):
         if not self.ann_id:
@@ -790,4 +797,36 @@ class TrainingDataManager:
             ml_name=d.get("ml_name", ""),
             auto_confirmed=bool(d.get("auto_confirmed", False)),
             community_rejected=d.get("community_rejected", ""),
+            seat_key=d.get("seat_key", ""),
+            slot_index=int(d.get("slot_index", -1)),
         )
+
+    def update_layout_fields(
+        self, image_path: Path, ann_id: str,
+        seat_key: str = "", slot_index: int = -1,
+    ) -> bool:
+        """Backfill `seat_key` / `slot_index` on an existing annotation.
+
+        Used after Auto-Detect re-derives the seat-keyed layout for a
+        legacy entry that was saved before these fields existed. Updates
+        in place — no ann_id rehash, no crop re-export. Returns True if
+        anything actually changed (caller decides when to flush via
+        `save()`).
+        """
+        if not ann_id:
+            return False
+        key = image_path.name
+        for d in self._annotations.get(key, []):
+            if d.get("ann_id") != ann_id:
+                continue
+            changed = False
+            if seat_key and d.get("seat_key", "") != seat_key:
+                d["seat_key"] = seat_key
+                changed = True
+            if slot_index >= 0 and int(d.get("slot_index", -1)) != int(slot_index):
+                d["slot_index"] = int(slot_index)
+                changed = True
+            if changed:
+                self._dirty = True
+            return changed
+        return False

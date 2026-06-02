@@ -87,6 +87,9 @@ class AnnotationWidget(QWidget):
         self._review_items: list[dict] = []
         self._selected_row: int = -1      # row for full edit mode (with handles)
         self._highlighted_row: int = -1   # row for simple highlight (red dotted box)
+        # Multi-row highlight — populated when the user clicks a group
+        # header in the review tree (mirrors WARP Results' group click).
+        self._highlighted_rows: set[int] = set()
         # Hover tooltip state
         self._hover_row:   int   = -1
         self._hover_timer: object = None
@@ -120,6 +123,7 @@ class AnnotationWidget(QWidget):
         self._pending_bbox  = None
         self._drawing       = False
         self._highlighted_row = -1
+        self._highlighted_rows = set()
         self._selected_row = -1
         self._zoom = 1.0
         self._zoom_ox = 0.0
@@ -204,6 +208,11 @@ class AnnotationWidget(QWidget):
     def clear_highlight(self):
         self._highlighted_row = -1; self.update()
 
+    def set_highlighted_rows(self, rows):
+        """Replace the group-highlight set; pass an empty iterable to clear."""
+        self._highlighted_rows = set(rows or ())
+        self.update()
+
     def clear_pending(self):
         self._pending_bbox = None; self._drawing = False; self._draw_start = None; self._draw_current = None; self.update()
 
@@ -262,15 +271,25 @@ class AnnotationWidget(QWidget):
         # Z-ORDER DRAWING:
         # 1. Background (unselected) items
         for idx, ri in enumerate(self._review_items):
-            if idx == self._selected_row or idx == self._highlighted_row: continue
+            if (idx == self._selected_row
+                or idx == self._highlighted_row
+                or idx in self._highlighted_rows):
+                continue
             self._draw_review_item(painter, ri.get('bbox'), ri.get('state'), ri.get('name',''), ri.get('slot',''), False, False, ri.get('auto_confirmed', False))
 
-        # 2. Highlighted item (Red Dashed)
+        # 2. Group-highlighted items (parent row clicked in review tree)
+        for idx in self._highlighted_rows:
+            if not (0 <= idx < len(self._review_items)): continue
+            if idx == self._selected_row or idx == self._highlighted_row: continue
+            ri = self._review_items[idx]
+            self._draw_review_item(painter, ri.get('bbox'), ri.get('state'), ri.get('name',''), ri.get('slot',''), False, True, ri.get('auto_confirmed', False))
+
+        # 3. Highlighted item (single-row hover/selection)
         if self._highlighted_row != -1 and self._highlighted_row < len(self._review_items) and self._highlighted_row != self._selected_row:
             ri = self._review_items[self._highlighted_row]
             self._draw_review_item(painter, ri.get('bbox'), ri.get('state'), ri.get('name',''), ri.get('slot',''), False, True, ri.get('auto_confirmed', False))
 
-        # 3. Selected item (Full Edit with handles)
+        # 4. Selected item (Full Edit with handles)
         if self._selected_row != -1 and self._selected_row < len(self._review_items):
             ri = self._review_items[self._selected_row]
             self._draw_review_item(painter, ri.get('bbox'), ri.get('state'), ri.get('name',''), ri.get('slot',''), True, False, ri.get('auto_confirmed', False))
