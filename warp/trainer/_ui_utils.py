@@ -168,6 +168,36 @@ class _ReviewListAdapter(QTreeWidget):
             self.takeTopLevelItem(idx)
         self._slot_parents.pop(slot_raw, None)
 
+    def reparent_item(self, item: QTreeWidgetItem, slot_raw: str,
+                      slot_pretty: str) -> None:
+        """Move a leaf item to a different group parent (creating it if
+        missing). Drops the old parent if it ends up empty. No-op when
+        the item already lives under the requested group.
+
+        Called when the user changes a row's slot — without this the
+        tree keeps the row under the previous group, so e.g. a wrongly-
+        suggested Space-Reputation bbox reassigned to Starship Traits
+        would visually remain at the bottom under Space Reputation.
+        """
+        if item not in self._flat:
+            return
+        new_parent = self._get_or_create_parent(slot_raw, slot_pretty)
+        old_parent = item.parent()
+        if old_parent is new_parent:
+            return
+        if old_parent is not None:
+            old_parent.removeChild(item)
+        # Children leave the Slot column blank — the parent owns it.
+        item.setText(0, '')
+        new_parent.addChild(item)
+        new_parent.setExpanded(True)
+        if old_parent is not None:
+            if old_parent.childCount() == 0:
+                self._drop_parent_if_empty(old_parent)
+            else:
+                self.refresh_parent_of(old_parent.child(0))
+        self.refresh_parent_of(item)
+
     def refresh_parent_of(self, item: QTreeWidgetItem) -> None:
         """Public helper — call after mutating a child so the parent's
         Idx column stays in sync. Idempotent.

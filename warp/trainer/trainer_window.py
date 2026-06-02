@@ -3145,8 +3145,11 @@ class WarpCoreWindow(QMainWindow):
                     fg = QBrush(QColor('#aaaaaa'))
                     for c in range(5):
                         litem.setForeground(c, fg)
-                    if litem.parent() is not None:
-                        self._review_list.refresh_parent_of(litem)
+                    # Combo-driven slot change resets any prior seat-aware
+                    # grouping — the new slot is the new group key.
+                    ri['_group_label'] = slot
+                    self._review_list.reparent_item(
+                        litem, slot, _pretty_slot(slot))
                 
                 worker = OCRWorker(row, crop_bgr, slot, v_tiers, v_types, parent=self)
                 worker.finished.connect(self._on_ocr_finished)
@@ -3173,6 +3176,9 @@ class WarpCoreWindow(QMainWindow):
 
             ri = self._recognition_items[row]
             ri.update({'name': name, 'conf': conf, 'thumb': thumb, 'slot': slot, 'cross_check_failed': _cross_check})
+            # Combo-driven slot change resets any prior seat-aware grouping —
+            # the new slot is the new group key so the tree can re-parent.
+            ri['_group_label'] = slot
             self._name_edit.blockSignals(True)
             self._name_edit.setText(name)
             self._name_edit.blockSignals(False)
@@ -3182,8 +3188,10 @@ class WarpCoreWindow(QMainWindow):
                     litem, name, slot, conf,
                     confirmed=False, cross_check_failed=_cross_check,
                     auto_confirmed=False, conflict_disk_name='',
-                    group_label=ri.get('_group_label'),
+                    group_label=slot,
                 )
+                self._review_list.reparent_item(
+                    litem, slot, _pretty_slot(slot))
             # Auto-accept if threshold met after rematch
             if (name and conf >= 0.40
                     and getattr(self, '_chk_auto_accept', None)
