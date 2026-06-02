@@ -196,6 +196,42 @@ class _ReviewListAdapter(QTreeWidget):
             return
         self._flat = [self._flat[i] for i in order]
 
+    def reorder_parents(self, slot_order: list[str]) -> None:
+        """Re-arrange top-level parents to match `slot_order` (a list of
+        `slot_raw` keys, e.g. group labels emitted by
+        `order_items_for_display`). Parents whose key is missing from
+        `slot_order` keep their relative order and land at the end.
+
+        Used after a manual bbox add or slot change so a freshly created
+        group (e.g. just-drawn Impulse Engine) lands in canonical
+        SLOT_ORDER position instead of at the bottom of the tree.
+        """
+        current = [self.topLevelItem(i)
+                   for i in range(self.topLevelItemCount())]
+        desired: list[QTreeWidgetItem] = []
+        seen: set[QTreeWidgetItem] = set()
+        for sr in slot_order:
+            p = self._slot_parents.get(sr)
+            if p is not None and p not in seen:
+                desired.append(p)
+                seen.add(p)
+        for p in current:
+            if p not in seen:
+                desired.append(p)
+                seen.add(p)
+        if current == desired:
+            return
+        # Detach + re-attach in desired order. takeTopLevelItem invalidates
+        # indices on each call, so collect parents first then take by
+        # current QTreeWidgetItem (re-resolving its index each iteration).
+        for p in current:
+            idx = self.indexOfTopLevelItem(p)
+            if idx >= 0:
+                self.takeTopLevelItem(idx)
+        for p in desired:
+            self.addTopLevelItem(p)
+            p.setExpanded(True)
+
     def resort_group(self, parent: QTreeWidgetItem,
                      key_func) -> None:
         """Re-order `parent`'s children using `key_func(child) → tuple`.

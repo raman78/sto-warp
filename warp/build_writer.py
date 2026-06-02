@@ -452,53 +452,83 @@ def _match_clusters_to_seats(
         prof_set = set(content_profs)
         if base_prof is None:
             base_prof = Counter(content_profs).most_common(1)[0][0] if content_profs else 'Unknown'
-        cluster_info.append([c, base_prof, prof_set, spec_prof])
+        active = sum(1 for ri in c if ri.name and ri.name not in VIRTUAL_ITEM_NAMES)
+        cluster_info.append([c, base_prof, prof_set, spec_prof, active])
 
-    unmatched = list(range(len(cluster_info)))
     assigned: dict[int, int] = {}
+    used_ci: set[int] = set()
 
-    def _find(primary_prof: str, target_spec: str | None) -> int | None:
-        for ci in unmatched:
-            c_primary, c_profs, c_spec = cluster_info[ci][1], cluster_info[ci][2], cluster_info[ci][3]
-            if c_primary != primary_prof:
+    def _compatible(primary_prof: str, target_spec: str | None, ci: int) -> bool:
+        c_primary, c_profs, c_spec = cluster_info[ci][1], cluster_info[ci][2], cluster_info[ci][3]
+        if c_primary != primary_prof:
+            return False
+        if target_spec:
+            if c_spec:
+                if c_spec != target_spec:
+                    return False
+            elif target_spec not in c_profs:
+                return False
+        return True
+
+    def _greedy_assign(candidates: list[tuple[int, int, int, int]]) -> None:
+        # candidates: (cost, tiebreak_vis_i, vis_i, ci) — sort by cost then
+        # by seat order so behaviour is deterministic when costs tie.
+        candidates.sort()
+        for _cost, _tb, vis_i, ci in candidates:
+            if vis_i in assigned or ci in used_ci:
                 continue
-            if target_spec:
-                if c_spec:
-                    if c_spec != target_spec:
-                        continue
-                elif target_spec not in c_profs:
-                    continue
-            return ci
-        return None
+            assigned[vis_i] = ci
+            used_ci.add(ci)
 
-    # Pass 1+2 — explicit-profession seats.
-    for vis_i, (_rank, prof, spec) in enumerate(seats_visual):
-        if prof == 'Universal' or vis_i in assigned:
+    # Pass 1 — explicit-profession seats. For each (seat, cluster) compatible
+    # pair compute |seat_rank − active_count|; greedy-pick lowest cost. This
+    # makes seat-size the primary discriminator when a profession has
+    # multiple seats and multiple clusters (e.g. two Tac seats of different
+    # ranks): the bigger cluster lands on the bigger seat instead of the
+    # first-by-index, which is what was wedging Avenger-class builds.
+    candidates: list[tuple[int, int, int, int]] = []
+    for vis_i, (rank, prof, spec) in enumerate(seats_visual):
+        if prof == 'Universal':
             continue
         spec_prof = _SPEC_TO_PROF.get(spec) if spec else None
-        ci = _find(prof, spec_prof)
-        if ci is None and spec_prof:
-            ci = _find(spec_prof, None)
-        if ci is not None:
-            assigned[vis_i] = ci
-            unmatched.remove(ci)
+        for ci in range(len(cluster_info)):
+            active = cluster_info[ci][4]
+            cost = abs(rank - active)
+            if _compatible(prof, spec_prof, ci):
+                candidates.append((cost, vis_i, vis_i, ci))
+            elif spec_prof and _compatible(spec_prof, None, ci):
+                # Spec-prof fallback (e.g. Eng-MW seat ↔ cluster whose
+                # primary resolved to 'Miracle Worker'). Penalise so the
+                # direct base-prof match wins when both exist.
+                candidates.append((cost + 100, vis_i, vis_i, ci))
+    _greedy_assign(candidates)
 
-    # Pass 3 — Universal seats with spec.
-    for vis_i, (_rank, prof, spec) in enumerate(seats_visual):
+    # Pass 2 — Universal seats with a spec stripe: match by spec primary.
+    candidates = []
+    for vis_i, (rank, prof, spec) in enumerate(seats_visual):
         if prof != 'Universal' or not spec or vis_i in assigned:
             continue
         spec_prof = _SPEC_TO_PROF.get(spec)
-        ci = _find(spec_prof, None) if spec_prof else None
-        if ci is not None:
-            assigned[vis_i] = ci
-            unmatched.remove(ci)
+        if not spec_prof:
+            continue
+        for ci in range(len(cluster_info)):
+            if ci in used_ci:
+                continue
+            if _compatible(spec_prof, None, ci):
+                candidates.append((abs(rank - cluster_info[ci][4]), vis_i, vis_i, ci))
+    _greedy_assign(candidates)
 
-    # Pass 4 — Universal seats without spec take whatever's left.
-    for vis_i, (_rank, prof, spec) in enumerate(seats_visual):
+    # Pass 3 — Universal seats without spec take whatever's left, again
+    # preferring the best size match.
+    candidates = []
+    for vis_i, (rank, prof, spec) in enumerate(seats_visual):
         if prof != 'Universal' or spec or vis_i in assigned:
             continue
-        if unmatched:
-            assigned[vis_i] = unmatched.pop(0)
+        for ci in range(len(cluster_info)):
+            if ci in used_ci:
+                continue
+            candidates.append((abs(rank - cluster_info[ci][4]), vis_i, vis_i, ci))
+    _greedy_assign(candidates)
 
     return assigned, cluster_info
 

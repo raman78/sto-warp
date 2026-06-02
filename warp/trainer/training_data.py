@@ -173,6 +173,8 @@ class TrainingDataManager:
         ml_name: str = "",
         auto_confirmed: bool = False,
         community_rejected: str = "",
+        seat_key: str = "",
+        slot_index: int = -1,
     ) -> Annotation:
         """Add or update annotation, treating the same bbox as the same annotation.
 
@@ -187,7 +189,8 @@ class TrainingDataManager:
         ann = Annotation(bbox=bbox, slot=slot, name=name, state=state,
                          ml_conf=ml_conf, ml_name=ml_name,
                          auto_confirmed=auto_confirmed,
-                         community_rejected=community_rejected)
+                         community_rejected=community_rejected,
+                         seat_key=seat_key, slot_index=slot_index)
         key = image_path.name
         if key not in self._annotations:
             self._annotations[key] = []

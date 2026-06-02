@@ -247,7 +247,43 @@ def group_items_by_seat(items):
                 ys.append(bbox[1])
         return min(ys) if ys else 1_000_000_000
 
-    ordered_keys = sorted(raw.keys(), key=lambda k: _top_y(raw[k]))
+    def _top_x(item_list):
+        xs = []
+        for it in item_list:
+            bbox = _field(it, 'bbox', None)
+            if bbox and len(bbox) >= 1:
+                xs.append(bbox[0])
+        return min(xs) if xs else 1_000_000_000
+
+    # Row-aware ordering: bucket seats whose top_y is within ROW_TOL into
+    # the same physical row, then sort by X within the row. Pure-Y sort
+    # broke reading order when two seats in the same row had near-identical
+    # but non-equal Y values — tie-break fell to insertion order.
+    # Bucketing applies ONLY to seat-keyed groups: the sequential
+    # `y - prev_y > ROW_TOL` chain merges adjacent values, and equipment
+    # rows (~51 px pitch) drift one BOFF seat row into the next when all
+    # Y values share the bucketing pass. Non-seat groups sort by raw
+    # top_y (their final position is reset by `order_items_for_display`
+    # anyway — only BOFF seat order in the output is load-bearing here).
+    ROW_TOL = 50
+    seat_keys = [k for k in raw.keys() if k[0] == 'seat']
+    unique_ys = sorted({_top_y(raw[k]) for k in seat_keys})
+    row_of_y: dict[int, int] = {}
+    cur_row = 0
+    prev_y: int | None = None
+    for y in unique_ys:
+        if prev_y is not None and y - prev_y > ROW_TOL:
+            cur_row += 1
+        row_of_y[y] = cur_row
+        prev_y = y
+
+    def _sort_key(k):
+        ty = _top_y(raw[k])
+        if k[0] == 'seat':
+            return (0, row_of_y[ty], _top_x(raw[k]))
+        return (0, ty, _top_x(raw[k]))
+
+    ordered_keys = sorted(raw.keys(), key=_sort_key)
 
     base_labels: list[tuple[str, list]] = []
     for key in ordered_keys:

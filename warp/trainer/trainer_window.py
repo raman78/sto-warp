@@ -1638,6 +1638,7 @@ class WarpCoreWindow(QMainWindow):
         build_type = self._STYPE_TO_BUILD.get(stype, 'SPACE')
         canonical = [sd['name'] for sd in _SLOT_ORDER.get(build_type, [])]
         flat: list = []
+        _boff_diag: list[str] = []
         for label, group in order_items_for_display(
             items, canonical,
             fallback_canonical_slots=DISPLAY_CANONICAL_ORDER,
@@ -1645,6 +1646,15 @@ class WarpCoreWindow(QMainWindow):
             for ri in group:
                 ri['_group_label'] = label
                 flat.append(ri)
+            if label.startswith('Boff'):
+                first = group[0] if group else {}
+                bb = first.get('bbox') if isinstance(first, dict) else None
+                sk = first.get('seat_key', '') if isinstance(first, dict) else ''
+                _boff_diag.append(f'{label!r}@bbox={bb} sk={sk!r}')
+        if _boff_diag:
+            from warp.debug import log as _sl
+            _sl.info('order_for_review BOFF order: '
+                     + ' | '.join(_boff_diag))
         return flat
 
     def _populate_review_panel(self, items: list, stype: str):
@@ -2502,25 +2512,78 @@ class WarpCoreWindow(QMainWindow):
 
     def _resort_group_of(self, item):
         """Re-sort the tree-group containing `item` by spatial bbox order
-        (y, then x) so a row that was just added or reparented lands in
-        L→R / T→B position within its group. Then resync `_flat` and
-        `_recognition_items` to match the new visual order so Enter-
-        advance and every other row-indexed code path walk the list in
-        the order the user actually sees."""
+        (row-bucketed y, then x) so a row that was just added or
+        reparented lands in L→R / T→B position within its group. Then
+        resync `_flat` and `_recognition_items` to match the new visual
+        order so Enter-advance and every other row-indexed code path
+        walk the list in the order the user actually sees.
+
+        Raw (y, x) sort is too brittle: same-row bboxes that differ by
+        1–2 px in y (detector jitter or manual-draw rounding) would
+        sort by y instead of x and produce e.g. T-Lock@y=377 before
+        Kobayashi@y=379. Bucketing y by `ROW_TOL` collapses jitter so
+        items in the same physical row sort purely by x.
+        """
         parent = item.parent() if item is not None else None
         if parent is None:
             return
         rl = self._review_list
 
-        def _key(ch):
+        def _bbox_of(ch):
             row = rl.row(ch)
             if 0 <= row < len(self._recognition_items):
                 bbox = self._recognition_items[row].get('bbox')
                 if bbox and len(bbox) >= 2:
-                    return (bbox[1], bbox[0])
-            return (0, 0)
+                    return bbox
+            return None
+
+        # Cluster y values into row buckets — within ROW_TOL px counts
+        # as the same row. Mirrors group_items_by_seat's parent-level
+        # bucketing so within-group ordering matches.
+        ROW_TOL = 30
+        ys = sorted({_bbox_of(parent.child(i))[1]
+                     for i in range(parent.childCount())
+                     if _bbox_of(parent.child(i)) is not None})
+        row_of_y: dict[int, int] = {}
+        cur_row = 0
+        prev_y: int | None = None
+        for y in ys:
+            if prev_y is not None and y - prev_y > ROW_TOL:
+                cur_row += 1
+            row_of_y[y] = cur_row
+            prev_y = y
+
+        def _key(ch):
+            bbox = _bbox_of(ch)
+            if bbox is None:
+                return (1_000_000, 1_000_000)
+            return (row_of_y.get(bbox[1], 0), bbox[0])
 
         rl.resort_group(parent, _key)
+        self._resync_recognition_with_visual()
+
+    def _resort_parents_canonical(self):
+        """Reorder top-level parents in the tree to match the canonical
+        slot order (same logic `_populate_review_panel` applies on cold
+        load). Without this a freshly created group (manual bbox draw
+        for a slot that wasn't on the list yet, or a slot change that
+        opens a new parent) ends up appended to the bottom — adapter's
+        `_get_or_create_parent` always tacks new parents on at the end.
+        """
+        if self._current_idx < 0:
+            return
+        path = self._screenshots[self._current_idx]
+        stype = self._screen_types.get(path.name, 'UNKNOWN')
+        from warp.recognition.boff_keys import order_items_for_display
+        from warp.warp_importer import DISPLAY_CANONICAL_ORDER
+        build_type = self._STYPE_TO_BUILD.get(stype, 'SPACE')
+        canonical = [sd['name'] for sd in _SLOT_ORDER.get(build_type, [])]
+        ordered = order_items_for_display(
+            self._recognition_items, canonical,
+            fallback_canonical_slots=DISPLAY_CANONICAL_ORDER,
+        )
+        slot_order = [label for label, _ in ordered]
+        self._review_list.reorder_parents(slot_order)
         self._resync_recognition_with_visual()
 
     def _resync_recognition_with_visual(self):
@@ -2828,7 +2891,10 @@ class WarpCoreWindow(QMainWindow):
             _saved = self._data_mgr.add_annotation(
                 image_path=_path, bbox=bbox, slot=slot, name=name,
                 state=AnnotationState.CONFIRMED, ml_conf=conf, ml_name=name,
-                auto_confirmed=_auto_conf_flag)
+                auto_confirmed=_auto_conf_flag,
+                seat_key=new_item.get('seat_key', '') or '',
+                slot_index=new_item.get('slot_index')
+                    if isinstance(new_item.get('slot_index'), int) else -1)
             new_item['ann_id'] = _saved.ann_id
             if crop_bgr is not None:
                 from warp.recognition.icon_matcher import SETSIconMatcher
@@ -2847,6 +2913,11 @@ class WarpCoreWindow(QMainWindow):
         _new_item = self._review_list.item(len(self._recognition_items) - 1)
         if _new_item is not None and slot not in NON_ICON_SLOTS:
             self._resort_group_of(_new_item)
+            # If the slot didn't have a group yet, its parent landed at
+            # the bottom of the tree — re-position parents to canonical
+            # SLOT_ORDER so e.g. a freshly-added Impulse Engine slots
+            # between Deflector and Shield instead of after Traits.
+            self._resort_parents_canonical()
             new_row = self._review_list.row(_new_item)
         else:
             new_row = len(self._recognition_items) - 1
@@ -3264,6 +3335,10 @@ class WarpCoreWindow(QMainWindow):
                 self._review_list.reparent_item(
                     litem, slot, _pretty_slot(slot))
                 self._resort_group_of(litem)
+                # If the slot didn't have a group yet, reparent_item
+                # created the parent at the bottom — re-place parents
+                # canonically so the row lands in SLOT_ORDER position.
+                self._resort_parents_canonical()
             # Auto-accept if threshold met after rematch. `row` is stale
             # after the resort permuted `_recognition_items`; re-fetch
             # from the QTreeWidgetItem so Accept targets the right row.
@@ -3518,6 +3593,9 @@ class WarpCoreWindow(QMainWindow):
                     state=AnnotationState.CONFIRMED,
                     ml_conf=conf, ml_name=name,
                     auto_confirmed=True,
+                    seat_key=ri.get('seat_key', '') or '',
+                    slot_index=ri.get('slot_index')
+                        if isinstance(ri.get('slot_index'), int) else -1,
                 )
                 ri['ann_id'] = _saved.ann_id
             # Seed icon-matcher session examples only for ML icon slots —
@@ -3671,6 +3749,9 @@ class WarpCoreWindow(QMainWindow):
                     ml_name=ri.get('ocr_raw', '') or ri.get('orig_name', ''),
                     auto_confirmed=False,
                     community_rejected=community_rejected,
+                    seat_key=ri.get('seat_key', '') or '',
+                    slot_index=ri.get('slot_index')
+                        if isinstance(ri.get('slot_index'), int) else -1,
                 )
                 ri['ann_id'] = saved.ann_id  # track for future edits on this bbox
                 self._ann_widget.refresh_annotations(path)

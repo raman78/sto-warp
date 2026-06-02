@@ -1890,12 +1890,23 @@ class WarpImporter:
                     if not used[i]:
                         merged.append(c)
                 # Sort by spatial position so slot_index becomes L→R / T→B.
-                # Without this, detected bboxes come first and unmatched
-                # confirmed are appended at the end — producing non-spatial
-                # slot_index (e.g. Science Consoles with disk-recovered
-                # positions getting idx 2,3,4 while detector-only positions
-                # get 0,1).
-                merged.sort(key=lambda b: (b[0], b[1]))
+                # Row-bucketed: cluster y values within ~½ icon_h, then sort
+                # by (row_bucket, x). Naive (x, y) was column-major top-down
+                # — broke Starship Traits 5+2 (Intel Handler came before
+                # Beam Training) and 2×2 BOFF seats.
+                if merged:
+                    import statistics as _st
+                    _tol = max(8, int(_st.median(b[3] for b in merged) * 0.5))
+                    _uys = sorted({b[1] for b in merged})
+                    _row_of_y: dict[int, int] = {}
+                    _cur = 0
+                    _prev: int | None = None
+                    for _y in _uys:
+                        if _prev is not None and _y - _prev > _tol:
+                            _cur += 1
+                        _row_of_y[_y] = _cur
+                        _prev = _y
+                    merged.sort(key=lambda b: (_row_of_y[b[1]], b[0]))
                 layout[slot] = merged
 
         # If ShipDB gave generic fallback (ship_name empty), refine profile
