@@ -2883,9 +2883,35 @@ class LayoutDetector:
                     delta = s[1] - p[1]
                     est_cy = s[1] + delta * 1.05  # Rep is slightly wider gap
                     if est_cy < h:
-                        kept['Space Reputation'] = (anchor_cx, est_cy)
-                        _slog.info(f'LayoutDetector TraitDetect: extrapolate Rep cy={est_cy:.0f} '
-                                   f'from Personal={p[1]:.0f}/Starship={s[1]:.0f}')
+                        # Sanity gate: if the predicted Rep icon row sits over a
+                        # near-black band, the screen is cropped above the Rep
+                        # area (no Rep UI present) — skip the extrapolation
+                        # instead of emitting 5 phantom slots that always resolve
+                        # to `__empty__` downstream.
+                        import cv2 as _cv2
+                        y_off = int(icon_h * 0.88)
+                        x_off = int(cell_w * 2.27)
+                        col_step = max(int(cell_w * 1.135), cell_w + 2)
+                        icon_cy = int(est_cy + y_off)
+                        by0 = max(0, icon_cy - icon_h // 2)
+                        by1 = min(h, icon_cy + icon_h // 2)
+                        bx0 = max(0, int(anchor_cx - x_off - cell_w // 2))
+                        bx1 = min(w, int(anchor_cx - x_off + 4 * col_step + cell_w // 2))
+                        if by1 > by0 and bx1 > bx0:
+                            band = img[by0:by1, bx0:bx1]
+                            gray = _cv2.cvtColor(band, _cv2.COLOR_BGR2GRAY) if band.ndim == 3 else band
+                            band_mean = float(gray.mean())
+                        else:
+                            band_mean = 0.0
+                        if band_mean < 15.0:
+                            _slog.info(f'LayoutDetector TraitDetect: skip Rep extrapolation — '
+                                       f'predicted band too dark (mean={band_mean:.1f}); '
+                                       f'screen likely lacks Rep UI')
+                        else:
+                            kept['Space Reputation'] = (anchor_cx, est_cy)
+                            _slog.info(f'LayoutDetector TraitDetect: extrapolate Rep cy={est_cy:.0f} '
+                                       f'from Personal={p[1]:.0f}/Starship={s[1]:.0f} '
+                                       f'(band mean={band_mean:.1f})')
 
         # Counts — use game maximums; downstream truncates per profile/tier
         counts = {
