@@ -3334,10 +3334,43 @@ class WarpCoreWindow(QMainWindow):
             except: pass
 
             ri = self._recognition_items[row]
+            old_slot = ri.get('slot', '') or ''
             ri.update({'name': name, 'conf': conf, 'thumb': thumb, 'slot': slot, 'cross_check_failed': _cross_check})
-            # Combo-driven slot change resets any prior seat-aware grouping —
-            # the new slot is the new group key so the tree can re-parent.
-            ri['_group_label'] = slot
+            # Preserve seat membership when the user corrects a slot that
+            # was originally part of a physical BOFF seat. Without this,
+            # picking the seat's spec profession from the combo (e.g.
+            # 'Boff Miracle Worker' for a T+MW seat) would split the row
+            # out of its sibling seat group ('Boff Tactical+Miracle
+            # Worker') into a standalone profession parent. The seat is a
+            # physical coordinate-anchored group; the user's correction
+            # only changes the ability identity, not the seat it sits in.
+            from warp.recognition.boff_keys import (
+                is_seat_keyed as _is_seat_keyed,
+                group_items_by_seat as _group_by_seat,
+            )
+            group_label = slot
+            if slot.startswith('Boff ') and slot not in NON_ICON_SLOTS:
+                seat_key = ri.get('seat_key') or ''
+                if not seat_key and _is_seat_keyed(old_slot):
+                    seat_key = old_slot
+                    ri['seat_key'] = seat_key
+                if seat_key and _is_seat_keyed(seat_key):
+                    siblings = [
+                        it for it in self._recognition_items
+                        if it is not ri and (it.get('seat_key') or '') == seat_key
+                    ]
+                    existing_label = next(
+                        (it.get('_group_label') for it in siblings
+                         if it.get('_group_label')),
+                        '',
+                    )
+                    if existing_label:
+                        group_label = existing_label
+                    else:
+                        grouped = _group_by_seat([ri, *siblings])
+                        if grouped:
+                            group_label = grouped[0][0]
+            ri['_group_label'] = group_label
             self._name_edit.blockSignals(True)
             self._name_edit.setText(name)
             self._name_edit.blockSignals(False)
@@ -3347,10 +3380,10 @@ class WarpCoreWindow(QMainWindow):
                     litem, name, slot, conf,
                     confirmed=False, cross_check_failed=_cross_check,
                     auto_confirmed=False, conflict_disk_name='',
-                    group_label=slot,
+                    group_label=group_label,
                 )
                 self._review_list.reparent_item(
-                    litem, slot, _pretty_slot(slot))
+                    litem, group_label, group_label)
                 self._resort_group_of(litem)
                 # If the slot didn't have a group yet, reparent_item
                 # created the parent at the bottom — re-place parents
