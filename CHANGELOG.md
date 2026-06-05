@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [Unreleased]
+
+### Fixed
+- The Recognition Review panel no longer surfaces bounding boxes from
+  a different screenshot that happened to share the current file's
+  name. Annotations are now keyed by the content hash of the image,
+  so two screenshots called `overview.png` from different ship builds
+  stay completely independent. Screen-type labels follow the same
+  scheme.
+
+### Changed
+- **annotations.json** schema has changed. Entries are now stored under
+  a 16-char SHA-256 prefix and wrapped with `filename` / `image_sha256`
+  metadata. Pre-existing entries keyed by filename are kept inert in
+  the same file (loaded but ignored by the review panel) so no data is
+  ever silently dropped. A migration CLI promotes them once you point
+  it at the original screenshots:
+  ```
+  python -m warp.trainer.migrate_annotations_to_hash /path/to/old/screenshots
+  ```
+  Pass `--dry-run` first to preview matches. Re-run as more originals
+  are located; unmatched legacy entries stay in `annotations.json`
+  untouched.
+
 ## [1.0.14] — 2026-06-02
 
 ### Added

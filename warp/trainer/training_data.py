@@ -6,9 +6,29 @@
 #   - Provides API for SyncWorker to read data for upload
 #
 # Storage layout (under warp/training_data/):
-#   annotations.json          — all annotations, keyed by image filename
+#   annotations.json          — all annotations, keyed by image content sha256
 #   crops/                    — exported icon crops (named by hash)
 #   crops/crop_index.json     — maps crop filename → item name + slot
+#
+# annotations.json schema (current):
+#   { "<sha16>": {
+#       "filename":     "overview.png",     # last known filename — display only
+#       "image_sha256": "<full 64-char>",   # forensic / dedup
+#       "annotations":  [ann_dict, ...],
+#   }, ... }
+#
+# sha16 = first 16 hex chars of sha256(file_bytes). 64 bits of entropy — for
+# any realistic library size, collision probability is negligible (P < 10⁻¹²
+# at 10k files). Keying by content hash means a screenshot saved as
+# "overview.png" no longer inherits annotations from a totally different
+# screenshot also saved as "overview.png" in the past.
+#
+# Legacy entries: pre-migration annotations.json keyed by filename (raw
+# `list[dict]` values, not the wrapper above). They are loaded into
+# `self._legacy_annotations` and IGNORED by `get_annotations` — so they
+# never pollute a fresh screenshot's review panel. They stay in the JSON
+# file untouched until the user runs the migration CLI
+# (warp/trainer/migrate_annotations_to_hash.py).
 
 from __future__ import annotations
 
@@ -122,10 +142,26 @@ class TrainingDataManager:
         self._dir.mkdir(parents=True, exist_ok=True)
         (self._dir / self.CROPS_DIR).mkdir(exist_ok=True)
 
-        self._annotations:  dict[str, list[dict]] = {}   # filename → list of ann dicts
+        # Active store — keyed by 16-char sha256 prefix of file contents.
+        self._annotations:  dict[str, list[dict]] = {}   # sha16 → list of ann dicts
+        self._image_meta:   dict[str, dict]       = {}   # sha16 → {filename, image_sha256}
         self._crop_index:   dict[str, dict]       = {}   # crop_filename → metadata
-        self._screen_types: dict[str, str]        = {}   # filename → screen type string
-        self._screen_types_user_confirmed: set[str] = set()  # filenames confirmed by user
+        self._screen_types: dict[str, str]        = {}   # sha16 → screen type string
+        self._screen_types_user_confirmed: set[str] = set()  # sha16 set
+
+        # Legacy bucket — pre-migration annotations.json data, keyed by
+        # filename. Loaded, persisted, but NEVER consulted by lookups.
+        # Drained by `migrate_legacy_by_path` (one-shot CLI).
+        self._legacy_annotations: dict[str, list[dict]] = {}
+        self._legacy_screen_types: dict[str, str] = {}
+        self._legacy_screen_types_user_confirmed: set[str] = set()
+
+        # Hash cache — sha256 of a screenshot is recomputed only when
+        # (path, mtime_ns, size) changes. Without this, every get_annotations
+        # in the trainer's hot review loop would re-read the file.
+        self._hash_cache:      dict[tuple, str] = {}
+        self._full_hash_cache: dict[str, str]   = {}  # sha16 → full 64-char
+
         self._dirty = False
 
         self._load()
@@ -149,18 +185,76 @@ class TrainingDataManager:
         except Exception as e:
             logger.warning(f'TrainingDataManager: cleanup_orphaned_crops failed: {e}')
 
+    # ---------------------------------------------------------------- image id
+
+    def _image_id(self, image_path: Path) -> str:
+        """Return the 16-char sha256 prefix of the image's contents.
+
+        Caches per (path, mtime_ns, size) so the file is only re-read when
+        actually modified — keeps the trainer's hot lookup loop cheap.
+
+        If the file is missing the lookup degrades to a deterministic
+        `missing__<filename>` sentinel: `get_annotations` will simply
+        return nothing for it (no stale match by filename), and any
+        write path that needs the actual bytes will fail downstream
+        with the underlying I/O error.
+        """
+        try:
+            st = image_path.stat()
+        except OSError:
+            return f'missing__{image_path.name}'
+        cache_key = (str(image_path), st.st_mtime_ns, st.st_size)
+        cached = self._hash_cache.get(cache_key)
+        if cached is not None:
+            return cached
+        h = hashlib.sha256()
+        with open(image_path, 'rb') as f:
+            for chunk in iter(lambda: f.read(1 << 20), b''):
+                h.update(chunk)
+        full = h.hexdigest()
+        short = full[:16]
+        self._hash_cache[cache_key] = short
+        self._full_hash_cache[short] = full
+        return short
+
+    def _register_image(self, image_path: Path) -> str:
+        """Hash + record metadata for write paths. Returns the sha16 key."""
+        key = self._image_id(image_path)
+        # Last-write-wins: trainer may see this image at a different path
+        # in the future, but the bytes-derived id stays stable. We refresh
+        # the human-readable filename so the JSON remains greppable.
+        self._image_meta[key] = {
+            'filename':     image_path.name,
+            'image_sha256': self._full_hash_cache.get(key, ''),
+        }
+        return key
+
     # ---------------------------------------------------------------- annotation CRUD
 
     def get_annotations(self, image_path: Path) -> list[Annotation]:
-        """Returns all annotations for the given image (as Annotation objects)."""
-        key  = image_path.name
+        """Returns all annotations for the given image (as Annotation objects).
+
+        Lookup is by content hash — annotations from a different screenshot
+        that happened to share this one's filename are NOT returned.
+        Legacy filename-keyed entries are inert until migrated.
+        """
+        key  = self._image_id(image_path)
         dicts = self._annotations.get(key, [])
         return [self._dict_to_ann(d) for d in dicts]
 
     def has_annotations(self, image_path: Path) -> bool:
-        key = image_path.name
+        key = self._image_id(image_path)
         anns = self._annotations.get(key, [])
         return any(a.get("state") == AnnotationState.CONFIRMED for a in anns)
+
+    def has_legacy_annotations(self, image_path: Path) -> bool:
+        """True iff the filename has untranslated legacy entries.
+
+        Used by the trainer UI to surface a 'Migrate legacy annotations?'
+        prompt for files whose name matches a pre-hash entry — and only
+        for those, so the prompt never appears for genuinely fresh files.
+        """
+        return image_path.name in self._legacy_annotations
 
     def add_annotation(
         self,
@@ -191,7 +285,7 @@ class TrainingDataManager:
                          auto_confirmed=auto_confirmed,
                          community_rejected=community_rejected,
                          seat_key=seat_key, slot_index=slot_index)
-        key = image_path.name
+        key = self._register_image(image_path)
         if key not in self._annotations:
             self._annotations[key] = []
 
@@ -268,7 +362,7 @@ class TrainingDataManager:
         Add an auto-detected candidate bbox if not already present.
         Returns True if added, False if duplicate.
         """
-        key = image_path.name
+        key = self._register_image(image_path)
         existing = self._annotations.get(key, [])
 
         # Check for duplicate (same slot + index)
@@ -299,7 +393,7 @@ class TrainingDataManager:
         old_ann_id = ann.ann_id
         if bbox is not None:
             ann = dc_replace(ann, bbox=bbox)
-        key = image_path.name
+        key = self._image_id(image_path)
         dicts = self._annotations.get(key, [])
         for i, d in enumerate(dicts):
             if d.get("ann_id") == old_ann_id:
@@ -339,7 +433,7 @@ class TrainingDataManager:
 
     def remove_annotation(self, image_path: Path, ann: Annotation):
         """Remove an annotation by ann_id and clean up its crop_index entry + PNG."""
-        key = image_path.name
+        key = self._image_id(image_path)
         dicts = self._annotations.get(key, [])
         self._annotations[key] = [d for d in dicts if d.get("ann_id") != ann.ann_id]
         self._dirty = True
@@ -348,19 +442,48 @@ class TrainingDataManager:
     # ---------------------------------------------------------------- persistence
 
     def save(self):
-        """Write annotations.json to disk."""
+        """Write annotations.json + screen_types.json to disk.
+
+        annotations.json carries both the new sha16-keyed wrapper entries
+        and any untouched legacy filename-keyed lists side-by-side; on
+        next load `_load` re-splits them by value shape. Same for
+        screen_types — sha16 keys for migrated entries, filename keys
+        kept inert for legacy.
+        """
         ann_path = self._dir / self.ANNOTATIONS_FILE
+        out: dict = {}
+        for key, anns in self._annotations.items():
+            meta = self._image_meta.get(key, {})
+            out[key] = {
+                'filename':     meta.get('filename', ''),
+                'image_sha256': meta.get('image_sha256', ''),
+                'annotations':  anns,
+            }
+        # Preserve legacy entries as raw lists so they round-trip untouched.
+        for fname, anns in self._legacy_annotations.items():
+            out[fname] = anns
         with open(ann_path, "w", encoding="utf-8") as f:
-            json.dump(self._annotations, f, indent=2)
+            json.dump(out, f, indent=2)
+
         idx_path = self._dir / self.CROP_INDEX_FILE
         with open(idx_path, "w", encoding="utf-8") as f:
             json.dump(self._crop_index, f, indent=2)
+
+        # Screen types: merge active (sha16-keyed) + legacy (filename-keyed)
+        # back into one map so legacy data is preserved untouched.
+        st_out: dict = dict(self._legacy_screen_types)
+        st_out.update(self._screen_types)
         st_path = self._dir / self.SCREEN_TYPES_FILE
         with open(st_path, "w", encoding="utf-8") as f:
-            json.dump(self._screen_types, f, indent=2)
+            json.dump(st_out, f, indent=2)
+
+        uc_out = sorted(
+            self._screen_types_user_confirmed
+            | self._legacy_screen_types_user_confirmed)
         uc_path = self._dir / self.USER_CONFIRMED_FILE
         with open(uc_path, "w", encoding="utf-8") as f:
-            json.dump(sorted(self._screen_types_user_confirmed), f, indent=2)
+            json.dump(uc_out, f, indent=2)
+
         self._dirty = False
         logger.info(f"Training data saved to {self._dir}")
 
@@ -371,11 +494,14 @@ class TrainingDataManager:
         """
         _CLEAR_SLOTS = frozenset({'Ship Name'})
         changed = 0
-        for anns in self._annotations.values():
-            for ann in anns:
-                if ann.get('slot') in _CLEAR_SLOTS and ann.get('name', '').strip():
-                    ann['name'] = ''
-                    changed += 1
+        # Active sha16-keyed entries AND inert legacy ones — both pools may
+        # contain unscrubbed Ship Name text from before this migration ran.
+        for pool in (self._annotations, self._legacy_annotations):
+            for anns in pool.values():
+                for ann in anns:
+                    if ann.get('slot') in _CLEAR_SLOTS and ann.get('name', '').strip():
+                        ann['name'] = ''
+                        changed += 1
         if changed:
             logger.info(f'Migration: cleared name text from {changed} Ship Name annotations')
             self.save()
@@ -385,7 +511,25 @@ class TrainingDataManager:
         if ann_path.exists():
             try:
                 with open(ann_path, encoding='utf-8') as f:
-                    self._annotations = json.load(f)
+                    raw = json.load(f)
+                for key, val in raw.items():
+                    # New schema: wrapper dict with explicit metadata.
+                    if isinstance(val, dict) and 'annotations' in val:
+                        self._annotations[key]  = val.get('annotations', [])
+                        self._image_meta[key]   = {
+                            'filename':     val.get('filename', ''),
+                            'image_sha256': val.get('image_sha256', ''),
+                        }
+                        full = val.get('image_sha256', '')
+                        if full:
+                            self._full_hash_cache[key] = full
+                    # Legacy schema: bare list of annotation dicts, keyed by filename.
+                    elif isinstance(val, list):
+                        self._legacy_annotations[key] = val
+                    # Anything else (corrupt) — skip and warn.
+                    else:
+                        logger.warning(
+                            f'_load: skipped unrecognised annotations entry {key!r}')
             except Exception as e:
                 logger.warning(f"Could not load annotations: {e}")
         self._migrate_clear_ship_name_text()
@@ -402,16 +546,33 @@ class TrainingDataManager:
         if st_path.exists():
             try:
                 with open(st_path, encoding='utf-8') as f:
-                    self._screen_types = json.load(f)
+                    raw_st = json.load(f)
+                for key, stype in raw_st.items():
+                    if self._is_sha16(key):
+                        self._screen_types[key] = stype
+                    else:
+                        self._legacy_screen_types[key] = stype
             except Exception:
                 pass
         uc_path = self._dir / self.USER_CONFIRMED_FILE
         if uc_path.exists():
             try:
                 with open(uc_path, encoding='utf-8') as f:
-                    self._screen_types_user_confirmed = set(json.load(f))
+                    raw_uc = json.load(f)
+                for key in raw_uc:
+                    if self._is_sha16(key):
+                        self._screen_types_user_confirmed.add(key)
+                    else:
+                        self._legacy_screen_types_user_confirmed.add(key)
             except Exception:
                 pass
+
+    @staticmethod
+    def _is_sha16(key: str) -> bool:
+        """True iff `key` looks like a 16-char lowercase hex sha-prefix."""
+        if not isinstance(key, str) or len(key) != 16:
+            return False
+        return all(c in '0123456789abcdef' for c in key)
 
     def _sync_crop_index(self, image_path: Path, ann: Annotation):
         """
@@ -503,7 +664,7 @@ class TrainingDataManager:
         # can find the file without having to reconstruct the path.
         relative = f'crops/{fname}'
         ann.crop_name = relative
-        key = image_path.name
+        key = self._image_id(image_path)
         for d in self._annotations.get(key, []):
             if d.get('ann_id') == ann.ann_id:
                 d['crop_name'] = relative
@@ -531,7 +692,10 @@ class TrainingDataManager:
         """
         import cv2
         repaired = 0
-        for image_name, ann_list in self._annotations.items():
+        for image_key, ann_list in self._annotations.items():
+            # image_key is sha16; humans browse crop_index by filename,
+            # so resolve via the meta sidecar.
+            image_name = self._image_meta.get(image_key, {}).get('filename', image_key)
             for d in ann_list:
                 if d.get('state') != AnnotationState.CONFIRMED:
                     continue
@@ -601,13 +765,16 @@ class TrainingDataManager:
           3. PNG files on disk inside crops/ that are not referenced by any
              crop_index entry. Removed to reclaim space.
         """
-        # Build {ann_id: (image_name, dict)} for fast lookup.
+        # Build {ann_id: (image_key, dict)} for fast lookup. Include the legacy
+        # bucket — its crops are still valid training data and would otherwise
+        # look "orphaned" to the sweep and get deleted on first startup.
         ann_by_id: dict[str, tuple[str, dict]] = {}
-        for image_name, ann_list in self._annotations.items():
-            for d in ann_list:
-                aid = d.get('ann_id')
-                if aid:
-                    ann_by_id[aid] = (image_name, d)
+        for pool in (self._annotations, self._legacy_annotations):
+            for image_key, ann_list in pool.items():
+                for d in ann_list:
+                    aid = d.get('ann_id')
+                    if aid:
+                        ann_by_id[aid] = (image_key, d)
 
         orphaned = 0
         resynced = 0
@@ -718,9 +885,10 @@ class TrainingDataManager:
 
         Returns the destination path of the training copy.
         """
-        self._screen_types[image_path.name] = screen_type
+        key = self._register_image(image_path)
+        self._screen_types[key] = screen_type
         if user_confirmed:
-            self._screen_types_user_confirmed.add(image_path.name)
+            self._screen_types_user_confirmed.add(key)
         self.save()
         dest_dir = self._dir / 'screen_types' / screen_type
         dest_dir.mkdir(parents=True, exist_ok=True)
@@ -730,24 +898,47 @@ class TrainingDataManager:
         return dest
 
     def get_screen_type(self, image_path: Path) -> str:
-        """Returns the persisted screen type for a screenshot, or empty string if not set."""
-        return self._screen_types.get(image_path.name, '')
+        """Returns the persisted screen type for a screenshot, or empty string if not set.
+
+        Active (sha16-keyed) entries win; legacy filename-keyed entries are
+        ignored so a fresh screenshot sharing a name with a pre-migration
+        file does not inherit its label.
+        """
+        return self._screen_types.get(self._image_id(image_path), '')
 
     def get_all_screen_types(self) -> dict[str, str]:
-        """Returns a copy of all persisted {filename: stype} labels."""
-        return dict(self._screen_types)
+        """Returns {filename: stype} for the trainer's file list.
+
+        Storage is keyed by sha16 (content hash); the trainer iterates by
+        Path and looks up by `p.name`, so we project back through
+        `_image_meta`. Legacy filename-keyed entries are folded in last,
+        meaning an active sha16 entry for a different file wins over a
+        legacy entry sharing the same filename.
+        """
+        out: dict[str, str] = dict(self._legacy_screen_types)
+        for sha, stype in self._screen_types.items():
+            fname = self._image_meta.get(sha, {}).get('filename')
+            if fname:
+                out[fname] = stype
+        return out
 
     def get_user_confirmed_set(self) -> set[str]:
         """Returns filenames confirmed explicitly by the user (green checkmark)."""
-        return set(self._screen_types_user_confirmed)
+        out: set[str] = set(self._legacy_screen_types_user_confirmed)
+        for sha in self._screen_types_user_confirmed:
+            fname = self._image_meta.get(sha, {}).get('filename')
+            if fname:
+                out.add(fname)
+        return out
 
     def is_user_confirmed(self, image_path: Path) -> bool:
-        return image_path.name in self._screen_types_user_confirmed
+        return self._image_id(image_path) in self._screen_types_user_confirmed
 
     def remove_user_confirmed(self, image_path: Path) -> None:
         """Remove user-confirmed mark. Type label in screen_types.json is kept."""
-        if image_path.name in self._screen_types_user_confirmed:
-            self._screen_types_user_confirmed.discard(image_path.name)
+        key = self._image_id(image_path)
+        if key in self._screen_types_user_confirmed:
+            self._screen_types_user_confirmed.discard(key)
             self.save()
 
     def remove_screen_type(self, image_path: Path, screen_type: str) -> bool:
@@ -757,11 +948,12 @@ class TrainingDataManager:
         Returns True if anything was removed.
         """
         removed = False
+        key = self._image_id(image_path)
         # Remove from persistent label dict and user-confirmed set
-        if image_path.name in self._screen_types:
-            del self._screen_types[image_path.name]
+        if key in self._screen_types:
+            del self._screen_types[key]
             removed = True
-        self._screen_types_user_confirmed.discard(image_path.name)
+        self._screen_types_user_confirmed.discard(key)
         if removed:
             self.save()
         # Remove training copy from disk
@@ -785,6 +977,49 @@ class TrainingDataManager:
             for d in screen_types_dir.iterdir()
             if d.is_dir()
         }
+
+    # ---------------------------------------------------------------- legacy migration
+
+    def migrate_legacy_by_path(self, image_path: Path) -> int:
+        """Promote legacy filename-keyed entries to sha16 keys.
+
+        Caller supplies the original screenshot file on disk; we hash it,
+        copy legacy annotations / screen-type / user-confirmed flag from
+        the filename bucket into the active sha16 bucket, then drop the
+        legacy entries. Returns the number of legacy annotation rows
+        promoted (0 if nothing matched).
+        """
+        fname = image_path.name
+        leg_anns = self._legacy_annotations.get(fname)
+        leg_stype = self._legacy_screen_types.get(fname)
+        leg_uc = fname in self._legacy_screen_types_user_confirmed
+        if not (leg_anns or leg_stype or leg_uc):
+            return 0
+
+        key = self._register_image(image_path)
+        promoted = 0
+        if leg_anns:
+            existing = self._annotations.setdefault(key, [])
+            seen_ids = {d.get('ann_id') for d in existing if d.get('ann_id')}
+            for d in leg_anns:
+                if d.get('ann_id') in seen_ids:
+                    continue
+                existing.append(d)
+                promoted += 1
+            del self._legacy_annotations[fname]
+        if leg_stype and key not in self._screen_types:
+            self._screen_types[key] = leg_stype
+        if fname in self._legacy_screen_types:
+            del self._legacy_screen_types[fname]
+        if leg_uc:
+            self._screen_types_user_confirmed.add(key)
+            self._legacy_screen_types_user_confirmed.discard(fname)
+
+        self._dirty = True
+        self.save()
+        logger.info(
+            f'migrate_legacy_by_path: {fname} -> {key} ({promoted} ann row(s))')
+        return promoted
 
     # ---------------------------------------------------------------- helpers
 
@@ -818,7 +1053,7 @@ class TrainingDataManager:
         """
         if not ann_id:
             return False
-        key = image_path.name
+        key = self._image_id(image_path)
         for d in self._annotations.get(key, []):
             if d.get("ann_id") != ann_id:
                 continue
