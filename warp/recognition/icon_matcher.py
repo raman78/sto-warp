@@ -849,7 +849,15 @@ class SETSIconMatcher:
         crops_dir = training_data_dir / 'crops'
         count = 0
         skipped_auto = 0
-        for _fname, annotations in data.items():
+        for _key, val in data.items():
+            # New schema: {sha16: {'annotations': [...], ...}}
+            # Legacy schema: {filename: [ann_dict, ...]}
+            if isinstance(val, dict):
+                annotations = val.get('annotations', [])
+            elif isinstance(val, list):
+                annotations = val
+            else:
+                continue
             for ann in annotations:
                 if ann.get('state') != 'confirmed':
                     continue
