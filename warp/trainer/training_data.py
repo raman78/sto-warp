@@ -524,8 +524,14 @@ class TrainingDataManager:
                         if full:
                             self._full_hash_cache[key] = full
                     # Legacy schema: bare list of annotation dicts, keyed by filename.
+                    # Drop empty placeholders — files the user opened in CORE
+                    # but never annotated. They carry no info and would just
+                    # inflate the "legacy entries remaining" count forever.
                     elif isinstance(val, list):
-                        self._legacy_annotations[key] = val
+                        if val:
+                            self._legacy_annotations[key] = val
+                        else:
+                            self._dirty = True   # so save() rewrites without them
                     # Anything else (corrupt) — skip and warn.
                     else:
                         logger.warning(
