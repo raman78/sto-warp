@@ -379,6 +379,10 @@ class ResultsView(QWidget):
     # Correction can render the screen-type WARP just classified, not
     # whatever the user previously confirmed for that filename in TDM).
     open_in_warp_fast_corr = Signal(dict, dict)
+    # Fired when the user presses the "Export to SETS JSON…" button at
+    # the bottom of the Results view. WarpWindow owns the actual export
+    # (file dialog + SETS writer); the view only provides the trigger.
+    export_sets_requested  = Signal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -437,6 +441,18 @@ class ResultsView(QWidget):
         self._rerun_btn.clicked.connect(self._on_rerun_clicked)
         self._rerun_btn.setVisible(False)
         ll.addWidget(self._rerun_btn)
+        # Export sits in the left pane beneath the file list — mirrors
+        # WARP CORE's left panel where Mark Done lives beneath
+        # Screenshots. Disabled until a result is loaded; WarpWindow
+        # toggles it via `set_export_enabled`.
+        self._export_sets_btn = QPushButton('Export to SETS JSON…', left)
+        self._export_sets_btn.setStyleSheet(primary_btn_style())
+        self._export_sets_btn.setToolTip(
+            'SETS v3.0.0-compatible build JSON — loadable via SETS '
+            'File → Load Build.')
+        self._export_sets_btn.setEnabled(False)
+        self._export_sets_btn.clicked.connect(self.export_sets_requested.emit)
+        ll.addWidget(self._export_sets_btn)
         split.addWidget(left)
 
         # ── Middle pane: screen-type combo + interactive canvas
@@ -515,6 +531,9 @@ class ResultsView(QWidget):
         split.setSizes([240, 700, 320])
         root.addWidget(split)
 
+    def set_export_enabled(self, enabled: bool) -> None:
+        self._export_sets_btn.setEnabled(bool(enabled))
+
     # ── Public API ──────────────────────────────────────────────────
 
     def clear(self) -> None:
@@ -531,6 +550,7 @@ class ResultsView(QWidget):
         self._type_combo.setEnabled(False)
         self._override_lbl.setText('')
         self._rerun_btn.setVisible(False)
+        self._export_sets_btn.setEnabled(False)
 
     def preload_files(self, paths: list) -> None:
         """Populate the file list with screenshot paths before recognition runs.

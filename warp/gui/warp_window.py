@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from warp.gui.log_view import LogViewWidget
 from warp.gui.progress_bar import StatusProgressBar
 from warp.gui.results_view import ResultsView
-from warp.style import primary_btn_style, secondary_btn_style
+from warp.style import secondary_btn_style
 
 from warp.debug import log
 from warp.warp_importer import (
@@ -230,17 +230,6 @@ class WarpWindow(QMainWindow):
             lambda v: QSettings().setValue(_SETTINGS_FORCE_BT_VALUE, v))
         tb.addWidget(self._build_combo)
 
-        tb.addSeparator()
-        self._export_sets_btn = QPushButton('Export to SETS JSON…', self)
-        self._export_sets_btn.setStyleSheet(primary_btn_style())
-        self._export_sets_btn.setToolTip(
-            'SETS v3.0.0-compatible build JSON — loadable via SETS '
-            'File → Load Build.'
-        )
-        self._export_sets_btn.clicked.connect(self._on_export_sets_json)
-        self._export_sets_btn.setEnabled(False)
-        tb.addWidget(self._export_sets_btn)
-
         central = QWidget(self)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -272,6 +261,7 @@ class WarpWindow(QMainWindow):
         self._results.open_in_warp_core.connect(self.open_in_warp_core.emit)
         self._results.open_in_warp_fast_corr.connect(
             self.open_in_warp_fast_correction.emit)
+        self._results.export_sets_requested.connect(self._on_export_sets_json)
         self._tabs.addTab(self._results, 'Results')
 
         # Detection logs are scoped to WARP's own runs — live-tails the
@@ -352,7 +342,7 @@ class WarpWindow(QMainWindow):
         self._last_folder = folder
         self._result = None
         self._ship_banner.clear()
-        self._export_sets_btn.setEnabled(False)
+        self._results.set_export_enabled(False)
 
         paths = sorted(
             (p for p in folder.iterdir()
@@ -450,7 +440,7 @@ class WarpWindow(QMainWindow):
             self._tabs.setCurrentWidget(self._results)
         self._result = None
         self._ship_banner.clear()
-        self._export_sets_btn.setEnabled(False)
+        self._results.set_export_enabled(False)
         self._summary_lbl.clear()
         self._progress.start(determinate=True, maximum=100)
         self._set_controls_enabled(False)
@@ -507,7 +497,7 @@ class WarpWindow(QMainWindow):
             msg += f'  ·  {len(result.errors)} error(s)'
         self._summary_lbl.setText(msg)
         self.statusBar().showMessage('Done.')
-        self._export_sets_btn.setEnabled(True)
+        self._results.set_export_enabled(True)
         self._set_controls_enabled(True)
 
     def set_external_result(self, result: ImportResult) -> None:
@@ -527,7 +517,7 @@ class WarpWindow(QMainWindow):
             msg += f'  ·  {len(result.errors)} error(s)'
         self._summary_lbl.setText(msg)
         self.statusBar().showMessage('Loaded from WARP CORE.')
-        self._export_sets_btn.setEnabled(True)
+        self._results.set_export_enabled(True)
         self._set_controls_enabled(True)
 
     def _set_ship_banner(self, result: ImportResult):
