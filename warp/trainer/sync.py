@@ -360,6 +360,14 @@ class SyncWorker(QThread):
 
             accepted = int(resp.get('accepted', 0))
             sent    += accepted
+            # Backend may have rejected some on poison-label / dim checks.
+            # Log the raw response so we can see whatever fields the backend
+            # exposes about rejections (count, reasons, per-item status).
+            if accepted < len(sub_items):
+                _slog.warning(
+                    f'HF Sync: backend rejected {len(sub_items) - accepted}/'
+                    f'{len(sub_items)} items in batch; response: {resp!r:.500}'
+                )
             # Mark sent items in caches (only for accepted ones — backend may
             # have rejected some on poison-label / dim checks).
             for meta, payload_item in zip(sub_meta, sub_items):
@@ -475,7 +483,9 @@ class SyncWorker(QThread):
         """Anonymous listing of already-uploaded staging crops on public dataset."""
         try:
             from huggingface_hub import HfApi
-            files = HfApi().list_repo_files(
+            # token=False: anonymous read by design (see REMOTE_SYNC_AUDIT.md).
+            # Suppresses the "unauthenticated requests" warning from huggingface_hub.
+            files = HfApi(token=False).list_repo_files(
                 repo_id=HF_DATASET_REPO,
                 repo_type=HF_REPO_TYPE,
             )
@@ -654,7 +664,8 @@ class SyncWorker(QThread):
         """Anonymous listing of already-uploaded screen-type crops."""
         try:
             from huggingface_hub import HfApi
-            files = HfApi().list_repo_files(
+            # token=False: anonymous read by design (see REMOTE_SYNC_AUDIT.md).
+            files = HfApi(token=False).list_repo_files(
                 repo_id=HF_DATASET_REPO,
                 repo_type=HF_REPO_TYPE,
             )

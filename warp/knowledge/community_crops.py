@@ -102,7 +102,9 @@ class CommunityCropsClient:
         root = community_root()
         revision_file = root / '.last_commit.sha'
 
-        api = HfApi()
+        # token=False: anonymous read by design (see REMOTE_SYNC_AUDIT.md).
+        # Suppresses the "unauthenticated requests" warning from huggingface_hub.
+        api = HfApi(token=False)
         current_sha: str | None = None
         try:
             current_sha = api.dataset_info(HF_DATASET_REPO).sha
