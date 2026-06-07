@@ -320,10 +320,11 @@ class _ReviewListAdapter(QTreeWidget):
         slot_pretty = item.text(0)
         parent      = self._get_or_create_parent(slot_raw, slot_pretty)
         item.setText(0, '')
-        parent.addChild(item)
-        parent.setExpanded(True)
         if row < 0 or row > len(self._flat):
             row = len(self._flat)
+        child_idx = sum(1 for it in self._flat[:row] if it.parent() is parent)
+        parent.insertChild(child_idx, item)
+        parent.setExpanded(True)
         self._flat.insert(row, item)
         self.refresh_parent_of(item)
 
