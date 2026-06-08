@@ -239,6 +239,8 @@ def _refresh_loop(names: Iterable[str], force: bool) -> None:
         if not force and cache_path.exists():
             age = now - int(meta.get('fetched_at', 0))
             if age < _REFRESH_TTL_SECONDS:
+                log.info(f'cargo.refresh: {name} fresh ({age // 3600}h old, '
+                         f'TTL {_REFRESH_TTL_SECONDS // 3600}h) — skipped')
                 continue
         etag = None if force else meta.get('etag')
         try:
@@ -248,7 +250,7 @@ def _refresh_loop(names: Iterable[str], force: bool) -> None:
             continue
         if payload is None:
             _write_meta(name, {**meta, 'fetched_at': now})
-            log.debug(f'cargo.refresh: {name} unchanged (304)')
+            log.info(f'cargo.refresh: {name} unchanged (HTTP 304)')
             continue
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)

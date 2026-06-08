@@ -492,7 +492,10 @@ class WARPSyncClient:
                     data = json.loads(cache_path.read_text(encoding='utf-8'))
                     with self._knowledge_lock:
                         self._knowledge = data.get('knowledge', {})
-                    log.debug(f'WARPSync: loaded {len(self._knowledge)} knowledge entries from cache')
+                    log.info(
+                        f'WARPSync: knowledge fresh ({age_h:.1f}h old, '
+                        f'TTL {KNOWLEDGE_MAX_AGE_HOURS}h) — '
+                        f'reused {len(self._knowledge)} entries from cache')
                     return
             except Exception as e:
                 log.debug(f'WARPSync: cache read failed: {e}')
@@ -572,10 +575,12 @@ class WARPSyncClient:
                 if age_h < ICON_EQUIVALENCE_MAX_AGE_HOURS:
                     self._apply_icon_equivalence(
                         json.loads(cache_path.read_text(encoding='utf-8')))
-                    log.debug(
-                        f'WARPSync: loaded '
-                        f'{len(self._icon_equiv_classes)} icon-equivalence '
-                        f'classes from cache')
+                    log.info(
+                        f'WARPSync: icon-equivalence fresh '
+                        f'({age_h:.1f}h old, '
+                        f'TTL {ICON_EQUIVALENCE_MAX_AGE_HOURS}h) — '
+                        f'reused {len(self._icon_equiv_classes)} classes '
+                        f'from cache')
                     return
             except Exception as e:
                 log.debug(f'WARPSync: icon-equiv cache read failed: {e}')
