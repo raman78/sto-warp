@@ -8,87 +8,68 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [Unreleased]
+## [1.0.15] — 2026-06-08
 
 ### Added
-- First-run setup is now driven by a blocking splash screen that walks
-  you through seven phases (CARGO data, item & ship icons, community
-  knowledge, recognition model, the community icon library, the
-  matcher template index, and icon equivalence) with live progress
-  bars for the slow steps. The splash only appears on a true first
-  run; once it has completed every phase end-to-end a marker is
-  written and subsequent launches skip the splash. If the splash is
-  cancelled or interrupted no marker is written, so it will reappear
-  on the next launch until the cycle finishes. You can **Close** to
-  exit cleanly or **Cancel** to start sto-warp without the full
-  library (recognition quality is reduced for the session).
+- A setup splash now appears on the very first launch and blocks the
+  main window until every piece of reference data is downloaded:
+  cargo (equipment, traits, ships, BOFF abilities), item and ship
+  icons, community knowledge, the recognition model, the community
+  icon library, the icon-match template index, and the curated
+  icon-equivalence list. Progress bars show what is happening for
+  the slow steps. The splash only appears once — after every phase
+  finishes successfully the launcher remembers it and starts
+  silently on later runs. **Close** exits cleanly; **Cancel** lets
+  the program start without the full library, at the cost of weaker
+  recognition for that session. An interrupted splash will simply
+  reappear on the next launch.
 
 ### Changed
-- The community icon library now ships as a single tarball that is
-  rebuilt weekly from the upstream dataset, so a fresh install grabs
-  ~8 000 crops in one HTTP stream instead of ~8 000 parallel requests.
-  Cold-start time on a clean machine drops from "stalls under
-  HuggingFace anonymous rate-limiting" to roughly 2–3 minutes on a
-  typical home connection. If the tarball isn't available the client
-  falls back to the previous per-file snapshot path.
+- The community icon library is now downloaded as a single archive
+  rebuilt weekly from the upstream dataset, instead of one HTTP
+  request per crop. A clean install is now much faster and no
+  longer stalls on shared-bandwidth limits. If the archive is
+  unavailable the previous per-file download path is used as a
+  fallback.
+- **Export to SETS JSON** has been moved directly beneath the
+  Results file list in WARP, so it stays reachable without
+  scrolling on smaller windows. Behaviour is unchanged.
 
 ### Fixed
-- **Reference data now actually stays fresh.** CARGO (equipment, traits,
-  ships, BOFF abilities) and the curated icon-equivalence list were
-  defined as auto-refreshing on a 24 h window, but no runtime path
-  ever called the refresh — both files sat frozen at whatever
-  revision was current at install time, sometimes for weeks, while
-  the program was launched repeatedly. They are now part of the
-  startup-sync cycle, so every launch re-verifies them against
-  upstream (with a 24 h TTL gate so the actual network call still
-  happens at most once a day per file). The system log shows one
-  line per file per cycle confirming the result (`fresh — skipped`,
-  `unchanged (HTTP 304)`, or `updated`), so you can see verification
-  is happening rather than guess from the absence of errors.
-- The Recognition Review panel no longer surfaces bounding boxes from
-  a different screenshot that happened to share the current file's
-  name. Annotations are now keyed by the content hash of the image,
-  so two screenshots called `overview.png` from different ship builds
-  stay completely independent. Screen-type labels follow the same
-  scheme.
-- In WARP CORE the trait review tree now lists **Personal Ground
-  Traits above Personal Space Traits**, matching the in-game order
-  and the rest of the review panel's "what you see in the slot order
-  on screen" convention.
-- **Mark Done** is now greyed out until every review row on the
-  current screenshot is confirmed, so you cannot accidentally lock a
-  half-corrected screenshot.
+- Reference data now actually stays fresh between launches. Cargo
+  data and the curated icon-equivalence list were configured to
+  auto-refresh on a daily window, but nothing in the running
+  program ever triggered that refresh — both files could sit
+  frozen for weeks while the application was launched daily.
+  They are now part of the regular startup-sync cycle, so each
+  launch re-verifies them against the upstream source (with a
+  one-per-day rate limit so the actual network call still happens
+  at most once a day per file). The system log prints one line
+  per file per cycle confirming the result, so verification is
+  visible rather than implied.
+- The Recognition Review panel no longer mixes up bounding boxes
+  between two screenshots that happen to share the same file name
+  (e.g. `overview.png` from two different builds). Screen-type
+  labels follow the same rule.
+- The trait review tree now lists **Personal Ground Traits** above
+  **Personal Space Traits** in WARP CORE, matching the in-game
+  order and the rest of the review panel's slot ordering.
+- **Mark Done** is greyed out until every review row on the
+  current screenshot is confirmed, so a half-corrected screenshot
+  cannot be locked by accident.
 - A corrected BOFF slot now stays inside its original seat group
-  instead of jumping into a different rank's seat when the rank label
-  changes.
+  instead of jumping into a different rank's seat when the rank
+  label changes.
 - The Space Reputation extrapolation no longer fires when the
-  predicted band is too dark to read, eliminating a class of
-  phantom-trait suggestions on screenshots with the reputation panel
-  partly off-screen.
-- Moving a bbox row in the review list no longer reorders the row —
-  it stays at its original position so the slot order on screen and
-  in the tree remain in sync.
-- The HuggingFace unauthenticated-read warning is silenced and
-  per-batch contribution rejections are now logged at INFO instead of
-  WARNING, so the system log isn't filled with noise during normal
-  community sync.
-
-### Changed
-- **annotations.json** schema has changed. Entries are now stored under
-  a 16-char SHA-256 prefix and wrapped with `filename` / `image_sha256`
-  metadata. Pre-existing entries keyed by filename are kept inert in
-  the same file (loaded but ignored by the review panel) so no data is
-  ever silently dropped. A migration CLI promotes them once you point
-  it at the original screenshots:
-  ```
-  python -m warp.trainer.migrate_annotations_to_hash /path/to/old/screenshots
-  ```
-  Pass `--dry-run` first to preview matches. Re-run as more originals
-  are located; unmatched legacy entries stay in `annotations.json`
-  untouched.
-- **Export to SETS JSON** now sits directly beneath the Results file
-  list in WARP, so it's reachable without scrolling on smaller
-  windows. The button's behaviour is unchanged.
+  predicted band is too dark to read, removing a class of
+  phantom-trait suggestions on screenshots with the reputation
+  panel partly off-screen.
+- Moving a bbox row in the review list keeps the row at its
+  original position, so the slot order on screen and the order in
+  the tree stay in sync.
+- The system log no longer fills with noise from harmless
+  upstream-read warnings and per-batch upload rejections during
+  normal community sync.
 
 ## [1.0.14] — 2026-06-02
 
