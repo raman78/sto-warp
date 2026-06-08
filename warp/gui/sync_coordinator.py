@@ -56,6 +56,20 @@ class _RefreshWorker(QThread):
                 return True
             return False
 
+        # CARGO JSONs (equipment, traits, ships, …). Internally TTL-gated
+        # to one network call per file per 24 h, so calling it on every
+        # cycle is cheap; the bug we're closing is that nothing was
+        # calling it at all on warm launches, leaving the cache frozen
+        # at whatever revision was current at install time.
+        self.step.emit('cargo')
+        log.info('SyncCoordinator: step=cargo — equipment/trait/ship JSONs')
+        try:
+            from warp.data import cargo
+            cargo.refresh_all(force=self._force)
+        except Exception as e:
+            log.warning(f'SyncCoordinator: cargo refresh failed: {e}')
+        if _interrupted(): return
+
         self.step.emit('assets')
         log.info('SyncCoordinator: step=assets — GitHub icon/ship asset mirror')
         try:
@@ -91,6 +105,15 @@ class _RefreshWorker(QThread):
             CommunityCropsClient().fetch()
         except Exception as e:
             log.warning(f'SyncCoordinator: community crops fetch failed: {e}')
+        if _interrupted(): return
+
+        self.step.emit('equiv')
+        log.info('SyncCoordinator: step=equiv — admin-curated icon equivalence')
+        try:
+            if self._sync_client is not None:
+                self._sync_client._download_icon_equivalence_bg(force=self._force)
+        except Exception as e:
+            log.warning(f'SyncCoordinator: equiv refresh failed: {e}')
         if _interrupted(): return
 
         self.step.emit('seed')
@@ -217,8 +240,10 @@ class SyncCoordinator(QObject):
 
     def _on_step(self, step: str):
         labels = {
+            'cargo':     'Refreshing CARGO data…',
             'assets':    'Syncing icons and ship images…',
             'knowledge': 'Refreshing community knowledge…',
+            'equiv':     'Refreshing icon equivalence…',
             'model':     'Checking for newer model…',
             'community': 'Fetching approved crops mirror…',
             'seed':      'Seeding matcher with community crops…',
