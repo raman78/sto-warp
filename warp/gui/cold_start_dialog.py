@@ -1,4 +1,4 @@
-"""Always-on startup-sync splash.
+"""Blocking splash for the first-run download.
 
 Shown by `maybe_run_cold_start()` between `QApplication()` and
 `LauncherWindow().show()`. Runs `SyncCoordinator`'s full cycle in the
@@ -13,17 +13,13 @@ launcher opens:
   6. Seed      — icon matcher template index from crops      (~5 s)
   7. Equiv     — admin-curated icon equivalence classes      (~1 s)
 
-Auto-dismiss-fast: the splash window does not paint until
-`_FAST_DISMISS_MS` ms have passed. Warm starts where every phase
-short-circuits (ETag 304, cache hits, manifest SHA match) finish before
-the threshold and the user never sees the splash — just an extra ~1 s
-between double-click and the launcher window. Cold starts and partial
-re-fills exceed the threshold and the splash pops up with live progress.
-
-This replaces the previous cold-start-only detection: an interrupted
-download used to leave partially-populated mirrors that looked
-"non-empty" enough to skip the splash on the next launch, while the
-~8 000 still-missing files trickled in silently in the background.
+Detection (`is_cold_start()`): the marker file at
+`config_dir()/startup_sync_done` is missing. The marker is written
+only after every phase has completed in a single run, so an
+interrupted or cancelled splash leaves the marker absent and the
+splash reappears on the next launch. Once written it stays written —
+subsequent launches skip the splash entirely and let `SyncCoordinator`
+keep mirrors fresh in the background.
 
 Buttons:
   - Close   → `QApplication.quit()` (clean exit, nothing started yet)
@@ -34,21 +30,35 @@ from __future__ import annotations
 
 from typing import Callable
 
-from PySide6.QtCore import QEventLoop, QObject, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import QObject, QThread, Qt, Signal
 from PySide6.QtWidgets import (
     QApplication, QDialog, QHBoxLayout, QLabel, QMessageBox, QProgressBar,
     QPushButton, QVBoxLayout, QWidget,
 )
 
 from warp.debug import syslog as log
+from warp.userdata import config_dir
 
 
-# Threshold after which the splash actually paints. Tuned so that
-# all-cached warm starts (cargo ETag 304 × 5, assets tree-cache hit,
-# crops manifest SHA match, no asset diffs) finish below it and the
-# user never sees the window. Anything that needs real network work
-# blows past it and the splash takes over with progress bars.
-_FAST_DISMISS_MS = 1500
+_MARKER_FILENAME = 'startup_sync_done'
+
+
+def _marker_path():
+    return config_dir() / _MARKER_FILENAME
+
+
+# ── Cold-start detection ──────────────────────────────────────────────────
+
+def is_cold_start() -> bool:
+    """True until the splash has run every phase to completion once.
+
+    Marker-file driven: presence of `startup_sync_done` in `config_dir()`
+    means a previous launch finished the full cycle without being
+    cancelled. A half-populated mirror (interrupted download, kill -9)
+    leaves the marker absent, so the splash reappears next launch
+    instead of letting the background sync resume invisibly.
+    """
+    return not _marker_path().exists()
 
 
 # ── Worker ────────────────────────────────────────────────────────────────
@@ -272,10 +282,8 @@ class ColdStartDialog(QDialog):
         self.completed_cleanly = False
 
         intro = QLabel(
-            'Checking for updates and downloading any missing reference '
-            'data the recognizer needs.\n'
-            'The launcher will open as soon as this finishes — usually a '
-            'second on warm starts, several minutes on the very first run.',
+            'First run: downloading reference data needed by the recognizer.\n'
+            'This takes several minutes once; subsequent launches reuse the cache.',
             self,
         )
         intro.setWordWrap(True)
@@ -312,23 +320,10 @@ class ColdStartDialog(QDialog):
 
     # ── Lifecycle ────────────────────────────────────────────────────────
 
-    def worker(self) -> _ColdStartWorker:
-        """Expose the worker so `maybe_run_cold_start()` can start it
-        and wait on `all_done` before deciding whether to paint the
-        window. Idempotent across showEvent."""
-        return self._worker
-
-    def start_worker(self) -> None:
-        """Begin the sync cycle. Safe to call multiple times — only
-        kicks off the underlying QThread once."""
-        if not self._worker.isRunning():
-            self._worker.start()
-
     def showEvent(self, event) -> None:  # noqa: N802 (Qt name)
         super().showEvent(event)
-        # Defensive: covers the legacy path where the dialog is shown
-        # without an explicit start_worker() call.
-        self.start_worker()
+        if not self._worker.isRunning():
+            self._worker.start()
 
     def closeEvent(self, event) -> None:  # noqa: N802
         # Window-system close (Alt-F4 etc.) treated as Close (exit).
@@ -359,6 +354,12 @@ class ColdStartDialog(QDialog):
 
     def _on_all_done(self) -> None:
         self.completed_cleanly = True
+        # Persist the marker only after every phase ran — a cancelled
+        # or partial cycle leaves no marker so we re-prompt next launch.
+        try:
+            _marker_path().write_text('')
+        except OSError as e:
+            log.warning(f'cold-start: failed to write completion marker: {e}')
         self.accept()
 
     # ── Button handlers ──────────────────────────────────────────────────
@@ -389,14 +390,7 @@ class ColdStartDialog(QDialog):
 # ── Top-level entry ───────────────────────────────────────────────────────
 
 def maybe_run_cold_start() -> tuple[bool, bool]:
-    """Run the startup-sync cycle every launch, with auto-dismiss-fast.
-
-    The worker is started unconditionally. We then wait up to
-    `_FAST_DISMISS_MS` ms for `all_done`; if the whole cycle finishes
-    within that window the dialog is never painted and the launcher
-    appears with imperceptible delay. Slower cases (cold start, asset
-    diff, partial mirror refill) bring up the splash with live
-    progress bars.
+    """Show the splash if cold start is detected. Blocks until dismissal.
 
     Returns:
         (should_launch, skip_initial_sync)
@@ -405,44 +399,32 @@ def maybe_run_cold_start() -> tuple[bool, bool]:
                             should not open LauncherWindow); True
                             otherwise.
         skip_initial_sync — True when the splash ran every phase to
-                            completion (visible or not), so the
-                            launcher's SyncCoordinator should arm its
-                            periodic timer without re-running the
-                            cycle that just finished. False when the
-                            user cancelled before all_done — let the
-                            background sync pick up where we left off.
+                            completion, so the launcher's
+                            SyncCoordinator should arm its periodic
+                            timer without re-running the cycle that
+                            just finished. False for warm starts
+                            (nothing happened — let the background
+                            timer handle refresh on schedule) and for
+                            cancelled splashes.
     """
+    if not is_cold_start():
+        return (True, False)
+
+    log.info('cold-start: completion marker missing — showing splash')
     dialog = ColdStartDialog()
-    dialog.start_worker()
-
-    # Fast-dismiss probe: process Qt events for up to _FAST_DISMISS_MS,
-    # quitting early as soon as the worker signals all_done. Phase-level
-    # signals also get delivered to the dialog during this loop, so if
-    # we do end up painting the window its rows already reflect the
-    # current state instead of starting from "— waiting".
-    probe_loop = QEventLoop()
-    dialog.worker().all_done.connect(probe_loop.quit)
-    QTimer.singleShot(_FAST_DISMISS_MS, probe_loop.quit)
-    probe_loop.exec()
-
-    if dialog.completed_cleanly:
-        log.info(f'startup-sync: completed within {_FAST_DISMISS_MS} ms — '
-                 'splash skipped')
-        return (True, True)
-
-    log.info('startup-sync: work still in progress — showing splash')
     dialog.exec()
 
     if dialog.closed_via_quit:
-        log.info('startup-sync: user pressed Close — quitting app')
+        log.info('cold-start: user pressed Close — quitting app')
         app = QApplication.instance()
         if app is not None:
             app.quit()
         return (False, False)
 
     if dialog.completed_cleanly:
-        log.info('startup-sync: splash finished all phases')
+        log.info('cold-start: splash finished all phases — '
+                 'skipping launcher initial sync cycle')
         return (True, True)
 
-    log.info('startup-sync: splash dismissed early — proceeding degraded')
+    log.info('cold-start: splash dismissed early — proceeding degraded')
     return (True, False)
