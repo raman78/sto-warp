@@ -50,7 +50,7 @@ _ALLOW_PATTERNS = ['data/annotations.jsonl', 'data/crops/*.png']
 _CLEANUP_GUARD_FRACTION  = 0.30
 _CLEANUP_GUARD_MIN_LOCAL = 100
 _TRASH_KEEP_LAST         = 3
-_MAX_DOWNLOAD_WORKERS    = 8
+_MAX_DOWNLOAD_WORKERS    = 3   # HF rate-limits anonymous parallel HEADs; 8 hits 429+108s retry waits
 
 
 def community_root() -> Path:
@@ -174,6 +174,17 @@ class CommunityCropsClient:
             f'+{len(to_download)} -{len(to_remove)}'
         )
 
+        # Cold start: thousands of parallel hf_hub_download calls trigger
+        # HF anonymous rate-limit (HTTP 429 + ~110s retry waits per file).
+        # snapshot_download issues one batched request the Hub handles
+        # gracefully — far faster than N individual GETs at any worker count.
+        if not local_crops and to_download:
+            log.info(
+                f'community_crops: cold start ({len(to_download)} crops) — '
+                f'using snapshot_download instead of per-file delta'
+            )
+            return self._fallback_full_snapshot(revision)
+
         if has_annotations:
             try:
                 hf_hub_download(
@@ -289,7 +300,7 @@ class CommunityCropsClient:
             return False
 
         log.info(f'community_crops: snapshot_download {HF_DATASET_REPO} '
-                 f'(fallback) → {community_root()}')
+                 f'→ {community_root()}')
         try:
             snapshot_download(
                 repo_id=HF_DATASET_REPO,
