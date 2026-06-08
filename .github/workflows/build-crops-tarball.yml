@@ -28,4 +28,4 @@ jobs:
       - name: Build & upload tarball if dataset changed
         env:
           HF_TOKEN: ${{ secrets.HF_DATASET_WRITE_TOKEN }}
-        run: python scripts/build_crops_tarball.py
+        run: python tools/build_crops_tarball.py
