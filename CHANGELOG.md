@@ -10,6 +10,24 @@ details live in the git history.
 
 ## [Unreleased]
 
+### Added
+- First-run setup is now driven by a blocking splash screen that walks
+  you through the four cold-start downloads (CARGO data, community
+  knowledge, the community icon library, and icon equivalence classes)
+  with a live progress bar for the slow icon-library step. You can
+  **Close** to exit cleanly or **Cancel** to start sto-warp without
+  the full library (recognition quality is reduced for the session and
+  the splash reappears on next launch so the download can finish).
+
+### Changed
+- The community icon library now ships as a single tarball that is
+  rebuilt weekly from the upstream dataset, so a fresh install grabs
+  ~8 000 crops in one HTTP stream instead of ~8 000 parallel requests.
+  Cold-start time on a clean machine drops from "stalls under
+  HuggingFace anonymous rate-limiting" to roughly 2–3 minutes on a
+  typical home connection. If the tarball isn't available the client
+  falls back to the previous per-file snapshot path.
+
 ### Fixed
 - The Recognition Review panel no longer surfaces bounding boxes from
   a different screenshot that happened to share the current file's
