@@ -1,183 +1,197 @@
-# Project: SETS-WARP
+# sto-warp — Project Context
 
-## Purpose
-
-Star Trek Online game build creator with screenshot-based build recognition.
-
----
-
-## SETS — STO Equipment and Trait Selector
-
-Main tool for build creation. A planning tool for ship and ground builds as well as space and ground skill trees for Star Trek Online, developed by the STO Community Developers.
-
-**Features:**
-- Plan space and ground builds on any ship.
-- Build without being restricted to owned items.
-- Share builds (JSON and PNG format); import shared builds.
-- Skill tree planning with free point allocation (not possible in-game).
-- Export builds in Markdown format.
-- Open the wiki page of any item via context menu.
-
-**Website:** https://stobuilds.com/apps/sets
-**GitHub:** https://github.com/STOCD/SETS
+> **Scope of this document.** Design intent, repo layout, and a map of
+> where to find the details. Implementation details live in the
+> linked documents — this file does not duplicate them.
 
 ---
 
-## WARP — Weaponry & Armament Recognition Platform
+## 1. What sto-warp is
 
-Module for detecting Star Trek Online builds from screenshots using ML models. Works fully locally, with optional community knowledge synchronization via a backend server.
+**sto-warp** is a Star Trek Online screenshot recognition + ML training
+toolkit. It reads STO screenshots and identifies every slotted item
+(weapons, consoles, traits, BOFF abilities, …), and ships with a
+trainer UI to review/correct those results and feed them back into the
+community model.
 
----
+It is the standalone successor to the **WARP / WARP CORE** modules that
+used to live inside the **sets-warp** build planner. The split was
+motivated by:
 
-## Main Assumptions
+- **Independent release cadence.** Recognition and trainer evolve
+  faster than the SETS build planner; bundling them forced lockstep
+  releases.
+- **Distribution.** sto-warp ships as its own pipx-installable package
+  (`sto-warp`, console script of the same name) with no hard
+  dependency on a build planner.
+- **Reusability.** Other planners or tools can consume sto-warp as a
+  library; a thin **bridge package** (e.g. `sets-warp-bridge`) is the
+  intended way to publish recognised builds into SETS or any other
+  consumer.
 
-1. **All data is synchronized via SyncManager** — downloads item icons, ship images, and cargo data from GitHub and stowiki. Note: stowiki is currently blocked by Cloudflare anti-bot protection (active bug; no bypass implemented yet). As a workaround, cargo data falls back to the GitHub cache mirror (`STOCD/SETS-Data`).
-2. **All code comments and program communication messages are in English.**
-
-
----
-
-## SyncManager — `src/syncmanager.py`
-
-Downloads and updates assets from GitHub. Uses the GitHub Tree API (SHA1 + size) to detect changed or missing files, then downloads only what is needed using a bounded thread pool.
-
-**Asset groups (GitHub-backed, from `STOCD/SETS-Data`):**
-- `images/` — Item icons (equipment, trait, ability icons)
-- `ship_images/` — Ship images
-- `cargo/` — Cargo data JSON files (equipment, traits, ships, etc.)
-
-**Wiki-only groups (no GitHub mirror, downloaded on demand):**
-- Boff ability icons — suffix `_icon_(Federation).png`
-- Skill icons — suffix `.png`
-
-**Download discipline:**
-- Max 5 concurrent threads
-- 404 → permanent failure, no retry
-- 403 → if repeated 3× for the same source, that source is disabled for the session
-- Other errors → retried up to `MAX_RETRIES=1` times with `RETRY_DELAY_S=3` pause
-- Stall timeout: 10 seconds of no data = abort attempt
-
-**Cargo data fallback chain** (in `Downloader.download_cargo_table`):
-1. Try stowiki Cargo API directly (currently blocked by Cloudflare → usually fails)
-2. Fall back to GitHub cache (`STOCD/SETS-Data/cargo/<filename>`)
-3. If both fail → fall back to local cache (any age); if no cache → `sys.exit(1)`
-
-Cache age: cargo data is re-downloaded after 7 days.
-
-**Known issue:** `cloudscraper` and `curl_cffi` are listed in `pyproject.toml` dependencies but are **not imported or used anywhere in the codebase**. They were likely added in anticipation of a Cloudflare bypass implementation that was never completed. The current `Downloader` uses plain `requests.Session` with a Firefox User-Agent header as the only bot-detection mitigation.
+Distribution: **pipx → PyPI → native packages** (Arch AUR, `.deb`,
+`.rpm`, Windows MSI). See [`INSTALLATION.md`](INSTALLATION.md).
 
 ---
 
-## WARP Module Architecture
+## 2. The two halves — WARP and WARP CORE
 
+| Half        | Role                                                                  | Entry path                |
+|-------------|-----------------------------------------------------------------------|---------------------------|
+| **WARP**    | Detection pipeline. OCR + layout + icon matching → slot assignments.  | `warp/recognition/`       |
+| **WARP CORE** | Trainer UI. Reviews WARP output, captures corrections, fine-tunes.  | `warp/trainer/`           |
 
-### Main Modules
+Strict separation of concerns — enforced by the core rule in
+[`CLAUDE.md`](CLAUDE.md):
 
-#### `warp/recognition/`
+> **WARP = detection. WARP CORE = trains WARP.
+> `annotations.json` = training data ONLY.**
 
-| File | Responsibility |
-|---|---|
-| `text_extractor.py` | OCR — extracts ship name, type, tier, and screen type from a screenshot. Two-stage scan: (1) fast partial scan (top-right + bottom) for traits/boffs/spec headers; (2) full-image scan fallback for MIXED layouts. Ship info uses wide top-band (20% height) scan anchored on Tier token (`T6-X2` etc.). Slot labels used as screen type signals: space equipment labels (`Fore Weapons`, `Warp Core`, etc.), ground labels (`Kit Modules`, `Body Armor`, etc.). |
-| `screen_classifier.py` | Classifies screenshot type using a two-stage pipeline: (1) PyTorch MobileNetV3-Small (`.pt` native format, fine-tuned locally); (2) session k-NN on HSV histograms as fallback. OCR keyword fallback from `text_extractor.py` is used when both ML stages are uncertain. |
-| `layout_detector.py` | Detects icon bounding boxes per slot. Pipeline: (1) confirmed annotations used directly as ground-truth bboxes when available; (2) pixel analysis — counts bright icon cells scanning right-to-left, single-slot rows (Deflector, Engines, Shield, Warp Core) always use profile count exactly; (3) learned layouts (saved anchors with slot_counts); (4) default calibration anchors. |
-| `icon_matcher.py` | Matches a cropped icon against the SETS image cache. Pipeline: (1) multi-scale template matching (cv2 TM_CCOEFF_NORMED) with session examples; (2) HSV color histogram k-NN; (3) local PyTorch EfficientNet-B0 (`.pt`, fine-tuned on confirmed crops); (4) HuggingFace ONNX fallback. |
-
-#### `warp/trainer/`
-
-| File | Responsibility |
-|---|---|
-| `trainer_window.py` | WARP CORE — main trainer UI window (QMainWindow). Review, annotate, and correct WARP recognition results. Features: auto-accept checkbox (threshold-based, persisted via QSettings), keyboard shortcuts (Alt+A add bbox, Alt+R remove, Enter accept, Del remove), two-pass icon matching (slot-restricted pass 1, unrestricted fallback pass 2 when conf < 0.40), duplicate bbox overlap warning on confirm. |
-| `annotation_widget.py` | Widget for annotating individual icon crops (confirm / reject / relabel). |
-| `training_data.py` | `TrainingDataManager` — manages confirmed annotation crops on disk. Includes `repair_crop_index()` for data consistency, `_sync_crop_index()` for rename/re-export on update. |
-| `local_trainer.py` | `LocalTrainWorker` (QThread) — fine-tunes EfficientNet-B0 on confirmed annotations. Saves native PyTorch `.pt` format (replaced ONNX dynamo exporter which produced uniform-output models). |
-| `screen_type_trainer.py` | `ScreenTypeTrainerWorker` — fine-tunes MobileNetV3-Small. Saves native PyTorch `.pt` format. |
-| `sync.py` | Syncs training data to/from HuggingFace Hub (`SyncWorker`, `HFTokenDialog`). |
-
-#### `warp/knowledge/`
-
-| File | Responsibility |
-|---|---|
-| `sync_client.py` | `WARPSyncClient` — non-blocking community knowledge sync. Downloads `knowledge.json` (pHash → item_name overrides) from the WARP backend. Uploads confirmed crops (rate-limited to 200/day per installation). |
-
-#### `warp/tools/` (developer utilities, not part of the user-facing app)
-
-| File | Responsibility |
-|---|---|
-| `scraper.py` | Scrapes cargo data from stowiki and `vger.stobuilds.com`; builds the JSON files used by SETS. |
-| `approve_staging.py` | Approves staged community contributions on the backend. |
-| `check_db.py` | Validates the knowledge database. |
-| `debug_fetch.py` | Debug helper for fetching and inspecting raw wiki responses. |
-| `test_pipeline.py` | End-to-end test of the full WARP recognition pipeline. |
-
-### Import Pipeline (`warp/warp_importer.py`)
-
-Full pipeline per screenshot:
-
-1. `TextExtractor` reads ship name, type, and tier from screenshot (OCR runs in WARP dialog mode; skipped in WARP CORE trainer mode via `from_trainer=True` flag).
-2. `ShipDB` looks up exact slot counts from `ship_list.json` (783 ships). **Lookup order:**
-   a. Exact `type` field match
-   b. Word-subset match — OCR words ⊆ DB type words (handles omitted subtype words like `"Fleet Temporal Science Vessel"` → `"Fleet Nautilus Temporal Science Vessel"`); when multiple candidates, ranked by boff seating similarity (Jaccard) then fewest extra words
-   c. Standard fuzzy match (cutoff 0.68)
-   d. Keyword-based fallback profile
-3. Confirmed annotations loaded from `annotations.json` — used to:
-   - Override slot counts (confirmed counts are authoritative)
-   - Supply exact ground-truth bboxes (bypasses pixel analysis)
-   - Provide ship name / type / tier when OCR is unavailable
-   - Extract boff seating for ship disambiguation
-4. Pixel-count profile refinement (only for slots not covered by confirmed annotations): `_profile_from_pixel_counts()` matches pixel counts against `_KEYWORD_PROFILES` to infer unmeasurable slots (Sec-Def, Experimental, Hangars).
-5. `LayoutDetector` finds bounding boxes per slot using constrained profile.
-6. `SETSIconMatcher` matches each cropped icon. Items filtered by `SLOT_VALID_TYPES` (type-to-slot compatibility) and `MIN_ACCEPT_CONF = 0.40`.
-7. Results written to `sets_app.build` via `slot_equipment_item` / `slot_trait_item`.
-8. `sets_app.autosave()` called.
-
-### Dialog Flow (`warp/warp_dialog.py`)
-
-Multi-step QDialog:
-1. Select build type (SPACE / GROUND / SPACE_SKILLS / GROUND_SKILLS)
-2. Select folder of screenshots
-3. Background worker (`_ImportWorker` QThread) runs the pipeline with progress bar
-4. Results applied automatically to current SETS build
-5. Ship selection: fuzzy-matched ship type → `cache.ships` lookup → `select_ship` logic (button text, image load via `exec_in_thread` from `src.widgets`, tier combo, `align_space_frame`, `_save_session_slots` / `_restore_session_slots`)
-
-### ShipDB Boff Seating (`warp/warp_importer.py` — `ShipDB`)
-
-Two helper methods support ship disambiguation via boff seating:
-
-- `extract_boff_seating_from_annotations(anns)` — groups confirmed `Boff *` annotations by y-proximity (≤10px = same row/seat), counts abilities per type, maps to ShipDB profession strings. Rank inferred from ability count (4=Commander, 3=Lt Commander, 2=Lieutenant, 1=Ensign; -1=unknown for mixed rows).
-- `score_ship_boff_match(ship_entry, detected_seats)` — Jaccard similarity between detected profession set and ship's `boffs` field profession set. Returns 0.0–1.0 (0.5 = no data / neutral).
-
-### Community Knowledge Sync (`warp/knowledge/sync_client.py`)
-
-- Backend: `https://sets-warp-backend.onrender.com`
-- `knowledge.json` — community-confirmed pHash → item_name overrides, refreshed every 24 hours
-- Each installation has a random UUID (`install_id`) used for deduplication only (not for user identity)
-- Contributions rate-limited to 200 per installation per day
-- All network calls are non-blocking (daemon threads) and silent on failure
+WARP must never short-circuit to `annotations.json` to "look up" what an
+icon is. That data is ground truth for the trainer, not for the
+detector. Bypassing this hides real recognition bugs.
 
 ---
 
-## Technologies
+## 3. Repo map (one line per area)
 
-| Technology | Role |
-|---|---|
-| Python 3.14.x | Runtime (portable, via python-build-standalone) |
-| PySide6 ≥6.7, <6.10 | GUI framework (all windows, widgets, dialogs) |
-| OpenCV (`opencv-python-headless`) | Template matching, image cropping, histogram comparison |
-| EasyOCR | OCR for ship name / screen type extraction from screenshots |
-| ONNX Runtime | Inference fallback for icon classifier (HuggingFace ONNX model) |
-| PyTorch + torchvision | Local training and inference for icon classifier (EfficientNet-B0) and screen classifier (MobileNetV3-Small); native `.pt` format (replaced ONNX dynamo exporter) |
-| HuggingFace Hub | Download of pre-trained ONNX models; upload/sync of training data |
-| requests | HTTP client for wiki/GitHub downloads |
-| cloudscraper, curl_cffi | Listed in dependencies but **not currently used** — intended for future Cloudflare bypass |
-| NumPy, SciPy, scikit-image | Image processing support |
-| Shapely, pyclipper | Geometric operations (layout detection) |
+```
+sto-warp/
+├── pyproject.toml          # package metadata, entry point: sto-warp = warp.cli:main
+├── README.md               # user-facing entry
+├── INSTALLATION.md         # install methods
+├── CHANGELOG.md            # release notes
+├── CLAUDE.md               # AI-assisted-dev rules and core architectural rule
+├── PROJECT_CONTEXT.md      # this file
+├── docs/                   # technical + user docs (see §4)
+└── warp/
+    ├── cli.py              # console-script entry point
+    ├── config.py           # XDG paths, install_id
+    ├── debug.py            # standalone logger (file + stderr mirror)
+    ├── recognition/        # detection — see docs/ML_PIPELINE.md, docs/warp_ml_roadmap.md
+    ├── trainer/            # WARP CORE — trainer window, fine-tuning workers, sync
+    ├── knowledge/          # community knowledge + crops sync — see docs/SYNC_ARCHITECTURE.md
+    ├── data/               # cargo + asset sync — see docs/SYNC_ARCHITECTURE.md, docs/CARGO_DATA_PLAN.md
+    ├── sync/               # (reserved for future sync utilities)
+    ├── gui/                # launcher, cold-start splash, sync coordinator, log view
+    ├── tools/              # developer utilities (scrapers, validators)
+    ├── models/             # downloaded at runtime — icon/screen classifiers (.pt + labels)
+    ├── resources/          # bundled icons / themes
+    ├── training_data/      # local training crops & annotations (user-local)
+    ├── warp_importer.py    # screenshot-to-build orchestration
+    └── sets_export.py      # SETS v3.0.0 JSON exporter
+```
+
+Runtime artefacts (downloaded on first run, never committed):
+`warp/models/` (.pt + label maps), `warp/data/` cache,
+`~/.config/warp/` (install_id, logs, knowledge cache, marker file,
+crops manifest).
 
 ---
 
-## Known Issues / Active Bugs
+## 4. Where to find the details
 
-1. **Cloudflare blocking stowiki** — `download_cargo_table` falls back to GitHub cache, but the cache may lag behind the live wiki. `cloudscraper` and `curl_cffi` are installed but not wired up.
-2. **`cloudscraper` / `curl_cffi` dead imports** — present in `pyproject.toml` but never imported. Either implement the bypass or remove the dependencies.
-3. **`requests_html`, `lxml_html_clean`, `cssselect`** — also in `pyproject.toml` but not visibly used in the main codebase (may be used indirectly or are leftovers).
-4. **Fore/aft weapon cross-validation gap** — WARP does not pre-filter fore-only weapons (e.g. Dual Heavy Cannons) from Aft slots. SETS handles this at the widget level; WARP relies on icon matcher confidence and type validation only.
-5. **Boff rank unknown in MIXED screens** — boff ability rows in MIXED screenshots cannot be reliably split into individual seats (abilities from multiple seats share similar y-coordinates). Rank is inferred from ability count per visual row, which may be incorrect for mixed-type rows. A dedicated BOFFS screen provides accurate rank data via OCR.
+This file intentionally stops at "what exists and why". For the
+internals of each area, the canonical references are:
+
+### User-facing
+
+| Document                                                        | Audience            | Covers                                                                                  |
+|-----------------------------------------------------------------|---------------------|-----------------------------------------------------------------------------------------|
+| [`README.md`](README.md)                                        | New user            | Install, first-run download, quick orientation                                          |
+| [`INSTALLATION.md`](INSTALLATION.md)                            | Installer           | pipx, native packages, desktop entry, data locations                                    |
+| [`docs/WARP_GUIDE.md`](docs/WARP_GUIDE.md)                      | End user            | Full walkthrough: launcher tabs, recognise→export, WARP CORE, first-run setup splash    |
+| [`CHANGELOG.md`](CHANGELOG.md)                                  | Anyone              | Release notes (pre-1.0 — fresh)                                                         |
+
+### Technical — subsystems
+
+| Document                                                                  | Subsystem                                                                       |
+|---------------------------------------------------------------------------|---------------------------------------------------------------------------------|
+| [`docs/SYNC_ARCHITECTURE.md`](docs/SYNC_ARCHITECTURE.md)                  | Cold-start splash, periodic refresh, TTLs, marker file, all 7 data sources      |
+| [`docs/ML_PIPELINE.md`](docs/ML_PIPELINE.md)                              | Local + community training, model delivery, HF backend boundary                 |
+| [`docs/warp_ml_roadmap.md`](docs/warp_ml_roadmap.md)                      | Layout-detector strategies, full-scan pipeline, current status                  |
+| [`docs/BOFF_DETECTION.md`](docs/BOFF_DETECTION.md)                        | BOFF panel detection — colour markers + classifier                              |
+| [`docs/TRAIT_DETECTION.md`](docs/TRAIT_DETECTION.md)                      | Trait grid detection — structure-first, ML probe per section                    |
+| [`docs/sto_slots_rules.md`](docs/sto_slots_rules.md)                      | STO slot rules + how WARP enforces (or doesn't) each constraint                 |
+| [`docs/CARGO_DATA_PLAN.md`](docs/CARGO_DATA_PLAN.md)                      | Cargo-data sourcing rationale (STOCD/SETS-Data over local scraper)              |
+| [`docs/REMOTE_SYNC_AUDIT.md`](docs/REMOTE_SYNC_AUDIT.md)                  | Backend/HF capacity audit, channels in use, scaling headroom                    |
+| [`docs/gpu_setup.md`](docs/gpu_setup.md)                                  | Optional CUDA setup (embedder retraining only — most users don't need this)     |
+
+### Repository rules
+
+| Document                                                                  | Purpose                                                                         |
+|---------------------------------------------------------------------------|---------------------------------------------------------------------------------|
+| [`CLAUDE.md`](CLAUDE.md)                                                  | Core architectural rule, language rules, logging conventions, repo discipline   |
+
+---
+
+## 5. Runtime stack (summary)
+
+Full per-component rationale lives in the linked docs above; this
+section only lists what is on disk.
+
+- **Python 3.14+** — runtime.
+- **PySide6** — Qt 6 GUI (launcher, WARP CORE, dialogs, splash).
+- **PyTorch + torchvision** — local training and inference (native
+  `.pt` for both icon classifier and screen classifier).
+- **OpenCV (`opencv-python-headless`)** — template matching, crop
+  geometry, histogram comparison.
+- **EasyOCR** — ship name / tier / slot label extraction.
+- **HuggingFace Hub** — read-only client-side: models, knowledge,
+  community crops tarball, icon-equivalence map. Write side
+  (contributions, screen-type uploads) is server-side only, on the
+  sto-warp Space backend.
+- **`requests`** — HTTP for GitHub raw / backend.
+
+Logging policy: **always** through `warp.debug.log` (stderr + file
+mirror at `~/.config/warp/warp_debug.log`). `logging.getLogger(...)`
+is forbidden because it bypasses the file mirror. See
+[`CLAUDE.md`](CLAUDE.md) for the full convention.
+
+---
+
+## 6. External boundaries (no SETS coupling at runtime)
+
+sto-warp does not import the SETS build planner. The two interaction
+modes intended for the planner are:
+
+1. **Library use.** A bridge package imports sto-warp (`warp.*`) and
+   forwards results into its own data model. The bridge owns all
+   planner-specific knowledge.
+2. **JSON export.** `warp/sets_export.py` produces a SETS-v3.0.0
+   compatible build JSON that a planner can ingest as a file.
+
+Data origins consumed by sto-warp itself:
+
+- **`STOCD/SETS-Data`** (GitHub raw) — `equipment.json`, `traits.json`,
+  `ships.json`, `boff_abilities.json`, item icon mirror, ship images.
+  No live stowiki dependency.
+- **sto-warp Space backend** (HF Spaces) — `/knowledge`,
+  `/model/version`, contribution endpoints. Holds the only HF write
+  token; the client is read-only against HF.
+- **HF dataset `sets-sto/sto-icon-dataset`** — community-confirmed
+  crops tarball + `icon_equivalence.json`.
+
+For TTLs, fetch order, failure handling, and the splash that gates the
+first run, see [`docs/SYNC_ARCHITECTURE.md`](docs/SYNC_ARCHITECTURE.md).
+
+---
+
+## 7. Active gaps and constraints
+
+Tracked in their natural homes — listed here only as pointers:
+
+- **Fore/aft weapon cross-validation gap** — see
+  [`docs/sto_slots_rules.md`](docs/sto_slots_rules.md) ("Weaponry").
+- **BOFF rank ambiguity in MIXED screens** — see
+  [`docs/BOFF_DETECTION.md`](docs/BOFF_DETECTION.md).
+- **Layout detection strategy ladder** — see
+  [`docs/warp_ml_roadmap.md`](docs/warp_ml_roadmap.md).
+- **Cargo / knowledge / model / crops freshness** — see
+  [`docs/SYNC_ARCHITECTURE.md`](docs/SYNC_ARCHITECTURE.md) §7
+  ("Cargo-staleness postmortem") for the most recent class-of-bug
+  fix and its prevention.
+
+When adding a new constraint or gap, document it in the subsystem doc
+that owns it, then add a one-line pointer here if it crosses subsystem
+boundaries.
