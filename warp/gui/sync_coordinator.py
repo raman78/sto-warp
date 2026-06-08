@@ -164,6 +164,16 @@ class SyncCoordinator(QObject):
         self.request_refresh(force=False)
         self._timer.start()
 
+    def arm_periodic_only(self):
+        """Arm the periodic timer without running an immediate cycle.
+
+        Used after the cold-start splash has already driven every sync
+        path to completion in a foreground dialog; firing another full
+        refresh on launch would just re-walk the freshly-populated
+        mirrors and spam the status bar."""
+        self._timer.start()
+        self.status.emit('Sync complete.')
+
     def stop(self):
         """Cooperative stop — never blocks the UI thread for more than 200 ms.
 

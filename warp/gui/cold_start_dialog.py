@@ -1,24 +1,27 @@
 """Blocking splash for the first-run download.
 
 Shown by `maybe_run_cold_start()` between `QApplication()` and
-`LauncherWindow().show()`. Walks the user through:
+`LauncherWindow().show()`. Mirrors `SyncCoordinator`'s full cycle so
+nothing slow leaks into the background after the launcher opens:
 
   1. CARGO     — equipment/ship/trait JSONs from GitHub raw  (~2 s)
-  2. Knowledge — community pHash overrides                   (~1 s)
-  3. Crops     — community icon library (tarball or snapshot, the slow one)
-  4. Equiv     — admin-curated icon equivalence classes      (~1 s)
+  2. Assets    — item icons + ship images mirror             (the long one)
+  3. Knowledge — community pHash overrides                   (~1 s)
+  4. Model     — central model version check                 (~1 s)
+  5. Crops     — community icon library (tarball or snapshot)
+  6. Seed      — icon matcher template index from crops      (~5 s)
+  7. Equiv     — admin-curated icon equivalence classes      (~1 s)
 
 Buttons:
   - Close   → `QApplication.quit()` (clean exit, nothing started yet)
   - Cancel  → warn + dismiss; LauncherWindow starts in degraded mode
               (no SHA pinned → splash will reappear next launch)
 
-Auto-dismisses on successful completion of all four phases.
+Auto-dismisses on successful completion of all phases.
 
-Detection (`is_cold_start()`): no community-crops mirror on disk. We
-deliberately don't gate on CARGO cache, because CARGO has a bundled
-baseline that keeps the app functional offline; the splash is for users
-whose mirror is empty and would otherwise stare at a frozen UI.
+Detection (`is_cold_start()`): empty crops mirror OR empty item-icons
+mirror. We don't gate on CARGO cache because CARGO has a bundled baseline
+that keeps the app functional offline.
 """
 from __future__ import annotations
 
@@ -36,18 +39,23 @@ from warp.debug import syslog as log
 # ── Cold-start detection ──────────────────────────────────────────────────
 
 def is_cold_start() -> bool:
-    """True when the community-crops mirror is empty.
+    """True when any large mirror is empty.
 
-    Uses crop count as the proxy because cargo's bundled baseline means
-    "no cargo cache" doesn't actually break the app — but "no crops" does
-    visibly degrade recognition. Showing the splash on every cargo-only
-    cold start would be noise.
+    Two independent proxies: community crops (HF tarball) and item icons
+    (GitHub asset sync). Either being empty means the recognizer is in a
+    visibly degraded state and the user would otherwise stare at a
+    frozen UI while thousands of files trickle in. CARGO is excluded —
+    its bundled baseline keeps the app functional offline.
     """
     from warp.knowledge.community_crops import community_crops_dir
+    from warp.data.cargo import icons_dir
     crops = community_crops_dir()
-    if not crops.exists():
+    if not crops.exists() or not any(crops.glob('*.png')):
         return True
-    return not any(crops.glob('*.png'))
+    icons = icons_dir()
+    if not icons.exists() or not any(icons.glob('*.png')):
+        return True
+    return False
 
 
 # ── Worker ────────────────────────────────────────────────────────────────
@@ -81,8 +89,11 @@ class _ColdStartWorker(QThread):
     def run(self) -> None:
         steps: list[tuple[str, Callable[[], None]]] = [
             ('cargo',     self._do_cargo),
+            ('assets',    self._do_assets),
             ('knowledge', self._do_knowledge),
+            ('model',     self._do_model),
             ('crops',     self._do_crops),
+            ('seed',      self._do_seed),
             ('equiv',     self._do_equiv),
         ]
         for phase, fn in steps:
@@ -109,6 +120,22 @@ class _ColdStartWorker(QThread):
         self.phase_progress.emit('cargo', 0, 0)
         cargo.refresh_all(force=False)
 
+    def _do_assets(self) -> None:
+        from warp.data.asset_sync import AssetSyncManager
+
+        # AssetSync's on_progress fires once per file across two groups
+        # (item icons, ship images). We surface raw counts — totals jump
+        # at group boundaries, which is fine because the user mostly
+        # cares about seeing forward motion.
+        def cb(label: str, current: int, total: int) -> None:
+            if total > 0:
+                self.phase_progress.emit('assets', current, total)
+            else:
+                self.phase_progress.emit('assets', 0, 0)
+
+        self.phase_progress.emit('assets', 0, 0)
+        AssetSyncManager().run(on_progress=cb)
+
     def _do_knowledge(self) -> None:
         from warp.knowledge.sync_client import WARPSyncClient
         self.phase_progress.emit('knowledge', 0, 0)
@@ -116,6 +143,11 @@ class _ColdStartWorker(QThread):
         # Block on the synchronous worker (constructor spawns background
         # threads; we explicitly call the worker to wait for completion).
         client._download_knowledge_bg(force=False)
+
+    def _do_model(self) -> None:
+        from warp.trainer.model_updater import ModelUpdater
+        self.phase_progress.emit('model', 0, 0)
+        ModelUpdater()._bg_check(on_updated=None)
 
     def _do_crops(self) -> None:
         from warp.knowledge.community_crops import CommunityCropsClient
@@ -129,6 +161,11 @@ class _ColdStartWorker(QThread):
         self.phase_progress.emit('crops', 0, 0)
         CommunityCropsClient().fetch(progress_cb=cb)
 
+    def _do_seed(self) -> None:
+        from warp.recognition.icon_matcher import SETSIconMatcher
+        self.phase_progress.emit('seed', 0, 0)
+        SETSIconMatcher.seed_from_community_crops()
+
     def _do_equiv(self) -> None:
         from warp.knowledge.sync_client import WARPSyncClient
         self.phase_progress.emit('equiv', 0, 0)
@@ -139,8 +176,11 @@ class _ColdStartWorker(QThread):
 
 _PHASE_LABELS = {
     'cargo':     'CARGO data',
+    'assets':    'Item & ship icons',
     'knowledge': 'Community knowledge',
+    'model':     'Recognition model',
     'crops':     'Community icon library',
+    'seed':      'Matcher template index',
     'equiv':     'Icon equivalence',
 }
 
@@ -189,7 +229,14 @@ class _PhaseRow(QWidget):
         if total > 0:
             self._bar.setRange(0, total)
             self._bar.setValue(done)
-            self._bar.setFormat(f'{done/1e6:.1f} / {total/1e6:.1f} MB ({100*done//total}%)')
+            pct = 100 * done // total
+            # Heuristic: crops streams a single ~hundreds-of-MB tarball so
+            # totals are byte-sized; everything else (assets) counts files.
+            if total >= 1_000_000:
+                self._bar.setFormat(
+                    f'{done/1e6:.1f} / {total/1e6:.1f} MB ({pct}%)')
+            else:
+                self._bar.setFormat(f'{done} / {total} files ({pct}%)')
         else:
             self._bar.setRange(0, 0)
             self._bar.setFormat('')
@@ -227,6 +274,9 @@ class ColdStartDialog(QDialog):
         # "user pressed Close → kill the app" from "user pressed Cancel →
         # start LauncherWindow degraded".
         self.closed_via_quit = False
+        # Set by _on_all_done — used by main() to skip the launcher's
+        # immediate SyncCoordinator cycle (we just did it all).
+        self.completed_cleanly = False
 
         intro = QLabel(
             'First run: downloading reference data needed by the recognizer.\n'
@@ -300,6 +350,7 @@ class ColdStartDialog(QDialog):
             row.setStatus('failed', err)
 
     def _on_all_done(self) -> None:
+        self.completed_cleanly = True
         self.accept()
 
     # ── Button handlers ──────────────────────────────────────────────────
@@ -329,17 +380,26 @@ class ColdStartDialog(QDialog):
 
 # ── Top-level entry ───────────────────────────────────────────────────────
 
-def maybe_run_cold_start() -> bool:
+def maybe_run_cold_start() -> tuple[bool, bool]:
     """Show the splash if cold start is detected. Blocks until dismissal.
 
     Returns:
-        True  — proceed to launch LauncherWindow (downloads complete OR
-                user pressed Cancel and accepted degraded mode).
-        False — caller should NOT launch the window (user pressed Close
-                and the QApplication is already going to quit).
+        (should_launch, skip_initial_sync)
+
+        should_launch     — False when the user pressed Close (caller
+                            should not open LauncherWindow); True
+                            otherwise.
+        skip_initial_sync — True when the splash ran every phase to
+                            completion, so the launcher's
+                            SyncCoordinator should arm its periodic
+                            timer without re-running the cycle that
+                            just finished. False for warm starts
+                            (nothing happened) and for cancelled splashes
+                            (some phases didn't run — let the
+                            background sync take care of them).
     """
     if not is_cold_start():
-        return True
+        return (True, False)
 
     log.info('cold-start: mirror empty — showing splash')
     dialog = ColdStartDialog()
@@ -350,7 +410,12 @@ def maybe_run_cold_start() -> bool:
         app = QApplication.instance()
         if app is not None:
             app.quit()
-        return False
+        return (False, False)
 
-    log.info('cold-start: splash dismissed — proceeding to LauncherWindow')
-    return True
+    if dialog.completed_cleanly:
+        log.info('cold-start: splash finished all phases — '
+                 'skipping launcher initial sync cycle')
+        return (True, True)
+
+    log.info('cold-start: splash dismissed early — proceeding degraded')
+    return (True, False)

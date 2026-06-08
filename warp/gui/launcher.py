@@ -88,8 +88,12 @@ _SETTINGS_STATE    = 'launcher/window_state'
 
 
 class LauncherWindow(QMainWindow):
-    def __init__(self):
+    def __init__(self, skip_initial_sync: bool = False):
         super().__init__()
+        # Set by the cold-start splash flow: when True, _init_sync arms
+        # only the periodic timer instead of re-running the cycle that
+        # the splash already drove to completion.
+        self._skip_initial_sync = skip_initial_sync
         self.setWindowTitle('sto-warp')
         _app_icon = _rounded_app_icon()
         if not _app_icon.isNull():
@@ -204,9 +208,15 @@ class LauncherWindow(QMainWindow):
         self._coord.status.connect(self._on_status)
 
         # Kick off the initial cycle on the next event loop tick so the
-        # window is visible before sync prints to the status bar.
+        # window is visible before sync prints to the status bar. When
+        # the cold-start splash already drove every phase to completion
+        # we arm only the periodic timer instead — re-running the same
+        # downloads immediately would waste bandwidth and spam logs.
         from PySide6.QtCore import QTimer
-        QTimer.singleShot(500, self._coord.start)
+        if self._skip_initial_sync:
+            QTimer.singleShot(500, self._coord.arm_periodic_only)
+        else:
+            QTimer.singleShot(500, self._coord.start)
 
     # ── Desktop integration ─────────────────────────────────────────
 
@@ -352,10 +362,11 @@ def main(argv: list[str] | None = None) -> int:
     # splash blocks the launcher so users see explicit progress instead
     # of staring at a frozen UI. No-op on warm starts.
     from warp.gui.cold_start_dialog import maybe_run_cold_start
-    if not maybe_run_cold_start():
+    should_launch, skip_initial_sync = maybe_run_cold_start()
+    if not should_launch:
         return 0
 
-    win = LauncherWindow()
+    win = LauncherWindow(skip_initial_sync=skip_initial_sync)
     win.show()
     return app.exec()
 
