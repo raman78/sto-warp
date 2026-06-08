@@ -40,9 +40,14 @@ def main() -> int:
     print(f'dataset SHA: {current_sha}')
 
     # Skip rebuild when the existing tarball already matches the dataset.
+    # Explicit token=token everywhere — implicit env pickup in
+    # huggingface_hub is inconsistent across call sites; without it the
+    # parallel downloads run anonymous and trip the HF rate-limit at
+    # ~2000 files (job times out after the 60-minute stall).
     try:
         existing_path = hf_hub_download(
             repo_id=REPO, repo_type=REPO_TYPE, filename=MANIFEST_FILE,
+            token=token,
         )
         existing = json.loads(Path(existing_path).read_text())
         if existing.get('dataset_sha_at_build') == current_sha:
@@ -61,6 +66,8 @@ def main() -> int:
             local_dir=str(tmp),
             allow_patterns=['data/crops/*.png', 'data/annotations.jsonl'],
             revision=current_sha,
+            token=token,
+            max_workers=4,
         )
 
         crops_dir = tmp / 'data' / 'crops'
