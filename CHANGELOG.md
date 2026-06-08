@@ -11,13 +11,17 @@ details live in the git history.
 ## [Unreleased]
 
 ### Added
-- First-run setup is now driven by a blocking splash screen that walks
-  you through the four cold-start downloads (CARGO data, community
-  knowledge, the community icon library, and icon equivalence classes)
-  with a live progress bar for the slow icon-library step. You can
-  **Close** to exit cleanly or **Cancel** to start sto-warp without
-  the full library (recognition quality is reduced for the session and
-  the splash reappears on next launch so the download can finish).
+- Every launch now runs through a startup-sync splash that walks you
+  through seven phases (CARGO data, item & ship icons, community
+  knowledge, recognition model, the community icon library, the
+  matcher template index, and icon equivalence) with live progress
+  bars for the slow steps. The splash only paints when there is real
+  work to do — warm starts where everything is up to date finish in
+  about a second and the window never appears. On a cold start or
+  after an interrupted download you can **Close** to exit cleanly or
+  **Cancel** to start sto-warp without the full library (recognition
+  quality is reduced for the session and the splash reappears on next
+  launch so the download can finish).
 
 ### Changed
 - The community icon library now ships as a single tarball that is
