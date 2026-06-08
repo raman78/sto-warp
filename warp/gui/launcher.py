@@ -346,6 +346,15 @@ def main(argv: list[str] | None = None) -> int:
     # share the same look without each having to call apply_dark_style.
     from warp.style import apply_dark_style
     apply_dark_style(app)
+
+    # First-run splash: on a fresh install the community-crops mirror is
+    # empty and HF-rate-limited downloads can take many minutes. The
+    # splash blocks the launcher so users see explicit progress instead
+    # of staring at a frozen UI. No-op on warm starts.
+    from warp.gui.cold_start_dialog import maybe_run_cold_start
+    if not maybe_run_cold_start():
+        return 0
+
     win = LauncherWindow()
     win.show()
     return app.exec()
