@@ -34,10 +34,16 @@ enough — at that point the local k-NN layer goes away.
 """
 from __future__ import annotations
 
+import hashlib
+import json
+import tarfile
 import time
+import urllib.error
+import urllib.request
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Callable
 
 from warp import userdata
 from warp.debug import syslog as log
@@ -47,10 +53,23 @@ HF_REPO_TYPE    = "dataset"
 
 _ALLOW_PATTERNS = ['data/annotations.jsonl', 'data/crops/*.png']
 
+# Prebuilt tarball + manifest published by the dataset-tooling workflow.
+# Manifest is tiny JSON; tarball is the concatenated crops + annotations.
+# Filenames are pinned because the workflow uploads to these exact paths.
+_MANIFEST_FILE = 'crops_manifest.json'
+_TARBALL_FILE  = 'crops.tar'
+_HF_RESOLVE_URL = (
+    f'https://huggingface.co/datasets/{HF_DATASET_REPO}/resolve/main'
+)
+
 _CLEANUP_GUARD_FRACTION  = 0.30
 _CLEANUP_GUARD_MIN_LOCAL = 100
 _TRASH_KEEP_LAST         = 3
 _MAX_DOWNLOAD_WORKERS    = 3   # HF rate-limits anonymous parallel HEADs; 8 hits 429+108s retry waits
+
+# Progress signature: (downloaded_bytes, total_bytes, label).
+# Used by the splash dialog (commit 3) to drive its progress bar.
+ProgressCb = Callable[[int, int, str], None]
 
 
 def community_root() -> Path:
@@ -92,7 +111,14 @@ class CommunityCropsSnapshot:
 class CommunityCropsClient:
     """Downloads + caches the approved-truth crops from HF Hub."""
 
-    def fetch(self) -> CommunityCropsSnapshot:
+    def __init__(self) -> None:
+        # Set by fetch(); read by _try_tarball_seed for byte-level progress.
+        # Kept as instance state so we don't have to thread it through every
+        # helper. Reset on each fetch() call.
+        self._progress_cb: ProgressCb | None = None
+
+    def fetch(self, progress_cb: ProgressCb | None = None) -> CommunityCropsSnapshot:
+        self._progress_cb = progress_cb
         try:
             from huggingface_hub import HfApi, hf_hub_download
         except Exception as e:
@@ -165,6 +191,28 @@ class CommunityCropsClient:
         crops_dir.mkdir(parents=True, exist_ok=True)
         local_crops: set[str] = {p.name for p in crops_dir.glob('*.png')}
 
+        # Cold start: thousands of parallel hf_hub_download calls trigger
+        # HF anonymous rate-limit (HTTP 429 + ~110s retry waits per file).
+        # Preferred path: one HTTP GET of a prebuilt tarball published by
+        # the dataset-tooling workflow. Falls through to snapshot_download
+        # when the tarball isn't available (or fails verification).
+        if not local_crops:
+            log.info(
+                f'community_crops: cold start at {revision[:8]} — trying tarball seed'
+            )
+            seeded_sha = self._try_tarball_seed(self._progress_cb)
+            if seeded_sha:
+                local_crops = {p.name for p in crops_dir.glob('*.png')}
+                log.info(
+                    f'community_crops: tarball seeded at {seeded_sha[:8]} — '
+                    f'local now {len(local_crops)} crops'
+                )
+            else:
+                log.info(
+                    'community_crops: tarball unavailable — using snapshot_download'
+                )
+                return self._fallback_full_snapshot(revision)
+
         to_download = upstream_crops - local_crops
         to_remove   = local_crops - upstream_crops
 
@@ -173,17 +221,6 @@ class CommunityCropsClient:
             f'upstream={len(upstream_crops)} local={len(local_crops)} '
             f'+{len(to_download)} -{len(to_remove)}'
         )
-
-        # Cold start: thousands of parallel hf_hub_download calls trigger
-        # HF anonymous rate-limit (HTTP 429 + ~110s retry waits per file).
-        # snapshot_download issues one batched request the Hub handles
-        # gracefully — far faster than N individual GETs at any worker count.
-        if not local_crops and to_download:
-            log.info(
-                f'community_crops: cold start ({len(to_download)} crops) — '
-                f'using snapshot_download instead of per-file delta'
-            )
-            return self._fallback_full_snapshot(revision)
 
         if has_annotations:
             try:
@@ -235,6 +272,117 @@ class CommunityCropsClient:
             self._soft_delete(to_remove)
 
         return True
+
+    def _try_tarball_seed(self, progress_cb: ProgressCb | None) -> str | None:
+        """Seed the mirror from a prebuilt tarball published next to the
+        dataset by the dataset-tooling workflow.
+
+        Flow:
+          1. GET `crops_manifest.json` (small) — tells us tarball size,
+             sha256, and the dataset SHA the tarball was built at.
+          2. Stream-GET `crops.tar` with chunked reads, updating sha256
+             and `progress_cb(bytes_done, total, label)` as it goes.
+          3. Verify sha256 against manifest, refuse extract on mismatch.
+          4. Extract under `community_root()` with `filter='data'`
+             (Python 3.12+ safe extraction, blocks path traversal).
+
+        Returns the dataset SHA the tarball was built at on success
+        (caller proceeds to delta-sync the diff between built_sha and
+        current_sha — usually small). Returns None when no tarball is
+        published, download fails, or verification fails — caller falls
+        back to `_fallback_full_snapshot`.
+        """
+        manifest_url = f'{_HF_RESOLVE_URL}/{_MANIFEST_FILE}'
+        try:
+            req = urllib.request.Request(
+                manifest_url,
+                headers={'User-Agent': 'sto-warp/community-crops'},
+            )
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                manifest = json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            if e.code == 404:
+                log.info('community_crops: no tarball manifest published yet')
+            else:
+                log.warning(f'community_crops: manifest fetch failed: {e}')
+            return None
+        except Exception as e:
+            log.warning(f'community_crops: manifest fetch failed: {e}')
+            return None
+
+        try:
+            built_sha     = str(manifest['dataset_sha_at_build'])
+            tar_sha_want  = str(manifest['tarball_sha256']).lower()
+            tar_bytes_hint = int(manifest.get('tarball_bytes', 0))
+            tar_file      = str(manifest.get('tarball_file', _TARBALL_FILE))
+        except (KeyError, TypeError, ValueError) as e:
+            log.warning(f'community_crops: manifest malformed ({e})')
+            return None
+
+        log.info(
+            f'community_crops: tarball at {built_sha[:8]} — '
+            f'{tar_bytes_hint/1e6:.1f} MB, sha256={tar_sha_want[:12]}…'
+        )
+
+        tar_url = f'{_HF_RESOLVE_URL}/{tar_file}'
+        tmp_path = community_root() / f'.{tar_file}.partial'
+        h = hashlib.sha256()
+        last_log_pct = -10
+        try:
+            req = urllib.request.Request(
+                tar_url, headers={'User-Agent': 'sto-warp/community-crops'})
+            with urllib.request.urlopen(req, timeout=60) as resp:
+                total = int(resp.headers.get('Content-Length', tar_bytes_hint))
+                with open(tmp_path, 'wb') as out:
+                    downloaded = 0
+                    while True:
+                        chunk = resp.read(1 << 16)  # 64 KiB
+                        if not chunk:
+                            break
+                        out.write(chunk)
+                        h.update(chunk)
+                        downloaded += len(chunk)
+                        if progress_cb:
+                            progress_cb(downloaded, total, 'community-crops tarball')
+                        pct = int(100 * downloaded / max(total, 1))
+                        if pct >= last_log_pct + 10:
+                            log.info(
+                                f'community_crops: tarball {pct}% '
+                                f'({downloaded/1e6:.1f}/{total/1e6:.1f} MB)'
+                            )
+                            last_log_pct = pct
+        except Exception as e:
+            log.warning(f'community_crops: tarball download failed: {e}')
+            tmp_path.unlink(missing_ok=True)
+            return None
+
+        actual_sha = h.hexdigest()
+        if actual_sha != tar_sha_want:
+            log.warning(
+                f'community_crops: tarball sha256 mismatch '
+                f'(expected {tar_sha_want[:12]}, got {actual_sha[:12]}) — discarding'
+            )
+            tmp_path.unlink(missing_ok=True)
+            return None
+
+        try:
+            community_crops_dir().mkdir(parents=True, exist_ok=True)
+            with tarfile.open(tmp_path, 'r') as tar:
+                # filter='data' (stdlib in 3.12+) blocks absolute paths,
+                # parent traversal, device files, and symlinks — the
+                # documented safe default for untrusted-but-expected tarballs.
+                tar.extractall(path=community_root(), filter='data')
+        except Exception as e:
+            log.warning(f'community_crops: tarball extract failed: {e}')
+            tmp_path.unlink(missing_ok=True)
+            return None
+        finally:
+            tmp_path.unlink(missing_ok=True)
+
+        log.info(
+            f'community_crops: tarball seeded ({downloaded/1e6:.1f} MB extracted)'
+        )
+        return built_sha
 
     def _soft_delete(self, names: set[str]) -> None:
         """Move stale crops to `.trash/<timestamp>/`.
