@@ -47,9 +47,17 @@ On first run sto-warp downloads:
   Hugging Face hub.
 - Cargo / ship / trait JSON from the community
   [`STOCD/SETS-Data`](https://github.com/STOCD/SETS-Data) repository.
+- Community knowledge (`knowledge.json`), admin icon equivalence map,
+  and a seed tarball of confirmed crops.
 
-Everything is cached under `~/.config/warp/` (or `$XDG_CONFIG_HOME/warp/`
-when set). Nothing is committed to this repository.
+A small **setup splash** blocks the launcher on the very first start
+until all of the above finish, so the application opens with a
+complete data set. On every later run the cache is refreshed
+silently in the background. Everything is cached under
+`~/.config/warp/` (or `$XDG_CONFIG_HOME/warp/` when set). Nothing is
+committed to this repository. See `docs/WARP_GUIDE.md` for the
+user-facing walkthrough and `docs/SYNC_ARCHITECTURE.md` for the
+technical view.
 
 ## License
 

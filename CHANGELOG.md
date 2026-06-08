@@ -33,12 +33,45 @@ details live in the git history.
   falls back to the previous per-file snapshot path.
 
 ### Fixed
+- **Reference data now actually stays fresh.** CARGO (equipment, traits,
+  ships, BOFF abilities) and the curated icon-equivalence list were
+  defined as auto-refreshing on a 24 h window, but no runtime path
+  ever called the refresh — both files sat frozen at whatever
+  revision was current at install time, sometimes for weeks, while
+  the program was launched repeatedly. They are now part of the
+  startup-sync cycle, so every launch re-verifies them against
+  upstream (with a 24 h TTL gate so the actual network call still
+  happens at most once a day per file). The system log shows one
+  line per file per cycle confirming the result (`fresh — skipped`,
+  `unchanged (HTTP 304)`, or `updated`), so you can see verification
+  is happening rather than guess from the absence of errors.
 - The Recognition Review panel no longer surfaces bounding boxes from
   a different screenshot that happened to share the current file's
   name. Annotations are now keyed by the content hash of the image,
   so two screenshots called `overview.png` from different ship builds
   stay completely independent. Screen-type labels follow the same
   scheme.
+- In WARP CORE the trait review tree now lists **Personal Ground
+  Traits above Personal Space Traits**, matching the in-game order
+  and the rest of the review panel's "what you see in the slot order
+  on screen" convention.
+- **Mark Done** is now greyed out until every review row on the
+  current screenshot is confirmed, so you cannot accidentally lock a
+  half-corrected screenshot.
+- A corrected BOFF slot now stays inside its original seat group
+  instead of jumping into a different rank's seat when the rank label
+  changes.
+- The Space Reputation extrapolation no longer fires when the
+  predicted band is too dark to read, eliminating a class of
+  phantom-trait suggestions on screenshots with the reputation panel
+  partly off-screen.
+- Moving a bbox row in the review list no longer reorders the row —
+  it stays at its original position so the slot order on screen and
+  in the tree remain in sync.
+- The HuggingFace unauthenticated-read warning is silenced and
+  per-batch contribution rejections are now logged at INFO instead of
+  WARNING, so the system log isn't filled with noise during normal
+  community sync.
 
 ### Changed
 - **annotations.json** schema has changed. Entries are now stored under
@@ -53,6 +86,9 @@ details live in the git history.
   Pass `--dry-run` first to preview matches. Re-run as more originals
   are located; unmatched legacy entries stay in `annotations.json`
   untouched.
+- **Export to SETS JSON** now sits directly beneath the Results file
+  list in WARP, so it's reachable without scrolling on smaller
+  windows. The button's behaviour is unchanged.
 
 ## [1.0.14] — 2026-06-02
 

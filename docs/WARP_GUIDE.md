@@ -68,6 +68,72 @@ my_build/
 
 ## 2. Launcher window — tabs and global controls
 
+### First-run setup splash
+
+The very first time you start `sto-warp` on a machine it opens a small
+**First-run setup** window before the main launcher. The recognizer
+needs a few reference packs (item icon images, equipment data,
+community-tuned matcher templates) that ship separately from the
+program itself, and this window walks you through pulling them down:
+
+```
+┌─ sto-warp — first-run setup ───────────────────────────────┐
+│ First run: downloading reference data needed by the        │
+│ recognizer.                                                │
+│ This takes several minutes once; subsequent launches       │
+│ reuse the cache.                                           │
+│                                                            │
+│  CARGO data              ✓ done                            │
+│  Item & ship icons       downloading…   [████████  68 %]   │
+│  Community knowledge     — waiting                         │
+│  Recognition model       — waiting                         │
+│  Community icon library  — waiting                         │
+│  Matcher template index  — waiting                         │
+│  Icon equivalence        — waiting                         │
+│                                                            │
+│           [Cancel (start without full data)] [Close (exit)]│
+└────────────────────────────────────────────────────────────┘
+```
+
+What each row is for:
+
+| Phase | Plain-English purpose | How long |
+|---|---|---|
+| **CARGO data** | The item/trait/ship dictionary that lets sto-warp recognise the *name* under a slot icon. | a few seconds |
+| **Item & ship icons** | The reference pictures used to identify slot icons in screenshots. | the long one — minutes |
+| **Community knowledge** | A small file of community-curated icon hashes that improves match quality. | a few seconds |
+| **Recognition model** | The current shared recognition model (and a check whether a newer one is available). | a few seconds |
+| **Community icon library** | A tarball of ~8 000 reviewed-and-confirmed slot crops from the community. | one or two minutes on a typical connection |
+| **Matcher template index** | A local index built from the icon library — sto-warp uses it to match crops fast. | a few seconds |
+| **Icon equivalence** | The small admin-curated list of "icon A and icon B mean the same item" used by the recognizer. | a few seconds |
+
+Two buttons sit at the bottom:
+
+- **Close (exit)** — quit cleanly, no half-state on disk. Use this if
+  you just realised it's a bad time to download a few hundred MB.
+- **Cancel (start without full data)** — start sto-warp now with
+  whatever was already downloaded. Recognition quality will be
+  reduced this session (the icon matcher has fewer examples to
+  compare against). The setup window will reappear on the next
+  launch so the download can finish.
+
+When all seven phases complete the launcher opens normally and a
+small marker file (`~/.config/warp/startup_sync_done`) is written so
+the setup window is not shown again. If the download is interrupted
+(network drop, Cancel, force-quit) the marker is **not** written —
+the setup window will return on the next launch until everything has
+been pulled in at least once.
+
+After that initial run, the same seven steps run quietly in the
+background on every launch (and again every 60 minutes) so the data
+stays fresh; they short-circuit when nothing has changed upstream, so
+the cost is normally a couple of cheap HTTP "are you still the same
+version?" checks per launch.
+
+---
+
+### Main launcher tabs
+
 `sto-warp` opens a single launcher window with four tabs:
 
 | Tab | Purpose |
