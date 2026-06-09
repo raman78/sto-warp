@@ -202,3 +202,40 @@ Space cold-starts.
    window.
 3. Consider sharding backend writes by install_id prefix, or a paid
    Space tier for replica concurrency.
+
+---
+
+## 7. Since this audit
+
+Material changes that affect the numbers above but did not invalidate the
+overall picture:
+
+- **1.0.15 — tarball cold start.** First-run community-crops download
+  switched from one HTTP request per crop to a single weekly-rebuilt
+  archive (`sets-sto/sto-icon-dataset` releases). The 4.1 "list 50 000
+  files" worst-case in the capacity envelope is now bypassed on fresh
+  installs — `list_repo_files` is only used for the incremental sync
+  path, not the cold start.
+- **Z5 virtual-class filter audit.** The on-the-input filter in
+  `sync_client.py` that blocks `__empty__` / `__inactive__` /
+  `__boff_*` labels from leaving the client is now documented and
+  cross-checked against every output-side filter in
+  [`client_user_view_filter.md`](client_user_view_filter.md). No
+  behaviour change — the audit confirmed the existing filter is
+  sufficient and the input-side belt-and-braces guard is kept.
+- **Poison-filter flag** (commit `91cd30d`). `sync_client` now carries
+  an explicit `_poison_filter_enabled` flag that surfaces in audit
+  logs, making it possible to verify in production that obvious
+  mislabels are blocked before they reach staging. Runtime behaviour
+  unchanged.
+- **Server-side staging drain.** From the server side, `staging/<install_id>/`
+  is no longer the long-term home of contributions: a 2-hourly GitHub
+  Actions workflow (`merge_staging.yml`) runs four democratic mergers
+  that promote winning entries to `data/` and delete the corresponding
+  staging files in the same HF commit. The capacity envelope in §4
+  was sized against the *pre-drain* worst case where staging accumulated
+  indefinitely; with the drain in place, steady-state staging size
+  stays bounded by the per-install upload rate × 2 h, not by total
+  lifetime contributions. Full details, including the Z3 asymmetric
+  thresholds and the monthly audit workflow, live in
+  [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md).

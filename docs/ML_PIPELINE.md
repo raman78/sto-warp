@@ -1,39 +1,43 @@
-# SETS-WARP ML Pipeline — Technical Reference
+# sto-warp ML Pipeline — Technical Reference
 
-This document describes the full lifecycle of machine learning in SETS-WARP:
-how models are trained locally, how data flows to the community server, how
-the central model is built from contributions, and how updated models are
-delivered back to all users.
+How machine learning works end-to-end in sto-warp: what the client captures
+locally, how that data reaches the community, where the central model is
+trained, and how updates flow back to every install.
 
 ---
 
 ## Overview
 
-SETS-WARP uses two ML classifiers:
+sto-warp uses two production classifiers plus one embedder:
 
 | Model | Architecture | Purpose |
 |-------|-------------|---------|
 | `icon_classifier.pt` | EfficientNet-B0 | Matches item icon crops to item names |
 | `screen_classifier.pt` | MobileNetV3-Small | Classifies screenshot type (SPACE_EQ, BOFFS, TRAITS, …) |
+| `icon_embedder.pt` | EfficientNet-B0 + ArcFace head | k-NN gallery lookup used as a confidence cross-check |
 
-Both models exist in two variants — **local** (trained on your data only) and
-**community** (trained on all users' data centrally). The local model always
-takes priority after you train it; the community model is the baseline before
-that.
+**The client does not train the production models.** All three files are
+downloaded from `sets-sto/warp-knowledge` on HuggingFace (see §4). The
+client's contribution is the *data* — confirmed icon crops, confirmed screen
+types, and OCR corrections — uploaded to staging and folded into the
+community model by the central pipeline (§3).
+
+A separate one-shot admin path for bootstrapping the embedder on synthetic
+crops lives at the bottom of this document (§9). End users do not run it.
 
 ---
 
-## 1. Local training
+## 1. Local data capture
 
 ### Trigger
 
-You click **Train Model** in WARP CORE, or optionally configure automatic
-training after each session.
+The user accepts a bounding box in WARP CORE (Enter, autocomplete pick,
+**Accept** button, or auto-accept ≥ threshold).
 
 ### Input data
 
 ```
-warp/training_data/
+~/.local/share/warp/training_data/
 ├── annotations.json          ← confirmed bbox + label records
 ├── crops/
 │   ├── <sha256>.png          ← 64×64 px icon crop per confirmed item
@@ -44,40 +48,27 @@ warp/training_data/
     └── ...
 ```
 
-Every time you accept an item in WARP CORE, the system:
-1. Crops the bounding box from the screenshot
-2. Saves the crop as `warp/training_data/crops/<sha256>.png`
-3. Appends the record to `annotations.json` (`slot`, `name`, `bbox`,
-   `crop_sha256`, `confirmed_at`)
+Every confirmation:
+1. Crops the bounding box from the screenshot.
+2. Saves the crop as `crops/<sha256>.png`.
+3. Appends a record to `annotations.json` (`slot`, `name`, `bbox`,
+   `crop_sha256`, `confirmed_at`).
 
-Screen type labels are saved separately when you change the screen type
-dropdown in WARP CORE (stored in `screen_types/<TYPE>/<filename>.png`).
+Screen type labels are saved separately when you tick / change the screen
+type for a file (stored in `screen_types/<TYPE>/<filename>.png`). The
+crop is also fed to the in-session matcher immediately, so the next
+Auto-Detect on a different screenshot can already match against the
+just-confirmed icon — see [`docs/WARP_GUIDE.md` §6](WARP_GUIDE.md#6-confirming-items-and-accepting-results)
+for the user-side view.
 
-### Training process (icon classifier)
+### No local production training
 
-File: `sets-warp-backend/admin_train.py` (runs on GitHub Actions, hourly)
-
-```
-1. Download all confirmed crops from HF staging/<install_id>/crops/
-2. Deduplicate by sha256 — one vote per install_id per crop hash
-3. Stratified train/val split (same as before)
-4. Fine-tune EfficientNet-B0:
-     - Focal loss (handles class imbalance)
-     - AdamW + cosine LR, P7 augmentation (ColorJitter, Flip, Affine)
-     - P9 hard negatives: WeightedRandomSampler, cap 3×
-     - Skip if < 10 new crops since last run (--skip-if-unchanged)
-5. Upload icon_classifier.pt + model_version.json to HF sets-sto/warp-knowledge/models/
-```
-
-Local training was removed in v2.3. Crops uploaded by users are the contribution;
-the central pipeline trains on all of them and distributes the result.
-
-### Training process (screen classifier)
-
-File: `warp/trainer/screen_type_trainer.py` (central only — not triggered locally)
-
-Uses MobileNetV3-Small and full screenshot images resized to 224×224 px.
-Saved to `warp/models/screen_classifier.pt` and distributed via ModelUpdater.
+Earlier sets-warp releases shipped a "Train Model" button that produced a
+local icon classifier. That path was removed before sto-warp 1.0.0. The
+client today only **captures** training data; production training is
+performed centrally (§3). The only training code still callable on a user
+machine is the embedder bootstrap (§9), which targets the k-NN gallery, not
+the softmax classifier, and is gated behind a CLI flag.
 
 ---
 
@@ -95,8 +86,15 @@ File: `warp/trainer/sync.py` — `SyncWorker`
 
 ### Rate limiting
 
-At most **200 uploads per install_id per UTC day** to avoid hammering the HF
-API. The counter is stored in memory per session.
+Two independent caps, enforced client-side per install_id per UTC day:
+
+| Channel | Cap | Constant | Notes |
+|---|---|---|---|
+| Crops + screen types (`SyncWorker`) | **1000 / day** | `MAX_DAILY_UPLOADS` in `warp/trainer/sync.py` | Corrections to a previously-uploaded crop do not count against the cap. |
+| pHash knowledge contributions (`WARPSyncClient.contribute`) | **200 / day** | `MAX_CONTRIBUTIONS_PER_DAY` in `warp/knowledge/sync_client.py` | Per-icon pHash overrides only — does not gate the main crop upload path. |
+
+The counters are persisted in the per-channel state files under
+`~/.config/warp/` so they survive restarts within the same UTC day.
 
 ### What is uploaded
 
@@ -197,7 +195,7 @@ File: `sets-warp-backend/admin_train.py` — `train()`
 1. Download previous icon_classifier.pt from HF warp-knowledge (for fine-tuning)
 2. Download all winning crops from staging via snapshot_download per install_id
    (bulk folder download — far fewer HTTP round-trips than per-file)
-3. Stratified train/val split (same logic as local trainer)
+3. Stratified train/val split
 4. Build EfficientNet-B0, replace head for n_classes
 5. Load previous backbone weights (classifier.* keys stripped)
    LR = 3e-4 × 0.3 when fine-tuning, 3e-4 from scratch
@@ -257,110 +255,77 @@ Published after each successful central training run:
 
 ## 4. Community model delivery (HuggingFace → local)
 
-### On first install (bootstrap)
+### On first install (cold-start splash)
 
-File: `bootstrap.py` — `_download_community_model_bootstrap()`
-
-During the first-run setup wizard (Step 5/5), the following files are
-downloaded from `sets-sto/warp-knowledge`:
+The cold-start splash described in
+[`SYNC_ARCHITECTURE.md`](SYNC_ARCHITECTURE.md) §3 owns the first-install
+model download. Phase `model` of the splash runs the same `ModelUpdater`
+that powers the periodic refresh, with `force=True` so the 15 min skip
+guard is ignored — the very first launch always pulls every required file:
 
 ```
-models/icon_classifier.pt
-models/label_map.json
+models/icon_classifier.pt          (required)
+models/label_map.json              (required)
 models/icon_classifier_meta.json
 models/model_version.json
 models/screen_classifier.pt
 models/screen_classifier_labels.json
+models/icon_embedder.pt            (optional, ArcFace)
+models/embedder_label_map.json     (optional)
+models/embedding_index.npz         (optional)
 ```
 
-A `model_version_remote_cache.json` is written after download so that
-`ModelUpdater` skips the next 24 h check (just downloaded, no need to check
-again immediately).
+After the splash completes, `~/.config/warp/startup_sync_done` is written
+and subsequent launches go through the periodic refresh path described
+below.
 
 ### Ongoing updates (ModelUpdater)
 
 File: `warp/trainer/model_updater.py`
 
-Fired **15 seconds after app launch** (background daemon thread), and also
-each time WARP CORE is opened.
+Fired by `SyncCoordinator` as the `model` step of every refresh cycle
+(launch + every 60 minutes, see
+[`SYNC_ARCHITECTURE.md`](SYNC_ARCHITECTURE.md)). Internally rate-limited.
 
 ```
-1. Check rate limit: skip if last check was < 24 h ago
+1. Check rate limit: skip if last check was < 15 min ago
+   (_CHECK_INTERVAL_HOURS = 0.25 in model_updater.py)
 2. GET https://sets-sto-warp-backend.hf.space/model/version
    → returns {available, trained_at, n_classes, val_acc, ...}
 3. Compare remote trained_at vs local model_version.json trained_at:
      remote > local  → download and install new model
-     remote ≤ local  → skip (local model is current or user-trained)
+     remote ≤ local  → skip (local is current)
 4. If update needed: download all _MODEL_FILES from HF via hf_hub_download
 5. Copy files to warp/models/ atomically
 6. Call SETSIconMatcher.reset_ml_session() to reload immediately
 7. Save check timestamp to model_version_remote_cache.json
 ```
 
-**Local model always wins:** after you run Train Model locally, the local
-`model_version.json` gets `trained_at = now()`. Since `now() > any past
-remote trained_at`, ModelUpdater will never overwrite your local model until
-the central model is trained again after your training time.
+**Demotion guard.** The download is only installed if the remote
+`trained_at` is **strictly later** than the local one. A tier-down or
+class-count regression that would silently downgrade the model is rejected
+in the same check — see the `1.0.10` Changelog entry on tier corrections
+for the user-visible symptom this prevents.
 
 ### screen_classifier fallback
 
 If `screen_classifier.pt` is missing (e.g., first install before bootstrap
 completes, or manual deletion), `_ensure_screen_classifier()` downloads it
-immediately, bypassing the 24 h rate limit. This runs on every ModelUpdater
-check.
+immediately, bypassing the 15 min rate limit. This runs on every
+ModelUpdater check.
 
 ---
 
 ## 5. Full pipeline diagram
 
-```
-┌─────────────────────────────────────────────────────────────────────┐
-│  USER (WARP CORE)                                                   │
-│                                                                     │
-│  Confirm bbox → crop PNG + label saved locally                      │
-│       │                                                             │
-│       ▼                                                             │
-│  warp/training_data/crops/<sha>.png                                 │
-│  warp/training_data/annotations.json                                │
-│       │                         │                                   │
-│       │  [Train Model]          │  [sync timer, every 5 min]        │
-│       ▼                         ▼                                   │
-│  local icon_classifier.pt    HF staging (sets-sto/sto-icon-dataset) │
-│  (used immediately)          staging/<install_id>/crops/<sha>.png   │
-│       │                      staging/<install_id>/annotations.jsonl │
-└───────┼──────────────────────────────┼──────────────────────────────┘
-        │                              │
-        │                              ▼
-        │             ┌────────────────────────────────┐
-        │             │  GitHub Actions (hourly cron)  │
-        │             │  admin_train.py                │
-        │             │                                │
-        │             │  1. Democratic voting          │
-        │             │  2. Screen type capping        │
-        │             │  3. Download crops (bulk)      │
-        │             │  4. Fine-tune EfficientNet-B0  │
-        │             │     (icon crops only)          │
-        │             │  5. Fine-tune MobileNetV3-Small│
-        │             │  6. Build ship_type_corr.json  │
-        │             │     (Ship Type/Tier entries)   │
-        │             │  7. Upload to warp-knowledge   │
-        │             └───────────────┬────────────────┘
-        │                             │
-        │                             ▼
-        │             HF Dataset: sets-sto/warp-knowledge
-        │             models/icon_classifier.pt
-        │             models/screen_classifier.pt
-        │             models/model_version.json
-        │             models/label_map.json
-        │             models/ship_type_corrections.json  (optional)
-        │                             │
-        │                             │  [ModelUpdater, 15s after launch,
-        │                             │   at most once per 24 h]
-        │                             ▼
-        └──────────► warp/models/icon_classifier.pt   ◄── community model
-                                                           (used until user
-                                                            trains locally)
-```
+The end-to-end data flow from user confirmation, through HF staging, the
+four democratic mergers, central training, and back to every install lives
+in its own document: [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md).
+
+That document is the canonical reference for the staging-vs-data split,
+the Z3 asymmetric thresholds, drain-on-promote, and the audit safety net.
+This file (§§1–4 above) covers the ML model story; `DATA_LIFECYCLE.md`
+covers the *data* story underneath it.
 
 ---
 
@@ -371,17 +336,18 @@ When WARP matches an icon, the following priority applies:
 ```
 1. Community pHash knowledge override   (warp/knowledge/knowledge_cache.json)
    — exact perceptual hash match, highest confidence, instant
-2. Template matching + HSV histogram    (SETS icon cache, wiki icons)
-3. Local ML classifier                  (icon_classifier.pt)
-4. Session examples                     (confirmed crops from current session,
-                                         used only when phases 1-3 fail)
+2. Template matching + HSV histogram    (community crop library + cargo icons)
+3. ArcFace embedder k-NN                (icon_embedder.pt + embedding_index.npz)
+4. Softmax classifier                   (icon_classifier.pt)
+5. Session examples                     (crops confirmed during the current
+                                         run, used to bridge the gap before
+                                         the next central retrain)
 ```
 
-The local `.pt` and community `.pt` are the **same file** —
-`warp/models/icon_classifier.pt`. It is either:
-- The community model (downloaded from HF, used on fresh install)
-- Your locally-trained model (overwrites community after Train Model)
-- A community update (overwrites local only if `remote trained_at > local trained_at`)
+The classifier and embedder are the *same* files for every install —
+`warp/models/icon_classifier.pt`, `warp/models/icon_embedder.pt`. There is
+no per-user variant on disk. ModelUpdater replaces them only when the
+remote `trained_at` is strictly later than the local one (§4).
 
 ---
 
@@ -425,7 +391,8 @@ pipeline described above for the softmax classifier. When the central
 embedder is missing entire class regions (e.g. ground BOFF abilities, whose
 icons rarely show up in space-side screenshots), waiting for those crops to
 arrive via HF staging is infeasible: 10,600 synthetic crops at
-200 uploads/install/UTC day = ~53 days through normal sync.
+1000 uploads/install/UTC day per `MAX_DAILY_UPLOADS` = ~11 days through
+normal sync, plus the wall-clock cost of waiting for those days to pass.
 
 For that one-time gap-closure, sto-warp ships a **local** bootstrap path:
 

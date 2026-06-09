@@ -115,6 +115,9 @@ internals of each area, the canonical references are:
 | [`docs/sto_slots_rules.md`](docs/sto_slots_rules.md)                      | STO slot rules + how WARP enforces (or doesn't) each constraint                 |
 | [`docs/CARGO_DATA_PLAN.md`](docs/CARGO_DATA_PLAN.md)                      | Cargo-data sourcing rationale (STOCD/SETS-Data over local scraper)              |
 | [`docs/REMOTE_SYNC_AUDIT.md`](docs/REMOTE_SYNC_AUDIT.md)                  | Backend/HF capacity audit, channels in use, scaling headroom                    |
+| [`docs/data_source_audit.md`](docs/data_source_audit.md)                  | Full data-flow audit (HF dataset structure, virtual classes, governance Zs)     |
+| [`docs/client_user_view_filter.md`](docs/client_user_view_filter.md)      | Client-side filter map for virtual classes (`__empty__`, `__inactive__`, …)     |
+| [`docs/FAST_CORRECTION_MODE.md`](docs/FAST_CORRECTION_MODE.md)            | Fast Correction Mode internals: staging, ephemeral annotations, send-back loop  |
 | [`docs/gpu_setup.md`](docs/gpu_setup.md)                                  | Optional CUDA setup (embedder retraining only — most users don't need this)     |
 
 ### Repository rules

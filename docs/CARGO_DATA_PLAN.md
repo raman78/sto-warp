@@ -1,6 +1,10 @@
 # Cargo data loader — design note
 
-**Status:** plan only (not implemented yet).
+**Status:** **implemented** since sto-warp 1.0.0. Live as `warp/data/cargo.py`
+fetching from `STOCD/SETS-Data` GitHub raw URLs into `~/.config/warp/cache/`,
+driven by the splash + 60 min refresh cycle described in
+[`SYNC_ARCHITECTURE.md`](SYNC_ARCHITECTURE.md). This document records the
+*why* of that choice; the runtime details live in the sync doc.
 **Strategy chosen:** (iii) fetch from `STOCD/SETS-Data` GitHub raw URLs at
 first run, cache locally — confirmed 2026-05-18 after considering the
 alternative of resurrecting `warp/data/item_db.json` via `warp/tools/
