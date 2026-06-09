@@ -38,6 +38,28 @@ import numpy as np
 from warp import userdata, config
 from warp.debug import syslog as log
 
+
+# Poison label policy — mirrors sets-warp-backend main.py (D-A.1 / D-B.3).
+#
+# Virtual classes (__empty__, __inactive__, __boff_*) and dev-test placeholders
+# used to be dropped here before they could reach the backend. Per D-A.1 they
+# are now legitimate ML labels end-to-end; defense-in-depth in
+# warp/recognition/icon_matcher.py:244 still suppresses them as
+# knowledge.json hard-overrides, so the user view is protected without
+# rejecting input.
+#
+# Toggle _POISON_FILTER_ENABLED back to True to restore the previous
+# behaviour. Rollback MUST happen in lockstep with the backend flag —
+# atomic rollback per docs/client_user_view_filter.md Z5-C.3.
+_POISON_FILTER_ENABLED = False
+
+
+def _is_poison_label(name: str) -> bool:
+    if not _POISON_FILTER_ENABLED:
+        return False
+    stripped = (name or '').strip()
+    return stripped.startswith('__') or stripped == 'Test Item Name'
+
 # ── Constants ──────────────────────────────────────────────────────────────────
 # Backend lives on HF Spaces (sets-sto/warp-backend). Migrated from Render
 # in 2026-05 so the shared HF write token could be removed from clients —
@@ -424,14 +446,11 @@ class WARPSyncClient:
             log.debug('WARPSync: contribute called with empty item_name, skipped')
             return
 
-        # Mirror backend's poison-label filter (sets-warp-backend main.py:188).
-        # Virtual classes (__empty__, __inactive__, __boff_*) are legitimate
-        # for local training but must never reach the community knowledge
-        # dataset, where they'd hard-override real icons. Filtering here
-        # (instead of letting the backend reject with HTTP 400) avoids
-        # filling the queue with items we know are going to be dropped,
-        # plus the WARN spam on each rejection.
-        if _name.startswith('__') or _name == 'Test Item Name':
+        # Poison-label gate (D-A.1 / D-B.3) — wired through
+        # `_is_poison_label`, currently disabled by `_POISON_FILTER_ENABLED`
+        # at the top of this module. See policy block there for rationale
+        # and rollback instructions.
+        if _is_poison_label(_name):
             log.debug(f'WARPSync: skipping ineligible label {_name!r}')
             return
 

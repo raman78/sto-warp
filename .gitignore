@@ -59,3 +59,6 @@ conflict_decisions.json
 
 # Backup directories from upstream migration
 *_backup_*/
+
+# Local-only audit log — żywy dokument, nie commitujemy
+docs/data_source_audit.md
