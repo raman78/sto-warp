@@ -157,6 +157,23 @@ def main() -> int:
     ok &= check("'impulse' preserved", 'impulse' in eq_phrases)
     ok &= check("'impuls' added for impulse", 'impuls' in eq_phrases)
 
+    print('\n6. Ship type translation (German → English)')
+    from warp.recognition.ui_translations import translate_ship_type
+    ok &= check("Pakled-Wundertäter-Klumpenschiff → Pakled Miracle Worker Clumpship",
+                translate_ship_type('Pakled-Wundertäter-Klumpenschiff')
+                == 'Pakled Miracle Worker Clumpship')
+    ok &= check("Umlaut-stripped variant also works",
+                translate_ship_type('Pakled-Wundertater-Klumpenschiff')
+                == 'Pakled Miracle Worker Clumpship')
+    ok &= check("Schwerer Schlachtkreuzer → Heavy Battlecruiser",
+                translate_ship_type('Schwerer Schlachtkreuzer')
+                == 'Heavy Battlecruiser')
+    ok &= check("English passthrough unchanged",
+                translate_ship_type('Temporal Science Vessel')
+                == 'Temporal Science Vessel')
+    ok &= check("Unknown word passthrough",
+                translate_ship_type('Galaxy') == 'Galaxy')
+
     print('\n' + ('OK' if ok else 'FAILED'))
     return 0 if ok else 1
 

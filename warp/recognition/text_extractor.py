@@ -1033,6 +1033,18 @@ class TextExtractor:
                     _slog.debug(f'TextExtractor: OCR correction {raw!r} → {corrected!r}')
                     result[key] = corrected
 
+            # ── Translate localized ship type to English ────────────────────
+            # Ship DB has only English names, so localized OCR text like
+            # "Pakled-Wundertäter-Klumpenschiff" must be mapped back to
+            # English ("Pakled Miracle Worker Clumpship") before ShipDB lookup.
+            if result.get('ship_type'):
+                from warp.recognition.ui_translations import translate_ship_type
+                translated = translate_ship_type(result['ship_type'])
+                if translated != result['ship_type']:
+                    _slog.info(f'TextExtractor: ship type translated '
+                               f'{result["ship_type"]!r} → {translated!r}')
+                    result['ship_type'] = translated
+
         except Exception as e:
             _slog.debug(f'TextExtractor: unexpected error: {e}')
 

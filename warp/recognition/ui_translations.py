@@ -126,6 +126,50 @@ def augment_substring_phrases(category: str, english_phrases) -> tuple[str, ...]
     return tuple(out)
 
 
+def translate_ship_type(text: str) -> str:
+    """Translate a localized ship-type string to English canonical words.
+
+    German STO uses hyphenated compound names like
+    'Pakled-Wundertäter-Klumpenschiff'. This function:
+      1. Splits on hyphens and spaces into tokens.
+      2. For each token, checks the 'ship_type_word' translation table
+         (longest match first, to handle multi-word canonicals).
+      3. Replaces matched tokens with the English canonical.
+      4. Joins back with spaces.
+
+    Returns the original text unchanged when no translations match (the
+    caller should still try ShipDB lookup on the untranslated form first).
+    """
+    if not text:
+        return text
+    _load()
+    mapping = _TABLE.get('ship_type_word', {})
+    if not mapping:
+        return text
+    import re as _re
+    tokens = _re.split(r'[-\s]+', text)
+    if not tokens:
+        return text
+    result: list[str] = []
+    i = 0
+    changed = False
+    while i < len(tokens):
+        matched = False
+        # Try longest phrase first (up to 3 tokens) for multi-word canonicals
+        for length in range(min(3, len(tokens) - i), 0, -1):
+            phrase = ' '.join(tokens[i:i + length]).lower()
+            if phrase in mapping:
+                result.append(mapping[phrase])
+                i += length
+                matched = True
+                changed = True
+                break
+        if not matched:
+            result.append(tokens[i])
+            i += 1
+    return ' '.join(result) if changed else text
+
+
 def ocr_languages() -> list[str]:
     """EasyOCR language list derived from CSV contents (always includes 'en')."""
     _load()

@@ -103,23 +103,83 @@ screen_header,bridge officer abilities,de,bruckenoffiziers-fahigkeiten,Umlaut-st
 screen_header,bridge officer,de,brückenoffizier,
 screen_header,bridge officer,de,bruckenoffizier,Umlaut-stripped
 screen_header,space stations,de,raumstationen,
-screen_header,tactical ability,de,taktische fähigkeit,
-screen_header,tactical ability,de,taktische fahigkeit,Umlaut-stripped
-screen_header,engineering ability,de,technische fähigkeit,
-screen_header,engineering ability,de,technische fahigkeit,Umlaut-stripped
-screen_header,science ability,de,wissenschaftliche fähigkeit,
-screen_header,science ability,de,wissenschaftliche fahigkeit,Umlaut-stripped
+#   screen_header,tactical ability,de,taktische fähigkeit,
+#   screen_header,tactical ability,de,taktische fahigkeit,Umlaut-stripped
+#   screen_header,engineering ability,de,technische fähigkeit,
+#   screen_header,engineering ability,de,technische fahigkeit,Umlaut-stripped
+#   screen_header,science ability,de,wissenschaftliche fähigkeit,
+#   screen_header,science ability,de,wissenschaftliche fahigkeit,Umlaut-stripped
 screen_header,personal space traits,de,persönliche raumeigenschaften,
 screen_header,personal space traits,de,personliche raumeigenschaften,Umlaut-stripped
 screen_header,starship traits,de,raumschiffeigenschaften,
 screen_header,space reputation,de,raumruf,
-#   screen_header,personal ground traits,de,persönliche bodeneigenschaften,TODO: verify
-#   screen_header,ground reputation,de,boden-ruf,TODO: verify
-#   screen_header,standard away team,de,standard-außenteam,TODO: verify
-#   screen_header,primary specialization,de,primärspezialisierung,TODO: verify
-#   screen_header,secondary specialization,de,sekundärspezialisierung,TODO: verify
-#   spec_name,command officer,de,kommandooffizier,TODO: verify
-#   spec_name,intelligence officer,de,geheimdienstoffizier,TODO: verify
-#   spec_name,miracle worker,de,wunderwirker,TODO: verify
-#   spec_name,pilot,de,pilot,TODO: verify
-#   spec_name,temporal operative,de,zeitoperative,TODO: verify
+screen_header,personal ground traits,de,persönliche bodeneigenschaften,TODO: verify
+screen_header,ground reputation,de,boden-ruf,TODO: verify
+screen_header,standard away team,de,standard-außenteam,TODO: verify
+screen_header,primary specialization,de,primärspezialisierung,TODO: verify
+screen_header,secondary specialization,de,sekundärspezialisierung,TODO: verify
+spec_name,command officer,de,kommandooffizier,TODO: verify
+spec_name,intelligence officer,de,geheimdienstoffizier,TODO: verify
+spec_name,miracle worker,de,wunderwirker,TODO: verify
+spec_name,pilot,de,pilot,TODO: verify
+spec_name,temporal operative,de,zeitoperative,TODO: verify
+# ═══════════════════════════════════════════════════════════════════════════════
+# German: ship type word translations
+# ═══════════════════════════════════════════════════════════════════════════════
+# Used to translate localized ship-type strings to English before ShipDB lookup.
+# Each row maps a single German word (as seen by OCR in the type line) to its
+# English canonical STO ship classification word. Hyphens in compound names like
+# "Pakled-Wundertäter-Klumpenschiff" are treated as word separators.
+#
+# Hull types — core STO ship classification vocabulary
+ship_type_word,Battlecruiser,de,Schlachtkreuzer,
+ship_type_word,Cruiser,de,Kreuzer,
+ship_type_word,Destroyer,de,Zerstörer,
+ship_type_word,Destroyer,de,Zerstorer,Umlaut-stripped
+ship_type_word,Escort,de,Eskorte,
+ship_type_word,Carrier,de,Träger,
+ship_type_word,Carrier,de,Trager,Umlaut-stripped
+ship_type_word,Dreadnought,de,Dreadnought,Same in German
+ship_type_word,Raider,de,Raider,Same in German
+ship_type_word,Warship,de,Kriegsschiff,
+ship_type_word,Science Vessel,de,Wissenschaftsschiff,
+ship_type_word,Raptor,de,Raptor,Same in German
+ship_type_word,Warbird,de,Warbird,Same in German
+ship_type_word,Fighter,de,Jäger,
+ship_type_word,Fighter,de,Jager,Umlaut-stripped
+ship_type_word,Scout Ship,de,Aufklärungsschiff,
+ship_type_word,Scout Ship,de,Aufklarungsschiff,Umlaut-stripped
+ship_type_word,Bird-of-Prey,de,Raubvogel,TODO: verify STO German actually uses this
+# Spec modifiers (as they appear in ship type names)
+ship_type_word,Miracle Worker,de,Wundertäter,Confirmed from German screenshot
+ship_type_word,Miracle Worker,de,Wundertater,Umlaut-stripped
+ship_type_word,Miracle Worker,de,Wunderwirker,Alternate form
+ship_type_word,Temporal,de,Temporal,Same in German
+ship_type_word,Intel,de,Geheimdienst,
+ship_type_word,Pilot,de,Pilot,Same in German
+ship_type_word,Command,de,Kommando,
+# Size/quality modifiers
+ship_type_word,Heavy,de,Schwerer,Masculine form
+ship_type_word,Heavy,de,Schwere,Feminine form
+ship_type_word,Heavy,de,Schweres,Neuter form
+ship_type_word,Light,de,Leichter,Masculine form
+ship_type_word,Light,de,Leichte,Feminine form
+ship_type_word,Light,de,Leichtes,Neuter form
+ship_type_word,Advanced,de,Fortgeschrittener,Masculine form
+ship_type_word,Advanced,de,Fortgeschrittene,Feminine form
+ship_type_word,Strike Wing,de,Angriffsflügel,TODO: verify
+ship_type_word,Strike Wing,de,Angriffsflugel,Umlaut-stripped
+ship_type_word,Flight Deck,de,Flugdeck,
+ship_type_word,Assault,de,Angriffs,Compound prefix form
+ship_type_word,Support,de,Unterstützungs,Compound prefix form
+ship_type_word,Support,de,Unterstutzungs,Umlaut-stripped
+ship_type_word,Exploration,de,Erkundungs,Compound prefix form
+ship_type_word,Fleet,de,Flotten,Compound prefix form
+ship_type_word,Legendary,de,Legendärer,Masculine
+ship_type_word,Legendary,de,Legendarer,Umlaut-stripped
+ship_type_word,Legendary,de,Legendäre,Feminine
+ship_type_word,Legendary,de,Legendare,Umlaut-stripped feminine
+ship_type_word,Retrofit,de,Nachrüstung,TODO: verify
+ship_type_word,Retrofit,de,Nachrustung,Umlaut-stripped
+# Pakled-specific (confirmed from OCR + ship_list.json match)
+ship_type_word,Clumpship,de,Klumpenschiff,Pakled hull type
