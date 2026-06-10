@@ -48,7 +48,14 @@ def _split_rank(full_name: str) -> tuple[str, str]:
 
 def _resolve_rank(base_name: str, slot_idx: int, cache) -> str:
     """Pick highest rank ≤ slot's max that exists for `base_name` in
-    `cache.boff_abilities['all']`."""
+    `cache.boff_abilities['all']`.
+
+    The upstream ability record stores rank tiers as `rank1info` /
+    `rank2info` / `rank3info` (the at-rank effect description) — a tier
+    is "present" when that field is a non-empty string. Only 1/237
+    abilities currently has a missing tier (`Dampening Field` has no
+    III), but the check keeps the export honest if that ratio grows.
+    """
     max_idx = _SLOT_MAX_RANK_IDX[slot_idx] if 0 <= slot_idx < 4 else 2
     if cache is None:
         return _VALID_RANKS[max_idx]
@@ -57,7 +64,7 @@ def _resolve_rank(base_name: str, slot_idx: int, cache) -> str:
         if not isinstance(entry, dict):
             return _VALID_RANKS[max_idx]
         for idx in range(max_idx, -1, -1):
-            if _VALID_RANKS[idx] in entry:
+            if entry.get(f'rank{idx + 1}info'):
                 return _VALID_RANKS[idx]
     except Exception:
         pass

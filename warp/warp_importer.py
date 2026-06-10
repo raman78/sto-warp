@@ -2118,8 +2118,8 @@ class WarpImporter:
                                 if boff_cache:
                                     candidates = {c_name for c_name, info in boff_cache.items() if info.get('profession') in allowed_profs}
                                     _slog.debug(f"  [{slot_name}][{idx}] Restricted candidates to {base_prof} + Specializations ({len(candidates)} items)")
-                            except Exception:
-                                pass
+                            except Exception as _exc:
+                                _slog.debug(f"  [{slot_name}][{idx}] cache-shape drift while restricting candidates: {_exc!r}")
 
                 name, conf, thumb, used_session = matcher.match(crop, candidate_names=candidates)
                 self.match_log.append({
@@ -2874,7 +2874,9 @@ class WarpImporter:
         result: dict[str, set[str]] = {}
         try:
             eq_cache = self._cache.equipment
-        except Exception:
+        except Exception as _exc:
+            _slog.warning(f'_build_slot_candidates: equipment cache unreadable ({_exc!r}) — '
+                          f'returning no slot candidate restrictions')
             return result
 
         # Universal consoles can go in any console slot
@@ -2915,7 +2917,9 @@ class WarpImporter:
                     if isinstance(rank_dict, dict):
                         ground_boff_names.update(rank_dict.keys())
             all_boff_names = set(cache.get('all', {}).keys())
-        except Exception:
+        except Exception as _exc:
+            _slog.warning(f'_build_slot_candidates: boff_abilities cache unreadable ({_exc!r}) — '
+                          f'BOFF slot candidate pools empty, matcher will run unrestricted')
             ground_boff_names = set()
             all_boff_names = set()
         for sd in slot_defs:
@@ -2936,7 +2940,9 @@ class WarpImporter:
         try:
             traits_cache = self._cache.traits
             starship_traits_cache = self._cache.starship_traits or {}
-        except Exception:
+        except Exception as _exc:
+            _slog.warning(f'_build_slot_candidates: traits/starship_traits cache unreadable '
+                          f'({_exc!r}) — trait slots will match against the full pool')
             traits_cache = {}
             starship_traits_cache = {}
 
