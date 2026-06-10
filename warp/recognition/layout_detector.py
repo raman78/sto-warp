@@ -102,6 +102,31 @@ SLOT_LABEL_ALIASES = {
     'standard away team':    'Boff Tactical',
 }
 
+# Extend SLOT_LABEL_ALIASES with localized synonyms from
+# warp/data/ui_translations.csv so the layout detector accepts OCR text from
+# non-English STO clients the same way it accepts English.
+def _extend_slot_aliases() -> None:
+    from warp.recognition.ui_translations import normalize_map
+    # space_slot: 'bug waffen' (de) → 'Fore Weapons' (canonical English),
+    # then the existing English alias already maps to the same internal slot.
+    for tr, canon_en in normalize_map('space_slot').items():
+        # canon_en is one of 'Fore Weapons', 'Deflector', 'Shield', etc. —
+        # which is exactly the right-hand side of the English aliases above.
+        # We only need to add the localized OCR text as a new key.
+        SLOT_LABEL_ALIASES.setdefault(tr, canon_en)
+    # Same for ground slots.
+    for tr, canon_en in normalize_map('ground_slot').items():
+        SLOT_LABEL_ALIASES.setdefault(tr, canon_en)
+    # Headers — wire the BOFF station/header German variants to the same
+    # 'Boff Tactical' anchor used by the English keys above.
+    from warp.recognition.ui_translations import synonyms
+    for en_phrase in ('stations', 'space stations', 'standard away team'):
+        for syn in synonyms('screen_header', en_phrase):
+            SLOT_LABEL_ALIASES.setdefault(syn, 'Boff Tactical')
+
+
+_extend_slot_aliases()
+
 # ── Full-scan constants ───────────────────────────────────────────────────────
 _SCAN_CONF_MIN  = 0.45   # min ML confidence to keep a sliding-window detection
 _SCAN_NMS_IOU   = 0.50   # IoU threshold for greedy NMS
@@ -3050,7 +3075,8 @@ class LayoutDetector:
     def _get_ocr(self):
         if self._ocr is None:
             import easyocr
-            self._ocr = easyocr.Reader(['en'], gpu=False, verbose=False)
+            from warp.recognition.ui_translations import ocr_languages
+            self._ocr = easyocr.Reader(ocr_languages(), gpu=False, verbose=False)
         return self._ocr
 
     def _load_calibration(self) -> dict | None:

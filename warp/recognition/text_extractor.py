@@ -139,36 +139,43 @@ SHIP_INFO_ROI = (0.0, 0.0, 0.34, 0.28)
 # Lookup is by header-count, not first-match: a screen that contains BOTH
 # space-side AND ground-side headers is classified as generic TRAITS (mixed)
 # rather than locking onto whichever side OCR happened to scan first.
-_TRAIT_SPACE_HEADERS: tuple[str, ...] = (
+#
+# Each tuple is wrapped through `augment_substring_phrases('screen_header', …)`
+# so any localized synonyms registered in warp/data/ui_translations.csv are
+# automatically checked alongside the English phrases. This means adding
+# German/French/etc. requires only a CSV edit, never a code edit here.
+from warp.recognition.ui_translations import augment_substring_phrases as _aug_phrases
+
+_TRAIT_SPACE_HEADERS: tuple[str, ...] = _aug_phrases('screen_header', (
     'personal space traits',
     'starship traits',
     'space reputation',
     'active space rep',
     'active reputation',     # legacy label used in older builds
-)
-_TRAIT_GROUND_HEADERS: tuple[str, ...] = (
+))
+_TRAIT_GROUND_HEADERS: tuple[str, ...] = _aug_phrases('screen_header', (
     'personal ground traits',
     'ground reputation',
     'active ground rep',
     'active ground reputation',
-)
+))
 
 # Bridge Officer screen — STO tab headers + generic terms.
 # Same mixed-vs-pure logic as traits.
-_BOFF_SPACE_HEADERS: tuple[str, ...] = (
+_BOFF_SPACE_HEADERS: tuple[str, ...] = _aug_phrases('screen_header', (
     'space stations',           # STO header for space boff abilities
-)
-_BOFF_GROUND_HEADERS: tuple[str, ...] = (
+))
+_BOFF_GROUND_HEADERS: tuple[str, ...] = _aug_phrases('screen_header', (
     'standard away team',       # STO header for ground boff abilities
-)
-_BOFF_GENERIC_HEADERS: tuple[str, ...] = (
+))
+_BOFF_GENERIC_HEADERS: tuple[str, ...] = _aug_phrases('screen_header', (
     'bridge officer abilities',
     'bridge officer',
     'boff abilities',
     'tactical ability',
     'engineering ability',
     'science ability',
-)
+))
 
 
 def _classify_traits(joined: str) -> str:
@@ -203,8 +210,10 @@ def _classify_boffs(joined: str) -> str:
         return 'BOFFS'
     return ''
 
-# Space equipment slot labels — presence of 2+ confirms SPACE_EQ
-_SPACE_EQ_LABELS: list[str] = [
+# Space equipment slot labels — presence of 2+ confirms SPACE_EQ.
+# Augmented with the lowercase forms of every space_slot translation in
+# warp/data/ui_translations.csv so localized screenshots count too.
+_SPACE_EQ_LABELS: list[str] = list(_aug_phrases('space_slot', (
     'fore weapons', 'aft weapons', 'experimental weapon',
     'deflector', 'secondary deflector',
     'impulse', 'warp core', 'singularity core',
@@ -212,24 +221,24 @@ _SPACE_EQ_LABELS: list[str] = [
     'engineering consoles', 'science consoles', 'tactical consoles',
     'universal consoles', 'hangar',
     'devices',
-]
+)))
 
-# Ground equipment slot labels — presence of 2+ confirms GROUND_EQ
-_GROUND_EQ_LABELS: list[str] = [
+# Ground equipment slot labels — presence of 2+ confirms GROUND_EQ.
+_GROUND_EQ_LABELS: list[str] = list(_aug_phrases('ground_slot', (
     'kit modules', 'kit module',
     'body armor', 'combat armor',
     'ev suit', 'environmental suit',
     'personal shield',
     'ground weapon', 'secondary weapon',
     'ground device',
-]
+)))
 
 # Minimum label hits to confirm equipment screen type
 _EQ_MIN_HITS = 2
 
 # All STO specialization names (Primary and Secondary).
 # Each appears as a section header on the Specializations screen.
-_SPEC_NAMES: list[str] = [
+_SPEC_NAMES: list[str] = list(_aug_phrases('spec_name', (
     # Primary specializations
     'command officer',
     'intelligence officer',
@@ -240,14 +249,14 @@ _SPEC_NAMES: list[str] = [
     'constable',
     'commando',
     'strategist',
-]
+)))
 
 # UI headers that confirm we are on the Specializations screen
-_SPEC_HEADER_KEYWORDS: list[str] = [
+_SPEC_HEADER_KEYWORDS: list[str] = list(_aug_phrases('screen_header', (
     'primary specialization',
     'secondary specialization',
     'specialization points',
-]
+)))
 
 
 def _name_text_from_row_tokens(tokens: list) -> tuple[str, list]:
@@ -1154,5 +1163,6 @@ class TextExtractor:
     def _get_ocr(self):
         if self._ocr is None:
             import easyocr
-            self._ocr = easyocr.Reader(['en'], gpu=False, verbose=False)
+            from warp.recognition.ui_translations import ocr_languages
+            self._ocr = easyocr.Reader(ocr_languages(), gpu=False, verbose=False)
         return self._ocr

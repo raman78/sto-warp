@@ -118,6 +118,29 @@ OCR_KEYWORD_TO_SLOT = {
     'devices':       SLOT_GROUND_DEVICES,
 }
 
+
+# Extend OCR_KEYWORD_TO_SLOT with localized synonyms from
+# warp/data/ui_translations.csv (category 'ground_slot'). New languages added
+# to the CSV flow into this map at module load without code changes.
+def _extend_ground_keywords() -> None:
+    from warp.recognition.ui_translations import normalize_map
+    name_to_canon = {
+        SLOT_KIT_MODULES:     SLOT_KIT_MODULES,
+        SLOT_KIT:             SLOT_KIT,
+        SLOT_BODY_ARMOR:      SLOT_BODY_ARMOR,
+        SLOT_EV_SUIT:         SLOT_EV_SUIT,
+        SLOT_PERSONAL_SHIELD: SLOT_PERSONAL_SHIELD,
+        SLOT_WEAPONS:         SLOT_WEAPONS,
+        SLOT_GROUND_DEVICES:  SLOT_GROUND_DEVICES,
+    }
+    for tr, canon_en in normalize_map('ground_slot').items():
+        slot = name_to_canon.get(canon_en)
+        if slot is not None:
+            OCR_KEYWORD_TO_SLOT.setdefault(tr, slot)
+
+
+_extend_ground_keywords()
+
 # Canonical row order (visual top→bottom).
 ROW_ORDER = [
     SLOT_KIT_MODULES,

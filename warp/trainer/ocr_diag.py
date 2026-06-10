@@ -81,7 +81,8 @@ def diagnose_image(reader, img_path: Path) -> dict:
 
 def main(root: str, limit: int | None = None):
     import easyocr
-    reader = easyocr.Reader(['en'], gpu=False, verbose=False)
+    from warp.recognition.ui_translations import ocr_languages
+    reader = easyocr.Reader(ocr_languages(), gpu=False, verbose=False)
 
     root_p = Path(root)
     if root_p.is_file():

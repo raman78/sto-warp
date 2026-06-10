@@ -1,0 +1,72 @@
+# sto-warp UI translations
+#
+# Format: category,canonical_en,language,translation,notes
+#
+# Lines starting with '#' are comments. canonical_en is the English string
+# that the recognition pipeline already understands; translation is the
+# localized OCR text that should map to it. Lookup is case-insensitive.
+#
+# Categories:
+#   space_slot       — full SPACE EQ row label (Fore Weapons, Deflector, …)
+#   ground_slot      — full GROUND EQ row label (Body Armor, EV Suit, …)
+#   eq_word_single   — single-token EQ classifier keyword (Deflector, Devices)
+#   eq_word_first    — first-line of a 2-line EQ label (Fore, Aft, Warp, …)
+#   eq_word_second   — second-line of a 2-line EQ label (Weapons, Consoles, …)
+#   screen_header    — full section header for screen-type detection
+#                      (canonical_en MUST be one of the lowercase phrases
+#                      already used in warp/recognition/text_extractor.py)
+#   spec_name        — specialization name (Command Officer, Pilot, …)
+#
+# To add a language: append rows with the appropriate language code
+# (ISO 639-1 lowercase, e.g. 'de', 'fr', 'ru', 'ja'). No code change required.
+# To fix a misrecognition: add a new row with the OCR-typical text and the
+# canonical_en it should map to.
+category,canonical_en,language,translation,notes
+# ─── German: SPACE EQ slot row labels ─────────────────────────────────────────
+space_slot,Fore Weapons,de,Bug Waffen,
+space_slot,Aft Weapons,de,Heck Waffen,
+space_slot,Deflector,de,Deflektor,
+space_slot,Engines,de,Antriebe,
+space_slot,Warp Core,de,Warp Antrieb,
+space_slot,Shield,de,Schilde,
+space_slot,Devices,de,Geräte,
+space_slot,Devices,de,Geraete,Umlaut-stripped OCR variant (English EasyOCR model)
+# ─── German: EQ classifier tokens (used by the 2-line composite matcher) ──────
+eq_word_first,Fore,de,Bug,
+eq_word_first,Aft,de,Heck,
+eq_word_first,Warp,de,Warp,
+eq_word_second,Weapons,de,Waffen,
+eq_word_second,Core,de,Antrieb,
+eq_word_single,Deflector,de,Deflektor,
+eq_word_single,Engines,de,Antriebe,
+eq_word_single,Shields,de,Schilde,
+eq_word_single,Devices,de,Geräte,
+eq_word_single,Devices,de,Geraete,Umlaut-stripped OCR variant
+# ─── German: screen-type header keywords (full phrases as used in code) ───────
+# Note: the recognition pipeline matches these as lowercase substrings of
+# joined OCR text, so partial fragments (e.g. "stationen" inside
+# "Raumstationen") will match as long as they're listed here exactly.
+screen_header,bridge officer abilities,de,brückenoffiziers-fähigkeiten,
+screen_header,bridge officer abilities,de,bruckenoffiziers-fahigkeiten,Umlaut-stripped OCR variant
+screen_header,bridge officer,de,brückenoffizier,
+screen_header,bridge officer,de,bruckenoffizier,Umlaut-stripped OCR variant
+screen_header,space stations,de,raumstationen,
+screen_header,tactical ability,de,taktische fähigkeit,
+screen_header,engineering ability,de,technische fähigkeit,
+screen_header,science ability,de,wissenschaftliche fähigkeit,
+# ─── TODO: full trait/spec headers (not yet verified against a German screenshot)
+# Examples expected — add an exact match when a German trait/spec screenshot
+# becomes available:
+#   screen_header,personal space traits,de,persönliche raumeigenschaften,
+#   screen_header,starship traits,de,raumschiff-eigenschaften,
+#   screen_header,space reputation,de,raum-ruf,
+#   screen_header,personal ground traits,de,persönliche bodeneigenschaften,
+#   screen_header,ground reputation,de,boden-ruf,
+#   screen_header,standard away team,de,standard-außenteam,
+#   screen_header,primary specialization,de,primärspezialisierung,
+#   screen_header,secondary specialization,de,sekundärspezialisierung,
+#   spec_name,command officer,de,kommandooffizier,
+#   spec_name,intelligence officer,de,geheimdienstoffizier,
+#   spec_name,miracle worker,de,wunderwirker,
+#   spec_name,pilot,de,pilot,
+#   spec_name,temporal operative,de,zeitoperative,

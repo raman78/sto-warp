@@ -91,7 +91,9 @@ STD_ORDER = {
     'Hangars':              13,
 }
 
-# German UI variants (OCR sometimes returns these on localized clients).
+# German UI variants — kept as a base, extended below from ui_translations.csv.
+# STD_ORDER (English) keys map row label → canonical row index. The localized
+# GERMAN_ORDER below resolves localized OCR text to the same row index.
 GERMAN_ORDER = {
     'Bug Waffen':       0,
     'Heck Waffen':      1,
@@ -139,6 +141,39 @@ SECOND_LINE_KW = {
     'core':      'Core',
     'deflector': 'Deflector',
 }
+
+# Augment the English classifier tables with localized synonyms loaded from
+# warp/data/ui_translations.csv. New rows in the CSV automatically flow into
+# the matcher without code changes.
+def _apply_localized_kw() -> None:
+    from warp.recognition.ui_translations import normalize_map, synonyms
+    # eq_word_single — alnum-only lookup (matches the classifier filter below).
+    for tr, canon in normalize_map('eq_word_single').items():
+        alnum = ''.join(ch for ch in tr if ch.isalnum())
+        if alnum:
+            SINGLE_LINE_KW.setdefault(alnum, canon)
+    for tr, canon in normalize_map('eq_word_first').items():
+        alnum = ''.join(ch for ch in tr if ch.isalnum())
+        if alnum:
+            FIRST_LINE_KW.setdefault(alnum, canon)
+    for tr, canon in normalize_map('eq_word_second').items():
+        alnum = ''.join(ch for ch in tr if ch.isalnum())
+        if alnum:
+            SECOND_LINE_KW.setdefault(alnum, canon)
+    # space_slot — extend GERMAN_ORDER with every known full-label translation.
+    for tr, canon in normalize_map('space_slot').items():
+        idx = STD_ORDER.get(canon)
+        if idx is None and canon == 'Shield':
+            idx = STD_ORDER.get('Shields')
+        if idx is not None:
+            # Store with original casing for human-readability of debug output;
+            # _canonical_idx normalizes the OCR row text to .strip() but is
+            # case-sensitive on the key, so also register a Title-cased form.
+            for variant in {tr, tr.title(), tr.capitalize()}:
+                GERMAN_ORDER.setdefault(variant, idx)
+
+
+_apply_localized_kw()
 
 COMPOSITE = {
     ('Fore',         'Weapons'):   'Fore Weapons',
