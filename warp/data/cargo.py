@@ -299,9 +299,10 @@ def starship_traits() -> dict[str, dict]:
 
 
 def boff_abilities() -> dict:
-    """`{'space': ..., 'ground': ..., 'all': ...}` — upstream shape is
-    already what consumers expect, returned as-is."""
-    return _bucketed('boff_abilities', lambda: _load_raw('boff_abilities.json'))
+    """`{'space': {prof: [rank_dict]}, 'ground': {...}, 'all': {name: dict}}`.
+
+    See `_build_boff_abilities` for the bucketing rationale."""
+    return _bucketed('boff_abilities', _build_boff_abilities)
 
 
 def all_caches() -> dict[str, Any]:
@@ -455,6 +456,37 @@ def _build_traits() -> dict[str, dict[str, dict[str, dict]]]:
 def _build_starship_traits() -> dict[str, dict]:
     raw = _load_raw('starship_traits.json')
     return {trait['name']: trait for trait in raw if trait.get('name')}
+
+
+def _build_boff_abilities() -> dict:
+    """Bucketize raw `boff_abilities.json` (flat list) into the shape
+    every consumer expects:
+
+        {
+          'space':  {profession: [{ability_name: ability_dict, ...}]},
+          'ground': {profession: [{ability_name: ability_dict, ...}]},
+          'all':    {ability_name: ability_dict},   # carries 'profession'
+        }
+
+    Per-env buckets keep one rank-dict per profession — consumers only
+    test name-membership across the rank list, so the rank-index split
+    is irrelevant for correctness.
+    """
+    raw = _load_raw('boff_abilities.json')
+    out: dict = {'space': {}, 'ground': {}, 'all': {}}
+    for ab in raw:
+        name = ab.get('name')
+        if not name:
+            continue
+        prof = ab.get('type') or 'Unknown'
+        env  = 'ground' if (ab.get('region') or '').lower() == 'ground' else 'space'
+
+        info = dict(ab)
+        info.setdefault('profession', prof)
+
+        out['all'][name] = info
+        out[env].setdefault(prof, [{}])[0][name] = info
+    return out
 
 
 # --- introspection helpers (used by `sto-warp check` / diagnostics) -----
