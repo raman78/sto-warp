@@ -1034,7 +1034,10 @@ class WarpCoreWindow(QMainWindow):
                 label   = SCREEN_TYPE_LABELS.get(stype, 'Unknown')
                 self._file_list.blockSignals(True)
                 item.setText(f'{sc_icon} {label}\n  {_disp_name(p.name)}')
-                item.setCheckState(Qt.CheckState.Checked if (is_user or is_ml) else Qt.CheckState.Unchecked)
+                # Checkbox semantics: checked == user-confirmed ONLY. ML
+                # auto-accept produces a yellow dot icon but leaves the
+                # checkbox empty so "checked" is an honest persistent signal.
+                item.setCheckState(Qt.CheckState.Checked if is_user else Qt.CheckState.Unchecked)
                 item.setIcon(_get_user_icon() if is_user else (_get_ml_icon() if is_ml else QIcon()))
                 self._file_list.blockSignals(False)
                 item.setForeground(self._file_item_color(p))
@@ -1132,7 +1135,9 @@ class WarpCoreWindow(QMainWindow):
         item.setFlags(item.flags() | Qt.ItemFlag.ItemIsUserCheckable)
         is_user = p.name in self._screen_types_manual
         is_ml   = p.name in self._screen_types_ml_auto
-        item.setCheckState(Qt.CheckState.Checked if (is_user or is_ml) else Qt.CheckState.Unchecked)
+        # Checkbox semantics: checked == user-confirmed ONLY. ML auto-accept
+        # paints the yellow dot icon but never the checkbox.
+        item.setCheckState(Qt.CheckState.Checked if is_user else Qt.CheckState.Unchecked)
         item.setIcon(_get_user_icon() if is_user else (_get_ml_icon() if is_ml else QIcon()))
         item.setForeground(self._file_item_color(p))
         return item
@@ -1146,7 +1151,8 @@ class WarpCoreWindow(QMainWindow):
         is_user = fname in self._screen_types_manual
         is_ml   = fname in self._screen_types_ml_auto
         self._file_list.blockSignals(True)
-        item.setCheckState(Qt.CheckState.Checked if (is_user or is_ml) else Qt.CheckState.Unchecked)
+        # Checkbox tracks user-confirmation only — see `_make_file_list_item`.
+        item.setCheckState(Qt.CheckState.Checked if is_user else Qt.CheckState.Unchecked)
         item.setIcon(_get_user_icon() if is_user else (_get_ml_icon() if is_ml else QIcon()))
         self._file_list.blockSignals(False)
 
@@ -4671,8 +4677,9 @@ class WarpCoreWindow(QMainWindow):
                 is_user = p.name in self._screen_types_manual
                 is_ml   = p.name in self._screen_types_ml_auto
                 item.setText(f'{icon} {label}\n  {_disp_name(p.name)}')
+                # Checkbox tracks user-confirmation only — see `_make_file_list_item`.
                 item.setCheckState(
-                    Qt.CheckState.Checked if (is_user or is_ml) else Qt.CheckState.Unchecked)
+                    Qt.CheckState.Checked if is_user else Qt.CheckState.Unchecked)
                 item.setIcon(_get_user_icon() if is_user
                              else (_get_ml_icon() if is_ml else QIcon()))
                 item.setForeground(self._file_item_color(p))
