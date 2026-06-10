@@ -22,51 +22,104 @@
 # To fix a misrecognition: add a new row with the OCR-typical text and the
 # canonical_en it should map to.
 category,canonical_en,language,translation,notes
-# ─── German: SPACE EQ slot row labels ─────────────────────────────────────────
-space_slot,Fore Weapons,de,Bug Waffen,
-space_slot,Aft Weapons,de,Heck Waffen,
+# ═══════════════════════════════════════════════════════════════════════════════
+# German: SPACE EQ slot row labels
+# ═══════════════════════════════════════════════════════════════════════════════
+# Full labels — feed GERMAN_ORDER (row index) and _SPACE_EQ_LABELS (screen type).
+# canonical_en must match STD_ORDER keys for GERMAN_ORDER to work.
+space_slot,Fore Weapons,de,Bug-Waffen,
+space_slot,Fore Weapons,de,Bug Waffen,OCR may drop or keep the hyphen
+space_slot,Aft Weapons,de,Heck-Waffen,
+space_slot,Aft Weapons,de,Heck Waffen,OCR may drop or keep the hyphen
 space_slot,Deflector,de,Deflektor,
+space_slot,Sec-Def,de,Sekundärdeflektor,
+space_slot,Sec-Def,de,Sekundardeflektor,Umlaut-stripped OCR variant
+space_slot,Sec-Def,de,Sekundärer Deflektor,Two-word form
+space_slot,Sec-Def,de,Sekundarer Deflektor,Umlaut-stripped two-word form
 space_slot,Engines,de,Antriebe,
-space_slot,Warp Core,de,Warp Antrieb,
-space_slot,Shield,de,Schilde,
+space_slot,Warp Core,de,Warp,German STO shows just Warp for this slot
+space_slot,Shields,de,Schilde,
 space_slot,Devices,de,Geräte,
-space_slot,Devices,de,Geraete,Umlaut-stripped OCR variant (English EasyOCR model)
-# ─── German: EQ classifier tokens (used by the 2-line composite matcher) ──────
+space_slot,Devices,de,Geraete,Umlaut-stripped OCR variant
+space_slot,Universal Consoles,de,Universalkonsolen,May appear as one compound word
+space_slot,Engineering Consoles,de,Technikkonsolen,May appear as one compound word
+space_slot,Science Consoles,de,Wissenschaftskonsolen,May appear as one compound word
+space_slot,Tactical Consoles,de,Taktikkonsolen,May appear as one compound word
+space_slot,Experimental,de,Experimentelle Waffe,
+space_slot,Experimental,de,Experimentell,Short form
+space_slot,Hangars,de,Hangar,Same word in German
+# OCR-visible label aliases — canonical_en matches what _SPACE_EQ_LABELS uses
+# (the lowercase English OCR substring), not the SETS slot name.
+space_slot,Impulse,de,Impuls,STO EQ panel shows Impulse not Engines
+space_slot,Impulse,de,Impulsantrieb,Full German form
+space_slot,Singularity Core,de,Singularitätskern,
+space_slot,Singularity Core,de,Singularitatskern,Umlaut-stripped OCR variant
+space_slot,Singularity,de,Singularität,Single-word form
+space_slot,Singularity,de,Singularitat,Umlaut-stripped
+# ═══════════════════════════════════════════════════════════════════════════════
+# German: EQ classifier tokens (used by the 2-line composite matcher)
+# ═══════════════════════════════════════════════════════════════════════════════
+# First-line tokens — map to canonical English first-word.
 eq_word_first,Fore,de,Bug,
 eq_word_first,Aft,de,Heck,
-eq_word_first,Warp,de,Warp,
+eq_word_first,Warp,de,Warp,Same word in German
+eq_word_first,Universal,de,Universal,Same word in German
+eq_word_first,Engineering,de,Technik,
+eq_word_first,Science,de,Wissenschaft,
+eq_word_first,Science,de,Wissenschafts,Compound prefix form
+eq_word_first,Tactical,de,Taktik,
+eq_word_first,Secondary,de,Sekundärer,
+eq_word_first,Secondary,de,Sekundarer,Umlaut-stripped
+eq_word_first,Secondary,de,Sekundär,
+eq_word_first,Secondary,de,Sekundar,Umlaut-stripped
+eq_word_first,Experimental,de,Experimentell,
+eq_word_first,Experimental,de,Experimentelle,Feminine form (Waffe)
+# Second-line tokens — map to canonical English second-word.
 eq_word_second,Weapons,de,Waffen,
+eq_word_second,Consoles,de,Konsolen,
 eq_word_second,Core,de,Antrieb,
+eq_word_second,Deflector,de,Deflektor,For Secondary + Deflector composite
+# Single-token keywords — full label on one OCR line.
 eq_word_single,Deflector,de,Deflektor,
+eq_word_single,Sec-Def,de,Sekundärdeflektor,Single compound word
+eq_word_single,Sec-Def,de,Sekundardeflektor,Umlaut-stripped
+eq_word_single,Engines,de,Impuls,German STO shows Impuls
+eq_word_single,Engines,de,Impulsantrieb,Full compound form
 eq_word_single,Engines,de,Antriebe,
+eq_word_single,Warp Core,de,Singularität,Singularity variant
+eq_word_single,Warp Core,de,Singularitat,Umlaut-stripped
 eq_word_single,Shields,de,Schilde,
 eq_word_single,Devices,de,Geräte,
-eq_word_single,Devices,de,Geraete,Umlaut-stripped OCR variant
-# ─── German: screen-type header keywords (full phrases as used in code) ───────
-# Note: the recognition pipeline matches these as lowercase substrings of
-# joined OCR text, so partial fragments (e.g. "stationen" inside
-# "Raumstationen") will match as long as they're listed here exactly.
+eq_word_single,Devices,de,Geraete,Umlaut-stripped
+eq_word_single,Hangars,de,Hangar,Same in German
+eq_word_single,Experimental,de,Experimentell,
+eq_word_single,Experimental,de,Experimentelle,
+# ═══════════════════════════════════════════════════════════════════════════════
+# German: screen-type header keywords
+# ═══════════════════════════════════════════════════════════════════════════════
+# canonical_en must be one of the lowercase phrases in text_extractor.py
 screen_header,bridge officer abilities,de,brückenoffiziers-fähigkeiten,
-screen_header,bridge officer abilities,de,bruckenoffiziers-fahigkeiten,Umlaut-stripped OCR variant
+screen_header,bridge officer abilities,de,bruckenoffiziers-fahigkeiten,Umlaut-stripped
 screen_header,bridge officer,de,brückenoffizier,
-screen_header,bridge officer,de,bruckenoffizier,Umlaut-stripped OCR variant
+screen_header,bridge officer,de,bruckenoffizier,Umlaut-stripped
 screen_header,space stations,de,raumstationen,
 screen_header,tactical ability,de,taktische fähigkeit,
+screen_header,tactical ability,de,taktische fahigkeit,Umlaut-stripped
 screen_header,engineering ability,de,technische fähigkeit,
+screen_header,engineering ability,de,technische fahigkeit,Umlaut-stripped
 screen_header,science ability,de,wissenschaftliche fähigkeit,
-# ─── TODO: full trait/spec headers (not yet verified against a German screenshot)
-# Examples expected — add an exact match when a German trait/spec screenshot
-# becomes available:
-#   screen_header,personal space traits,de,persönliche raumeigenschaften,
-#   screen_header,starship traits,de,raumschiff-eigenschaften,
-#   screen_header,space reputation,de,raum-ruf,
-#   screen_header,personal ground traits,de,persönliche bodeneigenschaften,
-#   screen_header,ground reputation,de,boden-ruf,
-#   screen_header,standard away team,de,standard-außenteam,
-#   screen_header,primary specialization,de,primärspezialisierung,
-#   screen_header,secondary specialization,de,sekundärspezialisierung,
-#   spec_name,command officer,de,kommandooffizier,
-#   spec_name,intelligence officer,de,geheimdienstoffizier,
-#   spec_name,miracle worker,de,wunderwirker,
-#   spec_name,pilot,de,pilot,
-#   spec_name,temporal operative,de,zeitoperative,
+screen_header,science ability,de,wissenschaftliche fahigkeit,Umlaut-stripped
+screen_header,personal space traits,de,persönliche raumeigenschaften,
+screen_header,personal space traits,de,personliche raumeigenschaften,Umlaut-stripped
+screen_header,starship traits,de,raumschiffeigenschaften,
+screen_header,space reputation,de,raumruf,
+#   screen_header,personal ground traits,de,persönliche bodeneigenschaften,TODO: verify
+#   screen_header,ground reputation,de,boden-ruf,TODO: verify
+#   screen_header,standard away team,de,standard-außenteam,TODO: verify
+#   screen_header,primary specialization,de,primärspezialisierung,TODO: verify
+#   screen_header,secondary specialization,de,sekundärspezialisierung,TODO: verify
+#   spec_name,command officer,de,kommandooffizier,TODO: verify
+#   spec_name,intelligence officer,de,geheimdienstoffizier,TODO: verify
+#   spec_name,miracle worker,de,wunderwirker,TODO: verify
+#   spec_name,pilot,de,pilot,TODO: verify
+#   spec_name,temporal operative,de,zeitoperative,TODO: verify
