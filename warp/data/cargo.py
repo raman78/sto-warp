@@ -265,6 +265,16 @@ def _refresh_loop(names: Iterable[str], force: bool) -> None:
             _MEMO.pop(name, None)
             _BUCKET_MEMO.clear()
 
+    # Surface any shape drift between upstream and consumer contracts
+    # as a WARNING. Without this, the cache-read sites in warp_importer /
+    # build_writer / sets_export silently swallow AttributeError and the
+    # drift only shows up as degraded recognition (see v1.0.16 BOFF
+    # regression).
+    try:
+        validate(on_problem='warn')
+    except Exception as exc:
+        log.warning(f'cargo.refresh: validate skipped — {exc}')
+
 
 # --- bucketed accessors (SETS cache shape) ------------------------------
 
@@ -315,6 +325,98 @@ def all_caches() -> dict[str, Any]:
         'starship_traits': starship_traits(),
         'boff_abilities': boff_abilities(),
     }
+
+
+# --- shape validation ---------------------------------------------------
+
+def _shape_problems() -> list[str]:
+    """Return a list of human-readable shape violations for every cache.
+
+    Empty list = every consumer-visible invariant holds. Each call site in
+    `warp_importer`, `build_writer`, `sets_export`, `trainer_window` wraps
+    cache reads in `try/except: pass` — so a drift between upstream JSON
+    and the builder doesn't crash, it silently degrades recognition. This
+    function makes the silent drift observable.
+    """
+    problems: list[str] = []
+
+    def _check(name: str, fn):
+        try:
+            fn()
+        except Exception as exc:
+            problems.append(f'{name}: {exc!r}')
+
+    def _check_equipment():
+        eq = equipment()
+        assert isinstance(eq, dict) and eq, 'equipment: empty or not dict'
+        # build_writer / warp_importer iterate eq.values(); each value must
+        # be {item_name: item_dict} so `.get(name)` and `entry.get('type')`
+        # work without try/except.
+        for bucket, items in eq.items():
+            assert isinstance(items, dict), f'equipment[{bucket}!r]: not dict'
+
+    def _check_ships():
+        ss = ships()
+        assert isinstance(ss, dict) and ss, 'ships: empty or not dict'
+        sample = next(iter(ss.values()))
+        assert isinstance(sample, dict), 'ships: values not dicts'
+
+    def _check_traits():
+        tr = traits()
+        assert set(tr.keys()) >= {'space', 'ground'}, 'traits: missing env'
+        for env in ('space', 'ground'):
+            assert set(tr[env].keys()) >= {'personal', 'rep', 'active_rep'}, \
+                f'traits[{env}]: missing trait kind'
+
+    def _check_starship_traits():
+        st = starship_traits()
+        assert isinstance(st, dict) and st, 'starship_traits: empty'
+
+    def _check_boff_abilities():
+        bo = boff_abilities()
+        assert set(bo.keys()) >= {'space', 'ground', 'all'}, \
+            f'boff_abilities: top keys {sorted(bo.keys())} != space/ground/all'
+        assert bo['all'], 'boff_abilities[all]: empty'
+        sample_name, sample_info = next(iter(bo['all'].items()))
+        assert isinstance(sample_info, dict) and 'profession' in sample_info, \
+            f'boff_abilities[all][{sample_name!r}]: no profession field'
+        # Each env bucket must be {profession: [rank_dict, ...]} — the
+        # shape `_lookup_boff_profession` and `_item_valid_for_slot` walk.
+        for env in ('space', 'ground'):
+            assert isinstance(bo[env], dict), f'boff_abilities[{env}]: not dict'
+            for prof, ranks in bo[env].items():
+                assert isinstance(ranks, list) and ranks, \
+                    f'boff_abilities[{env}][{prof}]: not non-empty list'
+                assert isinstance(ranks[0], dict), \
+                    f'boff_abilities[{env}][{prof}][0]: not dict'
+
+    _check('equipment',       _check_equipment)
+    _check('ships',           _check_ships)
+    _check('traits',          _check_traits)
+    _check('starship_traits', _check_starship_traits)
+    _check('boff_abilities',  _check_boff_abilities)
+    return problems
+
+
+def validate(*, on_problem: str = 'warn') -> list[str]:
+    """Load every cache once and check shape invariants.
+
+    `on_problem='warn'` logs each violation at WARNING level and returns
+    the list. `on_problem='raise'` raises `ValueError` on the first
+    violation — used by the CI shape test. `on_problem='silent'` returns
+    the list with no logging — for callers that want to format their own
+    report (e.g. a future `sto-warp data verify` CLI).
+    """
+    problems = _shape_problems()
+    if not problems:
+        log.info(f'cargo.validate: all 5 caches OK')
+        return problems
+    if on_problem == 'raise':
+        raise ValueError(f'cargo shape violation: {problems[0]}')
+    if on_problem == 'warn':
+        for p in problems:
+            log.warning(f'cargo.validate: shape drift — {p}')
+    return problems
 
 
 class _CacheView:
