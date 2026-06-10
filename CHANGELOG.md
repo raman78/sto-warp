@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.16] — 2026-06-10
+
+### Fixed
+- BOFF abilities are recognised again. A reference-data loader bug
+  introduced in v1.0.6 left the internal BOFF-ability lookup table
+  as a flat list instead of the expected per-environment and
+  per-profession buckets. Most recognition paths silently degraded:
+  candidates were no longer filtered by profession (weaker matches),
+  the slot-content check let any name through, and the SETS export
+  dropped every BOFF ability from the written build. On screenshots
+  containing a Universal BOFF seat the recognition worker also
+  crashed outright with `'list' object has no attribute 'get'`.
+  Re-importing any previously affected screenshot now writes BOFF
+  abilities to the exported build correctly.
+
 ## [1.0.15] — 2026-06-08
 
 ### Added
