@@ -223,6 +223,16 @@ class SETSIconMatcher:
                             interpolation=cv2.INTER_AREA)
         q_hist = self._hist_hsv(crop64)
 
+        # Virtual labels (__empty__ / __inactive__) are orthogonal to the
+        # caller's slot-type restriction — they answer "is this slot blank?",
+        # not "which ability is this?". Always allow them through the
+        # candidate_names filter so the embedder's virtual prediction is
+        # never silenced by a restriction set built from the abilities cache.
+        # Defense-in-depth: anti-virtual-bias rules below still suppress
+        # false-positive virtual wins on real icons.
+        if candidate_names is not None:
+            candidate_names = candidate_names | {'__empty__', '__inactive__'}
+
         # Stage 0: community pHash knowledge override (hard override).
         # Embedder result is reused later by Stage 1, so cache it across the
         # cross-check + main flow.

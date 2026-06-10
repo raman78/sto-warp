@@ -404,3 +404,27 @@ def pretty_slot(slot_name: str) -> str:
     else:
         base = 'Boff Universal'
     return f'{base}+{spec}' if spec else base
+
+
+# Profession alias map: the scraped `boff_abilities.json` splits the
+# Temporal Operative specialization across two `type` strings —
+# 'Temporal' (most entries, both space and ground) and 'Temporal
+# Operative' (7 ground-only entries). In-game these are a single
+# spec, so candidate-filter code should treat them as synonyms. The
+# alias lives here, not in `cargo.py` — we do not mutate the upstream
+# data file.
+_PROF_ALIASES: dict[str, frozenset[str]] = {
+    'Temporal':           frozenset({'Temporal', 'Temporal Operative'}),
+    'Temporal Operative': frozenset({'Temporal', 'Temporal Operative'}),
+}
+
+
+def expand_profession_aliases(profs: set[str]) -> set[str]:
+    """Expand a set of profession names with known aliases
+    (Temporal <-> Temporal Operative). Unknown names pass through
+    unchanged.
+    """
+    out = set(profs)
+    for p in list(profs):
+        out |= _PROF_ALIASES.get(p, frozenset())
+    return out

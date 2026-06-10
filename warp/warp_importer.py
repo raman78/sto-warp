@@ -2057,6 +2057,99 @@ class WarpImporter:
             if not bboxes:
                 _slog.debug(f'  [{slot_name}] no bboxes from layout (max_count={max_count})')
             candidates = slot_candidates.get(slot_name)  # None = no type constraint
+
+            # BOFF seat candidate restriction — computed once per seat,
+            # driven by the marker-encoded slot key (T/E/S/U/G + optional
+            # spec). Per-icon color voting is the fallback used only when
+            # the marker carries no profession info (pure U / G without
+            # spec); the vote covers the whole seat so all 4 positions
+            # stay consistent. A `None` means "no restriction" (liberal
+            # fallback when even voting failed).
+            _seat_candidates: set | None = None
+            if slot_name.startswith('Boff Seat'):
+                from warp.recognition.boff_keys import (
+                    parse_seat_profession, parse_seat_spec,
+                    expand_profession_aliases,
+                )
+                _base = parse_seat_profession(slot_name)  # T/E/S → str; U/G → None
+                _spec = parse_seat_spec(slot_name)        # spec prof or None
+                _allowed_profs: set[str] = set()
+                _restrict_src = ''
+                if _base:
+                    _allowed_profs = {_base}
+                    if _spec:
+                        _allowed_profs.add(_spec)
+                    _restrict_src = f'marker={_base}' + (f'+{_spec}' if _spec else '')
+                elif _spec:
+                    # Universal/Ground seat with a spec stripe — any
+                    # base profession allowed, plus the spec itself.
+                    _allowed_profs = {'Tactical', 'Engineering', 'Science', _spec}
+                    _restrict_src = f'marker=Universal+{_spec}'
+                else:
+                    # Pure Universal / Ground without spec — marker has
+                    # no profession info. Vote once over all active crops
+                    # in this seat to derive a single profession for the
+                    # whole seat (not per icon).
+                    from collections import Counter
+                    _prof_to_cache = {
+                        'tactical': 'Tactical', 'engineering': 'Engineering',
+                        'science': 'Science', 'intelligence': 'Intelligence',
+                        'command': 'Command', 'pilot': 'Pilot',
+                        'miracle worker': 'Miracle Worker',
+                        'temporal': 'Temporal',
+                    }
+                    _layout_obj = self._get_layout()
+                    _votes: list[str] = []
+                    for _vb in bboxes:
+                        if len(_vb) == 5 and _vb[4] in ('empty', 'inactive'):
+                            continue
+                        _vx, _vy, _vw, _vh = _vb[:4]
+                        _vcrop = self._crop(img, (_vx, _vy + current_dy, _vw, _vh))
+                        if _vcrop is None or _vcrop.size == 0:
+                            continue
+                        _vk = _layout_obj._classify_boff_profession(_vcrop)
+                        _vmapped = _prof_to_cache.get(_vk) if _vk else None
+                        if _vmapped:
+                            _votes.append(_vmapped)
+                    if _votes:
+                        _winner, _wn = Counter(_votes).most_common(1)[0]
+                        # Require a clear majority (>= 2 votes, or the
+                        # only vote we have). Ambiguous votes leave the
+                        # candidate list unrestricted.
+                        if _wn >= 2 or len(_votes) == 1:
+                            _allowed_profs = {_winner}
+                            # On a Universal seat, allow all spec profs
+                            # too (the seat could host any spec'd BOFF).
+                            _allowed_profs |= {
+                                'Intelligence', 'Command', 'Pilot',
+                                'Miracle Worker', 'Temporal',
+                            }
+                            _restrict_src = f'voted={_winner} ({_wn}/{len(_votes)})'
+                        else:
+                            _restrict_src = f'voted=ambiguous ({len(_votes)} votes)'
+                if _allowed_profs:
+                    _allowed_profs = expand_profession_aliases(_allowed_profs)
+                    try:
+                        _boff_cache = self._cache.boff_abilities.get('all', {})
+                        if _boff_cache:
+                            _seat_candidates = {
+                                n for n, info in _boff_cache.items()
+                                if info.get('profession') in _allowed_profs
+                            }
+                            _slog.debug(
+                                f"  [{slot_name}] seat candidates restricted "
+                                f"({_restrict_src}) → {len(_seat_candidates)} items"
+                            )
+                    except Exception as _exc:
+                        _slog.debug(
+                            f"  [{slot_name}] cache-shape drift while restricting "
+                            f"candidates: {_exc!r}"
+                        )
+                else:
+                    _slog.debug(
+                        f"  [{slot_name}] candidates open ({_restrict_src or 'no marker info'})"
+                    )
+
             for idx, bbox in enumerate(bboxes):
                 # Emit per-slot progress so the UI stays responsive
                 if self._progress_callback and total_bboxes > 0:
@@ -2100,26 +2193,10 @@ class WarpImporter:
                     continue
                     
                 candidates = slot_candidates.get(slot_name)  # None = no type constraint
-                
-                # Dynamic candidate filtering for BOFF seats based on color heuristic
-                if slot_name.startswith('Boff Seat'):
-                    base_prof_key = self._get_layout()._classify_boff_profession(crop)
-                    if base_prof_key:
-                        prof_map = {
-                            'tactical': 'Tactical', 'engineering': 'Engineering', 'science': 'Science',
-                            'intelligence': 'Intelligence', 'command': 'Command', 'pilot': 'Pilot',
-                            'miracle worker': 'Miracle Worker', 'temporal': 'Temporal Operative' # In STO it's Temporal Operative
-                        }
-                        base_prof = prof_map.get(base_prof_key)
-                        if base_prof:
-                            allowed_profs = {base_prof, 'Intelligence', 'Command', 'Pilot', 'Miracle Worker', 'Temporal Operative', 'Temporal'}
-                            try:
-                                boff_cache = self._cache.boff_abilities.get('all', {})
-                                if boff_cache:
-                                    candidates = {c_name for c_name, info in boff_cache.items() if info.get('profession') in allowed_profs}
-                                    _slog.debug(f"  [{slot_name}][{idx}] Restricted candidates to {base_prof} + Specializations ({len(candidates)} items)")
-                            except Exception as _exc:
-                                _slog.debug(f"  [{slot_name}][{idx}] cache-shape drift while restricting candidates: {_exc!r}")
+                if _seat_candidates is not None:
+                    # Seat-level restriction (computed once above) wins
+                    # over the empty default for BOFF seat-keyed slots.
+                    candidates = _seat_candidates
 
                 name, conf, thumb, used_session = matcher.match(crop, candidate_names=candidates)
                 self.match_log.append({

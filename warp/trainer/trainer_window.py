@@ -887,13 +887,16 @@ class WarpCoreWindow(QMainWindow):
         self._recognition_items = []
         self._current_idx = -1
         self._file_list.clear()
-        # Restore persisted screen type labels and confirmation state
-        persisted      = self._data_mgr.get_all_screen_types()
-        user_confirmed = self._data_mgr.get_user_confirmed_set()
+        # Restore persisted screen type labels and confirmation state.
+        # Lookup by path (content hash) — not via the filename projection
+        # in get_all_screen_types / get_user_confirmed_set, which silently
+        # drops sha16 entries whose `_image_meta` wasn't seeded by
+        # annotations.json (e.g. screenshots confirmed before any item
+        # was annotated).
         for p in self._screenshots:
-            saved = persisted.get(p.name, '')
+            saved = self._data_mgr.get_screen_type(p)
             self._screen_types[p.name] = saved if saved else 'UNKNOWN'
-            if p.name in user_confirmed:
+            if self._data_mgr.is_user_confirmed(p):
                 self._screen_types_manual.add(p.name)
             elif saved:
                 self._screen_types_ml_auto.add(p.name)
