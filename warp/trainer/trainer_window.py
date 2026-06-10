@@ -4554,6 +4554,12 @@ class WarpCoreWindow(QMainWindow):
                         thumbnail=None,
                         source_file=src_str,
                         bbox=a.bbox or (),
+                        # Preserve the original seat marker (Boff Seat
+                        # L[U]_93 etc.) so build_writer's cluster→seat
+                        # matcher can route U-marker'd clusters to the
+                        # ship's Universal seat instead of competing for
+                        # explicit-prof seats via content voting.
+                        seat_key=a.seat_key or '',
                         src='user',
                         match_origin='user',
                     ))

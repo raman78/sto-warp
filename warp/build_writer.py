@@ -424,13 +424,58 @@ def _cluster_boff_items(boff_items: list[RecognisedItem]) -> list[list[Recognise
 def _match_clusters_to_seats(
     clusters: list[list[RecognisedItem]], seats_visual: list, cache,
 ) -> tuple[dict[int, int], list]:
-    from warp.recognition.boff_keys import parse_seat_profession, parse_seat_spec
+    """Greedy seat-marker affinity matcher.
+
+    For each (ship_seat, cluster) pair we compute an integer affinity
+    tier (lower = better fit) using the cluster's `seat_key` marker
+    FIRST, then falling back to content vote. A single global greedy
+    assignment by `(tier, |rank - active|)` places marker-exact
+    matches before fuzzy ones — so a screenshot's `[U]`-marker'd
+    cluster lands on the ship's Universal seat, a `[T+Tem]`-marker'd
+    cluster on the ship's Tac+Tem seat, etc., regardless of what the
+    cluster's content vote happens to be. A final mop-up pass catches
+    orphan clusters when ship/screenshot disagree on seat layout (e.g.
+    a U-marker'd cluster was detected but the ship has no U seat) so
+    no recognised abilities are silently dropped.
+
+    Affinity tiers (lower = better):
+      0  exact marker match (cluster's (prof, spec) align with seat's)
+      1  cluster has extra spec the seat doesn't need (still slottable)
+      2  Universal cluster ↔ Universal seat with spec mismatch
+      3  explicit cluster's spec stripe matches a U+spec seat
+      4  legacy/no-marker cluster, content vote matches seat prof
+      5  explicit cluster as fallback for a U seat
+      7  U-marker'd cluster going to explicit-prof seat by content vote
+      8  spec-prof fallback (legacy 'Boff <spec>' cluster → spec seat)
+      99 mop-up (no affinity but seats/clusters left over)
+    """
+    from warp.recognition.boff_keys import (
+        parse_seat_profession, parse_seat_spec, is_seat_keyed, is_ground_seat,
+    )
 
     cluster_info = []
     for c in clusters:
-        cluster_slot = getattr(c[0], 'seat_key', '') or c[0].slot
-        base_prof = parse_seat_profession(cluster_slot)
-        spec_prof = parse_seat_spec(cluster_slot)
+        # Vote on seat_key across non-virtual items so one mis-stamped
+        # item can't hijack a cluster's identity. Empty seat_keys are
+        # dropped from the vote so legacy items (which carry no seat_key)
+        # don't dilute it.
+        sks = [getattr(ri, 'seat_key', '') or '' for ri in c
+               if ri.name and ri.name not in VIRTUAL_ITEM_NAMES]
+        sks = [sk for sk in sks if sk]
+        if sks:
+            cluster_slot = Counter(sks).most_common(1)[0][0]
+        else:
+            cluster_slot = c[0].slot
+
+        marker_prof = parse_seat_profession(cluster_slot)
+        marker_spec = parse_seat_spec(cluster_slot)
+        # A "Universal-marker'd" cluster: seat-keyed (Boff Seat …) with
+        # no base profession code, and not a Ground seat.
+        marker_universal = (
+            is_seat_keyed(cluster_slot)
+            and marker_prof is None
+            and not is_ground_seat(cluster_slot)
+        )
 
         content_profs: list[str] = []
         for ri in c:
@@ -450,87 +495,127 @@ def _match_clusters_to_seats(
                     break
 
         prof_set = set(content_profs)
-        if base_prof is None:
-            base_prof = Counter(content_profs).most_common(1)[0][0] if content_profs else 'Unknown'
+        content_vote = (Counter(content_profs).most_common(1)[0][0]
+                        if content_profs else 'Unknown')
+        # `base_prof` preserves the legacy meaning consumed by
+        # `_write_abilities` (Universal-seat promotion): marker base
+        # when known, else the content vote.
+        base_prof = marker_prof if marker_prof else content_vote
         active = sum(1 for ri in c if ri.name and ri.name not in VIRTUAL_ITEM_NAMES)
-        cluster_info.append([c, base_prof, prof_set, spec_prof, active])
+        cluster_info.append({
+            'items':            c,
+            'base_prof':        base_prof,
+            'prof_set':         prof_set,
+            'spec_prof':        marker_spec,
+            'active':           active,
+            'marker_universal': marker_universal,
+            'marker_prof':      marker_prof,
+            'content_vote':     content_vote,
+        })
+
+    def _affinity(seat_prof: str, seat_spec_prof: str | None, ci: int) -> int | None:
+        info    = cluster_info[ci]
+        m_prof  = info['marker_prof']
+        m_uni   = info['marker_universal']
+        m_spec  = info['spec_prof']
+        c_base  = info['base_prof']
+        c_profs = info['prof_set']
+
+        if seat_prof == 'Universal':
+            if m_uni:
+                # U-marker'd cluster ↔ U seat — strongest preference.
+                if seat_spec_prof:
+                    if m_spec == seat_spec_prof:
+                        return 0
+                    return 2
+                if not m_spec:
+                    return 0
+                return 1  # cluster has spec, U-no-spec seat — abilities fit
+            # Explicit cluster going to a U seat (used as fallback when
+            # there is no U cluster to receive the U seat).
+            if seat_spec_prof:
+                if m_spec == seat_spec_prof:
+                    return 3
+                if seat_spec_prof in c_profs:
+                    return 4
+                return 5
+            return 5
+
+        # Explicit-profession ship seat (Tactical / Engineering / Science)
+        if m_prof == seat_prof:
+            if seat_spec_prof:
+                if m_spec == seat_spec_prof:
+                    return 0
+                if not m_spec:
+                    return 0 if seat_spec_prof in c_profs else 2
+                return None  # cluster spec mismatches the seat's spec
+            if not m_spec:
+                return 0
+            return 1  # cluster carries extra spec, seat is plain
+        if m_uni:
+            # U-marker'd cluster going to an explicit seat — only via
+            # content vote, and only as a last resort below mop-up tier.
+            if c_base == seat_prof:
+                return 7
+            return None
+        if m_prof is None:
+            # Legacy / 'Boff Temporal'-style cluster, content vote
+            if c_base == seat_prof:
+                return 4
+            if seat_spec_prof and c_base == seat_spec_prof:
+                return 8
+            return None
+        return None
 
     assigned: dict[int, int] = {}
     used_ci: set[int] = set()
 
-    def _compatible(primary_prof: str, target_spec: str | None, ci: int) -> bool:
-        c_primary, c_profs, c_spec = cluster_info[ci][1], cluster_info[ci][2], cluster_info[ci][3]
-        if c_primary != primary_prof:
-            return False
-        if target_spec:
-            if c_spec:
-                if c_spec != target_spec:
-                    return False
-            elif target_spec not in c_profs:
-                return False
-        return True
-
-    def _greedy_assign(candidates: list[tuple[int, int, int, int]]) -> None:
-        # candidates: (cost, tiebreak_vis_i, vis_i, ci) — sort by cost then
-        # by seat order so behaviour is deterministic when costs tie.
-        candidates.sort()
-        for _cost, _tb, vis_i, ci in candidates:
+    def _greedy_assign(cands: list[tuple]) -> None:
+        cands.sort()
+        for tup in cands:
+            vis_i, ci = tup[-2], tup[-1]
             if vis_i in assigned or ci in used_ci:
                 continue
             assigned[vis_i] = ci
             used_ci.add(ci)
 
-    # Pass 1 — explicit-profession seats. For each (seat, cluster) compatible
-    # pair compute |seat_rank − active_count|; greedy-pick lowest cost. This
-    # makes seat-size the primary discriminator when a profession has
-    # multiple seats and multiple clusters (e.g. two Tac seats of different
-    # ranks): the bigger cluster lands on the bigger seat instead of the
-    # first-by-index, which is what was wedging Avenger-class builds.
-    candidates: list[tuple[int, int, int, int]] = []
+    # Main pass: global affinity-based greedy assignment.
+    candidates: list[tuple[int, int, int, int, int]] = []
     for vis_i, (rank, prof, spec) in enumerate(seats_visual):
-        if prof == 'Universal':
-            continue
-        spec_prof = _SPEC_TO_PROF.get(spec) if spec else None
+        seat_spec_prof = _SPEC_TO_PROF.get(spec) if spec else None
         for ci in range(len(cluster_info)):
-            active = cluster_info[ci][4]
-            cost = abs(rank - active)
-            if _compatible(prof, spec_prof, ci):
-                candidates.append((cost, vis_i, vis_i, ci))
-            elif spec_prof and _compatible(spec_prof, None, ci):
-                # Spec-prof fallback (e.g. Eng-MW seat ↔ cluster whose
-                # primary resolved to 'Miracle Worker'). Penalise so the
-                # direct base-prof match wins when both exist.
-                candidates.append((cost + 100, vis_i, vis_i, ci))
+            aff = _affinity(prof, seat_spec_prof, ci)
+            if aff is None:
+                continue
+            cost = abs(rank - cluster_info[ci]['active'])
+            candidates.append((aff, cost, vis_i, vis_i, ci))
     _greedy_assign(candidates)
 
-    # Pass 2 — Universal seats with a spec stripe: match by spec primary.
+    # Mop-up: any orphaned cluster goes into the best-size leftover seat.
+    # Reached only when affinity logic under-populates (e.g. ship has no
+    # U seat but a U-marker'd cluster was detected, or content vote
+    # produced 'Unknown'). Better to surface the abilities somewhere than
+    # to silently drop them.
     candidates = []
     for vis_i, (rank, prof, spec) in enumerate(seats_visual):
-        if prof != 'Universal' or not spec or vis_i in assigned:
-            continue
-        spec_prof = _SPEC_TO_PROF.get(spec)
-        if not spec_prof:
+        if vis_i in assigned:
             continue
         for ci in range(len(cluster_info)):
             if ci in used_ci:
                 continue
-            if _compatible(spec_prof, None, ci):
-                candidates.append((abs(rank - cluster_info[ci][4]), vis_i, vis_i, ci))
+            cost = abs(rank - cluster_info[ci]['active'])
+            candidates.append((99, cost, vis_i, vis_i, ci))
     _greedy_assign(candidates)
 
-    # Pass 3 — Universal seats without spec take whatever's left, again
-    # preferring the best size match.
-    candidates = []
-    for vis_i, (rank, prof, spec) in enumerate(seats_visual):
-        if prof != 'Universal' or spec or vis_i in assigned:
-            continue
-        for ci in range(len(cluster_info)):
-            if ci in used_ci:
-                continue
-            candidates.append((abs(rank - cluster_info[ci][4]), vis_i, vis_i, ci))
-    _greedy_assign(candidates)
-
-    return assigned, cluster_info
+    # Build the legacy 6-tuple cluster_info shape expected by
+    # `_write_abilities` so its `cluster_info[ci][N]` reads continue to
+    # work without churn in unrelated code.
+    legacy_ci = [
+        [info['items'], info['base_prof'], info['prof_set'],
+         info['spec_prof'], info['active'], info['marker_universal']]
+        for info in cluster_info
+    ]
+    return assigned, legacy_ci
 
 
 _BASE_PROFS = {'Tactical', 'Engineering', 'Science'}
