@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.17] — 2026-06-10
+
+### Fixed
+- The bundled offline copy of the BOFF-ability table has been
+  refreshed to the current upstream format. A clean install with no
+  network would otherwise fall back to a stale copy left over from
+  the previous data shape, which now silently breaks BOFF
+  recognition on the first launch until reference data can be
+  downloaded.
+
+### Added
+- Internal data caches (equipment, ships, traits, starship traits,
+  BOFF abilities) are now checked against a shape contract whenever
+  the reference data refreshes. Any future drift between the
+  upstream files and what WARP expects is logged as a warning
+  instead of silently degrading recognition — the same kind of
+  drift that caused the BOFF regression fixed in v1.0.16.
+
 ## [1.0.16] — 2026-06-10
 
 ### Fixed
