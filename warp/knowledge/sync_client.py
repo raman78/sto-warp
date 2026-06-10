@@ -41,17 +41,20 @@ from warp.debug import syslog as log
 
 # Poison label policy — mirrors sets-warp-backend main.py (D-A.1 / D-B.3).
 #
-# Virtual classes (__empty__, __inactive__, __boff_*) and dev-test placeholders
-# used to be dropped here before they could reach the backend. Per D-A.1 they
-# are now legitimate ML labels end-to-end; defense-in-depth in
-# warp/recognition/icon_matcher.py:244 still suppresses them as
-# knowledge.json hard-overrides, so the user view is protected without
-# rejecting input.
+# Virtual classes (__empty__, __inactive__, __boff_*) and dev-test
+# placeholders are not eligible for community-knowledge upload: the
+# backend rejects them with HTTP 400 ("not eligible for community
+# knowledge"). We mirror that filter here to avoid spamming the backend
+# with foredoomed POSTs and to preserve the daily contribution budget.
+# Defense-in-depth in warp/recognition/icon_matcher.py:244 still
+# suppresses these as knowledge.json hard-overrides, so the user view
+# stays protected on the read path.
 #
-# Toggle _POISON_FILTER_ENABLED back to True to restore the previous
-# behaviour. Rollback MUST happen in lockstep with the backend flag —
-# atomic rollback per docs/client_user_view_filter.md Z5-C.3.
-_POISON_FILTER_ENABLED = False
+# Per Z5-C.3 (docs/client_user_view_filter.md:197), this flag MUST stay
+# in lockstep with the backend's filter — never flip one without the
+# other. Toggle to False only as part of an atomic backend+client
+# rollback.
+_POISON_FILTER_ENABLED = True
 
 
 def _is_poison_label(name: str) -> bool:
