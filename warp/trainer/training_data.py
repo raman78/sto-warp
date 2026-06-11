@@ -78,6 +78,17 @@ NON_ICON_SLOTS: frozenset = frozenset({
 #   player's character name — never stored beyond bbox coordinates.)
 POSITION_ONLY_SLOTS: frozenset = frozenset({'Ship Name'})
 
+
+def _bbox_iou(a: tuple, b: tuple) -> float:
+    """Intersection-over-Union for two (x, y, w, h) bboxes."""
+    ax, ay, aw, ah = a[:4]
+    bx, by, bw, bh = b[:4]
+    ix = max(0, min(ax + aw, bx + bw) - max(ax, bx))
+    iy = max(0, min(ay + ah, by + bh) - max(ay, by))
+    inter = ix * iy
+    union = aw * ah + bw * bh - inter
+    return inter / union if union > 0 else 0.0
+
 # TEXT_LEARNING_SLOTS — crop PNG + confirmed text + ml_name (raw OCR) saved
 #   and uploaded to HF staging so the central pipeline can build
 #   ship_type_corrections.json via democratic voting.
@@ -309,27 +320,42 @@ class TrainingDataManager:
                         logger.warning(f"step1: crop_index sync failed for {image_path.name}: {e}")
                 return ann
 
-        # 2. Fallback: same bbox, slot was edited → update in-place without duplicating
-        # Skip for NON_ICON_SLOTS — Ship Name/Type/Tier can share bbox coords legitimately;
-        # a slot-agnostic match would overwrite one with another.
+        # 2. Fallback: same bbox (exact or IoU overlap), slot was edited →
+        # update in-place without duplicating.
+        # Skip for NON_ICON_SLOTS — Ship Name/Type/Tier can share bbox coords
+        # legitimately; a slot-agnostic match would overwrite one with another.
         bbox_t = tuple(bbox)
         if slot not in NON_ICON_SLOTS:
+            best_iou_i, best_iou_val = -1, 0.0
             for i, d in enumerate(self._annotations[key]):
-                if tuple(d.get('bbox', [])) == bbox_t:
-                    old_ann_id = d.get('ann_id', '')
-                    self._annotations[key][i] = asdict(ann)
-                    self._dirty = True
-                    # Cleanup crop PNG + crop_index entry tied to the OLD ann_id —
-                    # otherwise the old slot label stays in the dataset forever.
-                    if old_ann_id and old_ann_id != ann.ann_id:
-                        self._cleanup_crops_for_ann_id(old_ann_id)
-                    # Export new crop + index entry under the new ann_id.
-                    try:
-                        self._export_crop(image_path, ann)
-                        self._sync_crop_index(image_path, ann)
-                    except Exception as e:
-                        logger.warning(f"step2: export/sync failed for {image_path.name}: {e}")
-                    return ann
+                d_bbox = tuple(d.get('bbox', []))
+                if not d_bbox or len(d_bbox) < 4:
+                    continue
+                if d_bbox == bbox_t:
+                    # Exact bbox match — update in-place immediately
+                    best_iou_i = i
+                    break
+                # IoU dedup: a 1-2 px shifted bbox (e.g. user-drawn vs
+                # detector grid) for the same slot must not create a
+                # second annotation at the same physical position.
+                if d.get('slot') == slot:
+                    iou = _bbox_iou(bbox_t, d_bbox)
+                    if iou > best_iou_val:
+                        best_iou_val, best_iou_i = iou, i
+            if best_iou_i >= 0 and (best_iou_val >= 0.5
+                                     or tuple(self._annotations[key][best_iou_i].get('bbox', [])) == bbox_t):
+                d = self._annotations[key][best_iou_i]
+                old_ann_id = d.get('ann_id', '')
+                self._annotations[key][best_iou_i] = asdict(ann)
+                self._dirty = True
+                if old_ann_id and old_ann_id != ann.ann_id:
+                    self._cleanup_crops_for_ann_id(old_ann_id)
+                try:
+                    self._export_crop(image_path, ann)
+                    self._sync_crop_index(image_path, ann)
+                except Exception as e:
+                    logger.warning(f"step2: export/sync failed for {image_path.name}: {e}")
+                return ann
 
         # 3. Single-instance slots: drop any existing confirmed annotation for
         #    this slot at a different bbox (user re-drew at correct position)

@@ -2386,14 +2386,28 @@ class WarpCoreWindow(QMainWindow):
             )
             if reply != QMessageBox.StandardButton.Yes:
                 return
-            # Also remove from TrainingDataManager
-            if self._current_idx >= 0 and ri.get('bbox'):
-                path = self._screenshots[self._current_idx]
-                for ann in self._data_mgr.get_annotations(path):
-                    if ann.bbox == ri['bbox']:
-                        self._data_mgr.remove_annotation(path, ann)
-                        self._data_mgr.save()
-                        break
+        # Remove matching disk annotation — by exact bbox first, then
+        # IoU fallback for near-overlapping bboxes (user-drawn vs
+        # detector grid). Runs for BOTH confirmed and pending items:
+        # in Fast Correction mode items are seeded as 'pending' even
+        # when the same bbox has a confirmed annotation on disk; without
+        # this the disk entry survives and Send to WARP still emits it.
+        if self._current_idx >= 0 and ri.get('bbox'):
+            path = self._screenshots[self._current_idx]
+            ri_bbox = tuple(ri['bbox'])
+            from warp.trainer.training_data import _bbox_iou
+            best_ann, best_iou = None, 0.0
+            for ann in self._data_mgr.get_annotations(path):
+                if tuple(ann.bbox) == ri_bbox:
+                    best_ann = ann
+                    break
+                iou = _bbox_iou(ri_bbox, tuple(ann.bbox))
+                if iou > best_iou:
+                    best_iou, best_ann = iou, ann
+            if best_ann is not None and (tuple(best_ann.bbox) == ri_bbox
+                                          or best_iou >= 0.5):
+                self._data_mgr.remove_annotation(path, best_ann)
+                self._data_mgr.save()
         self._review_list.takeItem(row)
         self._recognition_items.pop(row)
         self._exit_manual_bbox_mode()
