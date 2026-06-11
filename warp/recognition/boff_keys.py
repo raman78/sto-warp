@@ -359,11 +359,18 @@ def order_items_for_display(
     seen: set[str] = set()
     ordered: list[tuple[str, list]] = []
 
+    def _bbox_xy(it):
+        bb = _field(it, 'bbox', None)
+        if bb and len(bb) >= 2:
+            return (bb[1], bb[0])
+        return (1_000_000_000, 1_000_000_000)
+
     def _emit(label: str) -> None:
         if label in by_label and label not in seen:
             entries = sorted(
                 by_label[label],
                 key=lambda it: (_field(it, 'slot_index', 0) or 0,
+                                _bbox_xy(it),
                                 _field(it, 'name', '') or ''),
             )
             ordered.append((label, entries))
