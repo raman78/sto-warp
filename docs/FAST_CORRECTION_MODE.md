@@ -15,7 +15,8 @@ upload" loop is the wrong shape — FCM is the lightweight loop.
 
 Introduced in **1.0.11**. End-to-end loop closure (auto-exit, view rewind)
 landed in the same release; the Send-to-WARP visibility fix landed in
-**1.0.13**.
+**1.0.13**. Bbox dedup and FC-removal disk-propagation fixes landed in
+**1.0.18** (see §5½).
 
 ---
 
@@ -186,6 +187,56 @@ loading anything else would invalidate the staging hash.
 The **↗ Send this to WARP** button is only visible in Fast Correction
 Mode. The 1.0.13 fix in commit `fa75388` hides it during normal training
 to remove a click target that was inert outside FC.
+
+---
+
+## 5½. Bbox dedup and removal — IoU matching (1.0.18)
+
+Two problems existed prior to 1.0.18 around near-overlapping bounding boxes
+(a 1–2 px shift between detector runs):
+
+1. **Duplicate creation.** `TrainingDataManager.add_annotation()` step 2
+   matched existing annotations by exact bbox tuple equality. A 1 px shift
+   produced a different tuple → step 2 missed → a second annotation was
+   appended for the same physical slot position.
+
+2. **Stale disk on FC removal.** `_on_remove_item()` only deleted the disk
+   annotation when `state == 'confirmed'`. In Fast Correction Mode every
+   review item is seeded as `state='pending'`, so deleting a bbox removed
+   it from memory but left the confirmed annotation on disk.
+   `_on_send_to_warp()` reads from disk → the deleted item re-appeared.
+
+### Fix 1 — IoU-based dedup in `add_annotation`
+
+`_bbox_iou()` (`warp/trainer/training_data.py:82`) computes
+Intersection-over-Union for two `(x, y, w, h)` tuples. Step 2 of
+`add_annotation()` (line 329) now:
+
+- Scans all existing annotations for the same image key.
+- Exact bbox match → update in-place immediately (original behaviour).
+- Same-slot annotation with IoU ≥ 0.5 → treat as the same physical
+  position and update in-place.
+- The IoU path is restricted to same-slot comparisons to avoid
+  merging legitimately adjacent slots (e.g. `Fore Weapons` slot 1 and
+  slot 2 on a tight grid).
+
+### Fix 2 — disk removal for pending items
+
+`WarpCoreWindow._on_remove_item()` (`warp/trainer/trainer_window.py:2371`)
+now runs the disk-removal block unconditionally (not gated behind
+`state == 'confirmed'`). It searches disk annotations with the same
+IoU fallback (exact match first, then IoU ≥ 0.5) so a shifted bbox
+is still found and removed. The confirmation dialog for confirmed
+items is preserved — the user is still prompted before deleting a
+confirmed annotation.
+
+### IoU threshold
+
+| Context | Threshold | Rationale |
+|---|---|---|
+| `add_annotation` step 2 dedup | 0.5 | Catches 1–3 px shifts (typical IoU 0.85–0.95) without merging adjacent slots on tight grids. |
+| `_on_remove_item` disk lookup | 0.5 | Same reasoning — match the same physical position even when the detector grid drifted slightly. |
+| `_merge_recognition` overlap filter | 0.3 | Broader — prevents any meaningful overlap between new detections and existing items. Unchanged. |
 
 ---
 

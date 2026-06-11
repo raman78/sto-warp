@@ -8,6 +8,37 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.18] — 2026-06-11
+
+### Added
+- **Multi-language recognition.** Screenshots taken with a non-English
+  STO client (German so far) are now recognised correctly. Equipment
+  names, ship types and console categories that appear in the local
+  language are translated to English automatically during detection, so
+  WARP can match them against the reference database. The translation
+  table is a plain CSV that can be extended by the community when new
+  languages are needed.
+
+### Fixed
+- Items within the same slot group (e.g. several identical Isomag
+  consoles in Engineering) now display in a stable top-to-bottom,
+  left-to-right order instead of shuffling randomly between sessions.
+- Removing a bounding box in Fast Correction Mode now correctly
+  removes it from the saved data as well, so **Send to WARP** no
+  longer re-emits an item that was already deleted.
+- Near-overlapping bounding boxes (a 1–2 pixel shift between
+  recognition runs) no longer create duplicate annotations for the
+  same slot position.
+- BOFF seat assignment is more accurate: abilities are better paired
+  to the correct seat, and the seat tag is preserved through export.
+- The screen-type confirmation checkbox in the file list now only
+  reflects a manual confirmation by the user — automatic
+  classification by the model no longer ticks it.
+- The community upload filter blocks known-bad labels again after a
+  brief gap where the check was inadvertently skipped.
+- Ship tier and rank lookups use the live reference data instead of a
+  stale snapshot that could drift as the upstream files were updated.
+
 ## [1.0.17] — 2026-06-10
 
 ### Fixed

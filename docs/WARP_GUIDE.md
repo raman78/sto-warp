@@ -44,6 +44,14 @@ WARP reads the standard STO build screens. Open your ship/character loadout in-g
 
 > **Screenshot tip:** Use the default STO screenshot key (default: **Print Screen**) to save full-resolution screenshots. Cropped or resized images may reduce recognition accuracy.
 
+### Non-English game clients
+
+Since 1.0.18: WARP recognises screenshots taken with a non-English STO
+client. Equipment names, ship types and slot labels that appear in the
+local language (German is supported now; more languages can be added)
+are translated to English automatically during detection. No extra
+configuration is needed — the translation happens behind the scenes.
+
 ### How many screenshots per folder
 
 **One build per folder.** Each folder is one import session. You can mix screen types freely:
@@ -1010,7 +1018,9 @@ On CPU-only hardware, the ML inference step adds 2–5 seconds per screenshot. T
 
 ### "Duplicate bbox" warning
 
-This appears when two confirmed items overlap by more than 70% in the same screenshot. Usually this means you accidentally drew a bbox over an area that already has a confirmed item. Remove the duplicate using Del and re-confirm if needed.
+This appears when two confirmed items overlap by more than 70% in the same screenshot. Usually this means you accidentally drew a bbox over an area that already has a confirmed item. Remove the duplicate using **Del** and re-confirm if needed.
+
+Since 1.0.18: near-overlapping boxes (a tiny 1–2 pixel shift between recognition runs) are now detected as the same position and merged automatically, so this warning is much less common than before.
 
 ### Training completes but accuracy doesn't improve
 

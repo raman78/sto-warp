@@ -25,6 +25,31 @@ community model by the central pipeline (§3).
 A separate one-shot admin path for bootstrapping the embedder on synthetic
 crops lives at the bottom of this document (§9). End users do not run it.
 
+### Multi-language OCR (1.0.18)
+
+The recognition pipeline accepts screenshots from non-English STO clients.
+A translation layer sits between EasyOCR output and the reference-data
+lookup tables:
+
+```
+OCR text (any lang)  ──►  ui_translations.py  ──►  English canonical
+                               │
+                    reads warp/data/ui_translations.csv
+```
+
+| Component | File | Role |
+|---|---|---|
+| Translation CSV | `warp/data/ui_translations.csv` | Admin-editable table. Each row maps `(category, canonical_en, language, translation)`. Categories: `space_slot`, `ground_slot`, `eq_word_single`, `eq_word_first`, `eq_word_second`, `screen_header`, `spec_name`, `ship_type_word`. |
+| Translation loader | `warp/recognition/ui_translations.py` | Parses the CSV once on first access. Exposes `normalize_map()`, `synonyms()`, `augment_substring_phrases()`, `translate_ship_type()`, `ocr_languages()`. |
+| EasyOCR language list | `ui_translations.ocr_languages()` | Derived from CSV contents — language codes in the CSV automatically add to the EasyOCR reader's language list (e.g. `['en', 'de']`). |
+| Ship-type translation | `text_extractor.py:1036` | After OCR reads a ship type, `translate_ship_type()` splits the string on hyphens/spaces and replaces each token using the `ship_type_word` category (longest match first, up to 3-token phrases). |
+| Screen-type detection | `text_extractor.py:149` | `_TRAIT_SPACE_HEADERS`, `_SPACE_EQ_LABELS` and similar tuples are expanded via `augment_substring_phrases()` so localized header text triggers the same screen-type classification. |
+
+To add a language: append rows to the CSV with the appropriate ISO 639-1
+code. No Python edits needed. German (`de`) is the first supported
+non-English language; it covers space/ground slot labels, equipment
+categories, screen headers, and ship-type compound words.
+
 ---
 
 ## 1. Local data capture

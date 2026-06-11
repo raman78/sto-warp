@@ -296,3 +296,22 @@ When wired into `warp/recognition/layout_detector.py`:
   retraining, add a brightness-based pre-filter, or fold the two
   states into one "no-ability" class and recover inactive via UI
   context (greyed-out tier label).
+
+## Display ordering — `order_items_for_display`
+
+`warp/recognition/boff_keys.py:317` `order_items_for_display()` is the
+single source of truth for item ordering in both the WARP Results tree and
+the WARP CORE review panel. Items within each slot group are sorted by:
+
+```
+(slot_index, (bbox_y, bbox_x), name)
+```
+
+The `(bbox_y, bbox_x)` tiebreaker (added in 1.0.18) prevents unstable
+ordering when multiple items share the same `slot_index` and the same name
+(e.g. several Isomag consoles in Engineering). Without it the sort was
+non-deterministic because Python's `sorted()` is stable but the input
+order varied between recognition runs. The helper `_bbox_xy(it)` at line
+362 extracts `(y, x)` from the item's bbox, falling back to
+`(1_000_000_000, 1_000_000_000)` for items without spatial data so they
+sort last.
