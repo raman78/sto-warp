@@ -640,9 +640,11 @@ If WARP missed a slot entirely (no box drawn over an item):
 
 ### Annotating empty and inactive Bridge Officer slots
 
-Bridge officer seats sometimes contain slots that are visually empty (nothing assigned yet) or inactive (locked/unavailable at this rank). Annotating these helps WARP correctly position recognised abilities even when some slots are unoccupied.
+Bridge officer seats sometimes contain slots that are visually empty (nothing assigned yet) or inactive (locked/unavailable at this rank).
 
-**How to annotate:**
+**Inactive slots** (the navy-blue "X" icon) are now detected automatically — WARP recognises the dark-blue pattern and marks these as *inactive* without any manual work. They appear in the review list as greyed-out entries.
+
+**Empty slots** and any inactive slots that were not auto-detected can still be annotated manually:
 
 1. Draw a bounding box over the empty or inactive slot icon as you would for a normal ability.
 2. In the **Item** field, type `__empty__` (for an unoccupied slot) or `__inactive__` (for a locked/unavailable slot).
@@ -651,6 +653,31 @@ Bridge officer seats sometimes contain slots that are visually empty (nothing as
 The review list shows these with grey labels `[empty slot]` / `[inactive slot]`. They write nothing to your SETS build but are uploaded to the community dataset so the model learns to recognise these slot states.
 
 > **Why bother?** WARP uses the position of all detected icons — including empty and inactive ones — to determine which ability belongs in which seat slot. Annotating gaps makes the positioning more accurate, especially for Commander seats (4 slots) where only 1–2 abilities are present.
+
+### Changing a Bridge Officer group type
+
+WARP groups Bridge Officer abilities by seat — each seat gets its own
+heading in the review list (e.g. *Boff Tactical*, *Boff Science #2*,
+*Boff Engineering+Command*). Sometimes WARP guesses the wrong profession
+for a seat, especially Universal seats. Instead of correcting every
+ability one by one, you can change the entire group at once:
+
+1. **Right-click** the group heading in the review list (e.g. *Boff Science #2*).
+2. A **Change Group Type** submenu appears with every valid combination:
+   - Base types: *Boff Tactical*, *Boff Engineering*, *Boff Science*
+   - Base + specialization: *Boff Tactical+Command*, *Boff Engineering+Pilot*, *Boff Science+Temporal*, and so on
+3. Pick the correct type.
+4. All abilities in the group are **rematched** against the new profession's
+   ability list. The group keeps its position in the tree (matching the
+   physical seat position on screen).
+
+If the old group was numbered (e.g. *Boff Science #2*) and only one group
+of that base type remains after the change, the leftover number is dropped
+automatically — *Boff Science #1* becomes just *Boff Science*.
+
+> **Tip:** This is most useful for Universal seats, where WARP has to guess
+> the profession from the abilities it recognises. If the guess was wrong,
+> a single right-click fixes the whole seat.
 
 ### Removing a wrong bounding box
 
@@ -1003,6 +1030,21 @@ name and picks the one with the strongest word overlap, so a partial read
 like *"Flet Tempral Sci Vssel"* still resolves to *"Fleet Temporal Science
 Vessel"*. If the result is still wrong, the Ship Type field in the Annotate
 panel offers a searchable dropdown over the full roster (see section 4).
+
+### Bridge Officer slots recognised as wrong abilities
+
+Inactive BOFF slots (the navy-blue "X" icon in-game, indicating a
+locked or unavailable ability at that rank) used to be misrecognised as
+random abilities with moderate confidence. This is now fixed — WARP
+detects the dark-blue pattern and marks those slots as *inactive*
+automatically. They appear in the review list as greyed-out entries and
+require no manual correction.
+
+If you still see a real ability name on a slot that should be inactive,
+draw a bbox over it and type `__inactive__` to correct it (see
+[Annotating empty and inactive Bridge Officer slots](#annotating-empty-and-inactive-bridge-officer-slots)
+in section 5). Your correction is uploaded to the community dataset and
+helps the model improve.
 
 ### Recognition accuracy is low on first use
 

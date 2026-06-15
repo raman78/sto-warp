@@ -235,6 +235,63 @@ nearly all such errors fall in `[0.0..0.1)` — a `conf < 0.10`
 suppression rule would catch ~98% of them, but doesn't recover the
 correct label.
 
+### 6a. HSV pre-classification of BOFF cells
+
+The ML classifier's inactive/empty confusion (above) is bypassed
+entirely in production by a fast HSV heuristic that runs **before** icon
+matching.  `warp/warp_importer.py:2216` checks every marker-projected
+BOFF cell:
+
+```python
+# warp/warp_importer.py
+if slot_name.startswith('Boff Seat') and len(bbox) == 4:
+    from warp.recognition.layout_detector import LayoutDetector as _LD
+    cell_state = _LD._classify_cell(crop)
+    if cell_state in ('empty', 'inactive'):
+        ...   # emit __empty__ / __inactive__ at conf=1.0, skip matcher
+```
+
+`LayoutDetector._classify_cell(crop_bgr)`
+(`warp/recognition/layout_detector.py:2051`) samples the **inner 60%**
+of the crop (20% margin on each side to avoid border contamination) and
+computes four HSV statistics:
+
+| Statistic | Variable | What it captures |
+|---|---|---|
+| Mean brightness | `mean_v` | Separates dark (empty/inactive) from icon-bearing cells |
+| Brightness variance | `std_v` | Separates uniform fills (inactive navy, empty black) from textured icons |
+| Mean saturation | `mean_s` | Separates saturated blue (inactive) from desaturated dark (empty) |
+| Mean hue | `mean_h` | Locks to the navy-blue band (H 95–130 in OpenCV's 0–180 scale) |
+
+Decision order (critical — navy-blue check must precede the brightness
+gate):
+
+```
+1. mean_s > 100  AND  95 < mean_h < 130  AND  std_v < 15
+       → 'inactive'   (bright navy-blue X, mean_v ~70)
+2. mean_v > 45
+       → 'active'     (has visible icon content)
+3. mean_s > 40   AND  95 < mean_h < 130
+       → 'inactive'   (darker navy, lower-res / dimmer monitors)
+4. std_v > 10
+       → 'inactive'   (LOCK text on EQ/Traits — near-black with text)
+5. otherwise
+       → 'empty'      (uniform near-black)
+```
+
+**Why the order matters.** Inactive BOFF cells have `mean_v ≈ 70` — well
+above the old brightness gate of 45 that classified them as active.
+Without step 1, the pipeline fell through to icon matching, which
+returned false positives like "Charged Particle Burst" at 0.89–0.94
+confidence. The compound check (high saturation + blue hue + low
+brightness variance) fires only on the uniform navy fill; real ability
+icons have `std_v >> 25` (rich visual detail) and pass step 2 as active.
+
+Cells classified as `empty` or `inactive` short-circuit with
+`__empty__` / `__inactive__` at `conf=1.0`. No icon matcher call is
+made — the crop never reaches template matching, the embedder, or the
+softmax classifier.
+
 ## Visualisation
 
 - **`tests/_diag_out/boff_markers_viz/<screen>`**: original screen
@@ -290,12 +347,12 @@ When wired into `warp/recognition/layout_detector.py`:
   counts) is not yet handled — currently all seats assumed 4 abilities.
   See `todo_boff_tier_grid.md`.
 - `__inactive__` vs `__empty__` confusion in `classify_patch` (3.4%
-  bucket-acc on inactive). Likely a training-data signal problem —
-  inactive icons are darker but otherwise identical in shape to empty
-  slots. Possible directions: weight inactive class higher in
-  retraining, add a brightness-based pre-filter, or fold the two
-  states into one "no-ability" class and recover inactive via UI
-  context (greyed-out tier label).
+  bucket-acc on inactive) — **resolved** by the HSV pre-classification
+  gate (§6a). The ML classifier is no longer called for cells that the
+  heuristic identifies as empty or inactive; false positives like
+  "Charged Particle Burst" at 0.89+ are eliminated. The classifier
+  itself still confuses the two states, but that code path is never
+  reached in production for marker-detected BOFF seats.
 
 ## Display ordering — `order_items_for_display`
 
@@ -315,3 +372,80 @@ order varied between recognition runs. The helper `_bbox_xy(it)` at line
 362 extracts `(y, x)` from the item's bbox, falling back to
 `(1_000_000_000, 1_000_000_000)` for items without spatial data so they
 sort last.
+
+### Parent reordering — `_resort_parents_canonical`
+
+`WarpCoreWindow._resort_parents_canonical()`
+(`warp/trainer/trainer_window.py:2871`) reorders tree parent rows after
+any structural change (manual bbox add, slot change, group type change).
+Without it a freshly created parent lands at the bottom of the tree
+(the adapter's `_get_or_create_parent` always appends).
+
+The method reads parent keys directly from `_ReviewListAdapter._slot_parents`
+and builds the final order from two independent orderings:
+
+| Phase | Source | Keys |
+|---|---|---|
+| Non-BOFF | Canonical slot lists: meta (`Ship Name`, `Ship Type`, `Ship Tier`) → build-type canonical → fallback (`DISPLAY_CANONICAL_ORDER`) → alphabetical | Exact match against `_slot_parents` keys |
+| BOFF | Min-Y of each parent's children's bboxes, row-bucketed (`ROW_TOL=50`) with X tiebreak | Direct read from `_slot_parents` — no label re-derivation |
+
+**Why not `order_items_for_display`.** The previous implementation called
+`order_items_for_display()` to produce a `slot_order` list and passed it
+to `reorder_parents()`. That re-derived group labels from items' `seat_key`
+via `group_items_by_seat()`. After a group type change (see below), the
+derived labels diverge from the tree's actual `_slot_parents` keys — e.g.
+`order_items_for_display` produces `"Boff Science #2"` (from the
+unchanged `seat_key`) while the tree has `"Boff Tactical"` (from the
+user's override). `reorder_parents()` cannot find the mismatched key and
+the group falls to the end. The current implementation avoids re-derivation
+entirely: it reads keys from the tree and sorts them by children's bbox
+coordinates.
+
+## BOFF group type change
+
+`WarpCoreWindow._show_review_context_menu()`
+(`warp/trainer/trainer_window.py:2304`) adds a right-click context menu
+on BOFF group headers in the review tree. When the user picks a new type,
+`_change_boff_group_type()` (line 2341) runs:
+
+```
+right-click "Boff Science #2"
+      │
+      ▼
+  ┌── Change Group Type ──────────────────────────────┐
+  │  base-only:   Boff Tactical / Engineering / Sci   │
+  │  base+spec:   Boff Tactical+Command / +Pilot / …  │
+  └────────────────────────────────────────────────────┘
+      │  user picks "Boff Tactical"
+      ▼
+  1. Build candidate set: _build_search_candidates("Boff Tactical")
+     (+ spec candidates if base+spec label)
+  2. For each child row: rematch crop via SETSIconMatcher.match()
+     against the combined candidate set (threshold ≥ 0.40)
+  3. Update ri['slot'], ri['name'], ri['conf'], ri['_group_label']
+  4. reparent_item(item, new_label, new_label)
+      │
+      ▼
+  5. Sibling renumbering: if old_label had "#N" suffix and only one
+     group with the same base label remains, strip the suffix:
+       _slot_parents:  "Boff Science #1" → "Boff Science"
+       parent UserRole: updated
+       parent text:     updated
+       children _group_label + UserRole: updated
+      │
+      ▼
+  6. _resort_parents_canonical() — reorder by children's bbox Y
+```
+
+**Sibling renumbering** (`trainer_window.py:2425`). When `old_label`
+matches `r'^(.+?)\s*#\d+$'`, the method scans `_slot_parents` for
+remaining siblings with the same base label. If exactly one survives, its
+`#N` suffix is stripped from:
+
+- `_slot_parents` key (delete old, insert new)
+- parent `QTreeWidgetItem` UserRole data
+- parent display text
+- every child's `_group_label` and leaf-item UserRole
+
+This keeps group labels clean — "Boff Science #1" becomes just "Boff
+Science" when the second Science seat is reclassified.

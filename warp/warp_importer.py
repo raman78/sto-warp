@@ -2206,14 +2206,17 @@ class WarpImporter:
                     _slog.warning(f'  [{slot_name}][{idx}] bbox={bbox} — empty crop, skipped')
                     continue
 
-                # Pre-classify BOFF cells: the marker-based detector emits
-                # plain 4-element bboxes for every grid position including
-                # empty/inactive slots. Without this check those dim crops
-                # go straight to the icon matcher, which returns false
-                # positives (e.g. "Charged Particle Burst" at 0.89+).
-                # Reuse layout_detector._classify_cell so the same HSV
-                # heuristic applies everywhere.
-                if slot_name.startswith('Boff Seat') and len(bbox) == 4:
+                # Pre-classify cells via HSV heuristic: both the BOFF
+                # marker detector and the equipment grid projector emit
+                # bboxes for every grid position — including empty and
+                # inactive slots. Without this gate those dim/uniform crops
+                # reach the icon matcher and produce false positives (e.g.
+                # "Charged Particle Burst" at 0.89+ for navy-blue BOFF
+                # inactive cells, or random low-conf equipment matches for
+                # padlock / empty console slots). The HSV heuristic is
+                # fast and deterministic; short-circuiting here also saves
+                # the ML inference cost for every virtual cell.
+                if len(bbox) == 4:
                     from warp.recognition.layout_detector import LayoutDetector as _LD
                     cell_state = _LD._classify_cell(crop)
                     if cell_state in ('empty', 'inactive'):
@@ -2230,6 +2233,25 @@ class WarpImporter:
                             bbox        = bbox,
                         ))
                         continue
+                    # Diagnostic for BOFF seats classified as active:
+                    # log HSV stats so false negatives (inactive cells
+                    # that slip through as active) can be debugged from
+                    # the log without re-running with a modified heuristic.
+                    if slot_name.startswith('Boff Seat'):
+                        import cv2 as _cv2
+                        _ih, _iw = crop.shape[:2]
+                        _mx = max(1, int(_iw * 0.20))
+                        _my = max(1, int(_ih * 0.20))
+                        _inner = crop[_my:_ih - _my, _mx:_iw - _mx]
+                        if _inner.size > 0:
+                            _hsv = _cv2.cvtColor(_inner, _cv2.COLOR_BGR2HSV) \
+                                       .reshape(-1, 3).astype(float)
+                            _slog.debug(
+                                f'  [{slot_name}][{idx}] cell=active '
+                                f'mean_v={_hsv[:,2].mean():.1f} '
+                                f'std_v={_hsv[:,2].std():.1f} '
+                                f'mean_s={_hsv[:,1].mean():.1f} '
+                                f'mean_h={_hsv[:,0].mean():.1f}')
 
                 candidates = slot_candidates.get(slot_name)  # None = no type constraint
                 if _seat_candidates is not None:
