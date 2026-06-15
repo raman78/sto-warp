@@ -54,6 +54,10 @@ SLOT_GROUPS: dict[str, list[str]] = {
         'Boff Intelligence', 'Boff Command', 'Boff Pilot', 'Boff Miracle Worker', 'Boff Temporal',
     ],
     'SPECIALIZATIONS': [],
+    'SKILLS': [],
+    'SPACE_SKILLS': [],
+    'GROUND_SKILLS': [],
+    'DISCARD': [],
     # SPACE_MIXED: merged space screenshot — equipment + traits + boffs + specs, no ground gear
     'SPACE_MIXED': [
         'Fore Weapons', 'Deflector', 'Sec-Def', 'Engines', 'Warp Core', 'Shield',
@@ -81,14 +85,18 @@ SCREEN_TYPE_LABELS: dict[str, str] = {
     'SPACE_TRAITS': 'Space Traits', 'GROUND_TRAITS': 'Ground Traits',
     'BOFFS': 'Bridge Officers', 'SPACE_BOFFS': 'Space Bridge Officers',
     'GROUND_BOFFS': 'Ground Bridge Officers', 'SPECIALIZATIONS': 'Specializations',
-    'SPACE_MIXED': 'Space Mixed (merged)', 'GROUND_MIXED': 'Ground Mixed (merged)', 'UNKNOWN': 'Unknown',
+    'SPACE_MIXED': 'Space Mixed (merged)', 'GROUND_MIXED': 'Ground Mixed (merged)',
+    'SKILLS': 'Skills', 'SPACE_SKILLS': 'Space Skills', 'GROUND_SKILLS': 'Ground Skills',
+    'DISCARD': 'Discard', 'UNKNOWN': 'Unknown',
 }
 
 SCREEN_TYPE_ICONS: dict[str, str] = {
     'SPACE_EQ': '🚀', 'GROUND_EQ': '🦶', 'TRAITS': '✨',
     'SPACE_TRAITS': '✨', 'GROUND_TRAITS': '✨',
     'BOFFS': '👥', 'SPACE_BOFFS': '👥', 'GROUND_BOFFS': '👥',
-    'SPECIALIZATIONS': '🎯', 'SPACE_MIXED': '🌌', 'GROUND_MIXED': '🗺️', 'UNKNOWN': '❓',
+    'SPECIALIZATIONS': '🎯', 'SPACE_MIXED': '🌌', 'GROUND_MIXED': '🗺️',
+    'SKILLS': '🎓', 'SPACE_SKILLS': '🎓', 'GROUND_SKILLS': '🎓',
+    'DISCARD': '🚫', 'UNKNOWN': '❓',
 }
 
 SCREEN_TO_SLOT_GROUP: dict[str, str] = {
@@ -101,8 +109,12 @@ SCREEN_TO_SLOT_GROUP: dict[str, str] = {
     'SPACE_BOFFS':    'SPACE_BOFFS',
     'GROUND_BOFFS':   'GROUND_BOFFS',
     'SPECIALIZATIONS':'SPECIALIZATIONS',
+    'SKILLS':         'SKILLS',
+    'SPACE_SKILLS':   'SPACE_SKILLS',
+    'GROUND_SKILLS':  'GROUND_SKILLS',
     'SPACE_MIXED':    'SPACE_MIXED',
     'GROUND_MIXED':   'GROUND_MIXED',
+    'DISCARD':        'DISCARD',  # not a build screenshot — no slots
     'UNKNOWN':        'ALL',   # unknown type → show everything, let user decide
 }
 

@@ -1592,6 +1592,20 @@ class WarpImporter:
         _ml_bt = SCREEN_TYPE_TO_BUILD_TYPE.get(_ml_stype, '') if _ml_stype else ''
         _slog.info(f'WarpImporter: ML screen: stype={_ml_stype!r} conf={_ml_conf:.2f} → bt={_ml_bt!r}')
 
+        # DISCARD / SKILLS — skip all recognition.
+        # Triggered by user override (Preview tab dropdown) or ML auto-detection.
+        _SKIP_STYPES = ('DISCARD', 'SKILLS', 'SPACE_SKILLS', 'GROUND_SKILLS')
+        _skip_stype = (
+            _user_override_bt if _user_override_bt in _SKIP_STYPES
+            else _ml_stype if _ml_stype in _SKIP_STYPES and _ml_conf >= 0.50
+            else ''
+        )
+        if _skip_stype:
+            _slog.info(f'WarpImporter: {_skip_stype} screen — skipping recognition')
+            r = ImportResult(build_type='')
+            r.screen_type = _skip_stype
+            return r
+
         # Determine the per-image starting build_type. In AUTO mode
         # (`self._build_type == ''` — GUI checkbox unchecked) every screen
         # in a folder gets its own ML+OCR-derived classification, so a
@@ -2191,7 +2205,32 @@ class WarpImporter:
                 if crop is None or crop.size == 0:
                     _slog.warning(f'  [{slot_name}][{idx}] bbox={bbox} — empty crop, skipped')
                     continue
-                    
+
+                # Pre-classify BOFF cells: the marker-based detector emits
+                # plain 4-element bboxes for every grid position including
+                # empty/inactive slots. Without this check those dim crops
+                # go straight to the icon matcher, which returns false
+                # positives (e.g. "Charged Particle Burst" at 0.89+).
+                # Reuse layout_detector._classify_cell so the same HSV
+                # heuristic applies everywhere.
+                if slot_name.startswith('Boff Seat') and len(bbox) == 4:
+                    from warp.recognition.layout_detector import LayoutDetector as _LD
+                    cell_state = _LD._classify_cell(crop)
+                    if cell_state in ('empty', 'inactive'):
+                        vname = '__empty__' if cell_state == 'empty' else '__inactive__'
+                        _slog.debug(
+                            f'  [{slot_name}][{idx}] bbox={bbox} cell={cell_state} → {vname}')
+                        result.items.append(RecognisedItem(
+                            slot        = slot_name,
+                            slot_index  = idx,
+                            name        = vname,
+                            confidence  = 1.0,
+                            thumbnail   = None,
+                            source_file = source,
+                            bbox        = bbox,
+                        ))
+                        continue
+
                 candidates = slot_candidates.get(slot_name)  # None = no type constraint
                 if _seat_candidates is not None:
                     # Seat-level restriction (computed once above) wins

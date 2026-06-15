@@ -2075,9 +2075,18 @@ class LayoutDetector:
         mean_s = hsv[:, 1].mean()
         mean_h = hsv[:, 0].mean()
 
+        # BOFF inactive: navy-blue X pattern — strongly blue-saturated with
+        # uniform brightness (std_v < 15). Must be checked BEFORE the
+        # brightness gate: at typical screenshot resolutions these cells
+        # have mean_v ~70, well above the 45 threshold for generic active.
+        # Real icons have rich visual detail → std_v >> 25; the uniform
+        # navy fill sits at std_v ~6. mean_s > 100 separates the saturated
+        # navy from dim-but-desaturated icons (e.g. Hold Together).
+        if mean_s > 100 and 95 < mean_h < 130 and std_v < 15:
+            return 'inactive'
         if mean_v > 45:
             return 'active'
-        # BOFFS inactive: navy-blue X pattern — distinctly saturated blue
+        # Darker BOFF inactive (lower-res screenshots / dimmer monitors)
         if mean_s > 40 and 95 < mean_h < 130:
             return 'inactive'
         # LOCK (EQ/Traits): near-black but text pixels raise brightness variance

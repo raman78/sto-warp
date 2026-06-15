@@ -67,6 +67,10 @@ _OVERRIDE_BUILD_TYPES = (
     'SPACE_TRAITS',
     'GROUND_TRAITS',
     'SPEC',
+    'SKILLS',
+    'SPACE_SKILLS',
+    'GROUND_SKILLS',
+    'DISCARD',
 )
 
 

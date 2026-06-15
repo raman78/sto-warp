@@ -58,6 +58,47 @@ from warp.warp_importer              import SLOT_ORDER as _SLOT_ORDER
 log = logging.getLogger(__name__)
 
 
+class _DebugDict(dict):
+    """Thin dict wrapper that logs every mutation with a traceback.
+
+    Temporary instrumentation to find the code path that evicts
+    _recognition_cache keys during Fast Correction Mode.
+    """
+
+    def __init__(self, tag: str, *a, **kw):
+        super().__init__(*a, **kw)
+        self._tag = tag
+
+    def _log(self, op: str, key=None):
+        import traceback
+        from warp.debug import log as _wlog
+        stack = ''.join(traceback.format_stack(limit=8)[:-1])
+        _wlog.info(f'[DEBUG-DICT] {self._tag}.{op} key={key!r} '
+                   f'keys_after={list(self.keys())}\n{stack}')
+
+    def __delitem__(self, key):
+        super().__delitem__(key)
+        self._log('__delitem__', key)
+
+    def pop(self, key, *default):
+        had = key in self
+        result = super().pop(key, *default)
+        if had:
+            self._log('pop', key)
+        return result
+
+    def clear(self):
+        keys_before = list(self.keys())
+        super().clear()
+        if keys_before:
+            self._log(f'clear (was {keys_before})')
+
+    def __setitem__(self, key, value):
+        super().__setitem__(key, value)
+        # Only log if in FC mode (avoid noise during normal training)
+        # self._log('__setitem__', key)
+
+
 class WarpCoreWindow(QMainWindow):
     # Emitted when the user presses "↗ Send to WARP" on a screenshot
     # marked Done. Payload is an ImportResult built from the user-confirmed
@@ -107,7 +148,7 @@ class WarpCoreWindow(QMainWindow):
         self._screen_types_ml_auto: set[str] = set()  # yellow — ML ≥95% auto-accepted
         self._screenshots_done: set[str] = self._load_done()  # fully annotated, locked
         self._detect_trigger: str = 'unknown'
-        self._recognition_cache: dict[str, list] = {}
+        self._recognition_cache: dict[str, list] = _DebugDict('_recognition_cache')
         self._recognition_items: list[dict] = []
         self._manual_bbox_mode = False
         self._add_bbox_mode = False
@@ -422,6 +463,8 @@ class WarpCoreWindow(QMainWindow):
         self._review_list.currentRowChanged.connect(self._on_review_row_changed)
         self._review_list.parentRowSelected.connect(self._on_review_parent_selected)
         self._review_list.installEventFilter(self)
+        self._review_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+        self._review_list.customContextMenuRequested.connect(self._show_review_context_menu)
         # ann_widget event filter set after creation in _make_center_panel.
         # QTreeWidget.itemClicked passes (item, col); the old handler only
         # cares about the item — wrap to drop the column.
@@ -693,7 +736,7 @@ class WarpCoreWindow(QMainWindow):
             self._screen_types         = snap['screen_types']
             self._screen_types_manual  = snap['screen_types_manual']
             self._screen_types_ml_auto = snap['screen_types_ml_auto']
-            self._recognition_cache    = snap['recognition_cache']
+            self._recognition_cache    = _DebugDict('_recognition_cache', snap['recognition_cache'])
             self._recognition_items    = snap['recognition_items']
             self._screenshots_done     = snap['screenshots_done']
             for p in self._screenshots:
@@ -1042,6 +1085,14 @@ class WarpCoreWindow(QMainWindow):
                 self._file_list.blockSignals(False)
                 item.setForeground(self._file_item_color(p))
 
+        # Auto-Mark Done for DISCARD screenshots detected by ML
+        for row, p in enumerate(self._screenshots):
+            stype = self._screen_types.get(p.name, 'UNKNOWN')
+            if stype == 'DISCARD' and p.name not in self._screenshots_done:
+                self._screenshots_done.add(p.name)
+                log.info(f'DISCARD: auto-marked Done for {p.name} (ML detection)')
+        self._save_done()
+
         # --- Loop logic ---
         if self._detect_loop_max > 1:
             unknown_count = 0
@@ -1245,7 +1296,9 @@ class WarpCoreWindow(QMainWindow):
         else:
             self._populate_review_panel([], stype)
             if not self._recognition_items:
-                if stype == 'UNKNOWN': self._review_summary.setText('Detecting screen type...')
+                if stype == 'DISCARD': self._review_summary.setText('Discarded — not a build screenshot')
+                elif stype in ('SKILLS', 'SPACE_SKILLS', 'GROUND_SKILLS'): self._review_summary.setText('Skills screen — recognition not yet supported')
+                elif stype == 'UNKNOWN': self._review_summary.setText('Detecting screen type...')
                 else: self._review_summary.setText('Click Auto-Detect to recognise items on this screenshot.')
         self._update_add_bbox_btn()
 
@@ -1274,15 +1327,17 @@ class WarpCoreWindow(QMainWindow):
         label = SCREEN_TYPE_LABELS.get(stype, 'Unknown')
         self._screen_type_badge.setText(f'Screen: {icon} {label}')
         self._refresh_slot_combo(stype)
-        is_spec   = (stype == 'SPECIALIZATIONS')
-        is_locked = self._is_current_locked()
-        editable  = not is_spec and not is_locked
+        _NO_BBOX_TYPES = ('SPECIALIZATIONS', 'SKILLS', 'SPACE_SKILLS', 'GROUND_SKILLS')
+        is_spec    = (stype in _NO_BBOX_TYPES)
+        is_discard = (stype == 'DISCARD')
+        is_locked  = self._is_current_locked()
+        editable   = not is_spec and not is_discard and not is_locked
         self._slot_combo.setEnabled(editable)
         self._name_edit.setEnabled(editable)
         self._btn_accept.setEnabled(editable)
         self._tier_combo.setEnabled(editable)
         self._ship_type_combo.setEnabled(editable)
-        if is_spec:
+        if is_discard:
             self._slot_combo.blockSignals(True)
             self._slot_combo.clear()
             self._slot_combo.blockSignals(False)
@@ -1290,7 +1345,16 @@ class WarpCoreWindow(QMainWindow):
             self._name_edit.clear()
             self._name_edit.blockSignals(False)
             self._name_edit.setPlaceholderText(
-                'No bboxes can be added to specializations screens')
+                'Discarded — not a build screenshot')
+        elif is_spec:
+            self._slot_combo.blockSignals(True)
+            self._slot_combo.clear()
+            self._slot_combo.blockSignals(False)
+            self._name_edit.blockSignals(True)
+            self._name_edit.clear()
+            self._name_edit.blockSignals(False)
+            self._name_edit.setPlaceholderText(
+                'No bboxes — recognition not yet supported for this screen type')
         elif is_locked:
             self._name_edit.setPlaceholderText(
                 'Screenshot is marked Done — press ↩ Back to Edit to modify')
@@ -1353,6 +1417,20 @@ class WarpCoreWindow(QMainWindow):
         self._update_screen_type_ui(stype)
         self._update_progress()
         log.info(f'Manual screen type override: {path.name} → {stype}')
+        # DISCARD screenshots have no items to review — auto-Mark Done
+        if stype == 'DISCARD' and path.name not in self._screenshots_done:
+            self._recognition_items = []
+            self._review_list.clear()
+            self._review_summary.setText('Discarded — not a build screenshot')
+            self._screenshots_done.add(path.name)
+            self._save_done()
+            self._btn_done.blockSignals(True)
+            self._btn_done.setChecked(True)
+            self._btn_done.setText('↩ Back to Edit')
+            self._btn_done.blockSignals(False)
+            self._ann_widget.set_locked(True)
+            self._update_file_list_color(self._current_idx)
+            log.info(f'DISCARD: auto-marked Done for {path.name}')
 
     # _save_screen_type_example removed — logic consolidated into
     # _on_type_override_changed (dropdown) and _on_file_item_changed (checkbox).
@@ -2199,6 +2277,136 @@ class WarpCoreWindow(QMainWindow):
         # and off in a single click.
         self._selection_just_changed = True
 
+    # ── BOFF group context menu ──────────────────────────────────────
+
+    _BOFF_BASE_PROFS = ('Tactical', 'Engineering', 'Science')
+    _BOFF_SPEC_PROFS = ('Command', 'Intelligence', 'Miracle Worker', 'Pilot', 'Temporal')
+
+    def _show_review_context_menu(self, pos):
+        """Right-click on a BOFF group header → Change Group Type submenu."""
+        item = self._review_list.itemAt(pos)
+        if item is None:
+            return
+        # Only act on parent (group header) rows, not leaf items
+        if item in self._review_list._flat:
+            return
+        group_label = item.data(0, Qt.ItemDataRole.UserRole) or ''
+        if not group_label.startswith('Boff'):
+            return
+        if self._is_current_locked():
+            return
+
+        menu = QMenu(self)
+        sub = menu.addMenu('Change Group Type')
+
+        # Base-only entries
+        for prof in self._BOFF_BASE_PROFS:
+            label = f'Boff {prof}'
+            act = sub.addAction(label)
+            act.setData(label)
+        sub.addSeparator()
+        # Base+Spec entries
+        for base in self._BOFF_BASE_PROFS:
+            for spec in self._BOFF_SPEC_PROFS:
+                label = f'Boff {base}+{spec}'
+                act = sub.addAction(label)
+                act.setData(label)
+
+        chosen = menu.exec(self._review_list.viewport().mapToGlobal(pos))
+        if chosen is None:
+            return
+        new_type = chosen.data()
+        if new_type and new_type != group_label:
+            self._change_boff_group_type(item, group_label, new_type)
+
+    def _change_boff_group_type(self, parent_item, old_label: str, new_label: str):
+        """Change all items in a BOFF group to a new group type and rematch."""
+        from warp.recognition.icon_matcher import SETSIconMatcher
+        from warp.debug import log as _sl
+
+        rows = self._review_list.child_rows_of(parent_item)
+        if not rows:
+            return
+
+        _sl.info(f'change_boff_group: {old_label!r} → {new_label!r} ({len(rows)} items)')
+
+        # Determine the base slot for rematching: e.g. 'Boff Tactical+Command'
+        # → items get slot 'Boff Tactical' (base) but we search candidates
+        # from both base and spec professions.
+        if '+' in new_label:
+            base_part, _spec_part = new_label.split('+', 1)
+            base_slot = base_part.strip()
+        else:
+            base_slot = new_label
+
+        # Build combined candidate set for the new type
+        candidates = set(self._build_search_candidates(base_slot))
+        if '+' in new_label:
+            spec_slot = f'Boff {new_label.split("+", 1)[1].strip()}'
+            candidates |= set(self._build_search_candidates(spec_slot))
+
+        # Update each item in the group
+        for row in rows:
+            if row >= len(self._recognition_items):
+                continue
+            ri = self._recognition_items[row]
+            crop_bgr = ri.get('crop_bgr')
+
+            # If crop is missing, try to load it from the screenshot
+            if crop_bgr is None and self._current_idx >= 0:
+                import cv2
+                img = cv2.imread(str(self._screenshots[self._current_idx]))
+                if img is not None:
+                    bbox = ri.get('bbox')
+                    if bbox:
+                        x, y, w, h = bbox
+                        crop_bgr = img[y:y+h, x:x+w].copy()
+                        ri['crop_bgr'] = crop_bgr
+
+            # Rematch against the new candidate set
+            name, conf, thumb = '', 0.0, None
+            if crop_bgr is not None and candidates:
+                try:
+                    _name, _conf, _thumb, _used_sess = SETSIconMatcher(
+                        self._sets).match(crop_bgr, candidate_names=candidates)
+                    if _conf >= 0.40:
+                        name, conf, thumb = _name, _conf, _thumb
+                except Exception as e:
+                    _sl.warning(f'change_boff_group rematch failed row {row}: {e}')
+
+            # Update the recognition item
+            ri['name'] = name
+            ri['conf'] = conf
+            ri['thumb'] = thumb
+            ri['slot'] = base_slot
+            ri['state'] = 'pending'
+            ri['auto_confirmed'] = False
+            ri['cross_check_failed'] = False
+            ri['_group_label'] = new_label
+
+            _sl.debug(f'  row {row}: slot={base_slot!r} name={name!r} conf={conf:.2f}')
+
+            # Update the tree item visuals
+            litem = self._review_list.item(row)
+            if litem:
+                self._populate_review_item(
+                    litem, name, base_slot, conf,
+                    confirmed=False, cross_check_failed=False,
+                    auto_confirmed=False, conflict_disk_name='',
+                    group_label=new_label,
+                )
+
+        # Reparent all children to the new group
+        for row in rows:
+            litem = self._review_list.item(row)
+            if litem:
+                self._review_list.reparent_item(litem, new_label, new_label)
+
+        self._resort_parents_canonical()
+        self._ann_widget.set_review_items(self._recognition_items)
+        self.statusBar().showMessage(
+            f'Group changed: {old_label} → {new_label} ({len(rows)} items rematched)')
+
     def _on_review_row_changed(self, row: int):
         if row == -1:
             self._set_review_buttons_enabled(False)
@@ -2311,6 +2519,10 @@ class WarpCoreWindow(QMainWindow):
                   activated=self._on_accept)
         QShortcut(QKeySequence('Delete'), self,
                   activated=self._on_remove_item)
+        QShortcut(QKeySequence('Alt+Up'), self,
+                  activated=self._nav_prev_screenshot)
+        QShortcut(QKeySequence('Alt+Down'), self,
+                  activated=self._nav_next_screenshot)
         # Restore auto-accept settings
         self._chk_auto_accept.setChecked(
             self._settings.value(_KEY_AUTO_ACCEPT, True, type=bool))
@@ -2321,6 +2533,16 @@ class WarpCoreWindow(QMainWindow):
             lambda v: self._settings.setValue(_KEY_AUTO_ACCEPT, v))
         self._spin_auto_conf.valueChanged.connect(
             lambda v: self._settings.setValue(_KEY_AUTO_CONF, v))
+
+    def _nav_prev_screenshot(self):
+        row = self._file_list.currentRow()
+        if row > 0:
+            self._file_list.setCurrentRow(row - 1)
+
+    def _nav_next_screenshot(self):
+        row = self._file_list.currentRow()
+        if row < self._file_list.count() - 1:
+            self._file_list.setCurrentRow(row + 1)
 
     def eventFilter(self, obj, event):
         """Handle Delete key on review list/canvas, and forward Ctrl+wheel from scroll area to canvas."""

@@ -33,7 +33,7 @@ log = logging.getLogger(__name__)
 
 SCREEN_TYPES = [
     'SPACE_EQ', 'GROUND_EQ', 'TRAITS',
-    'BOFFS', 'SPECIALIZATIONS', 'SPACE_MIXED', 'GROUND_MIXED',
+    'BOFFS', 'SPECIALIZATIONS', 'SKILLS', 'SPACE_MIXED', 'GROUND_MIXED', 'DISCARD',
 ]
 
 # Legacy folder names that map to the new TRAITS class

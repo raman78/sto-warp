@@ -292,6 +292,13 @@ class RecognitionWorker(QThread):
         # Map trainer screen type → WarpImporter build_type.
         # Single source of truth lives in warp_importer.SCREEN_TYPE_TO_BUILD_TYPE
         # so WARP and WARP CORE share the same mapping.
+        # DISCARD / SKILLS screenshots — skip recognition entirely
+        _SKIP_STYPES = ('DISCARD', 'SKILLS', 'SPACE_SKILLS', 'GROUND_SKILLS')
+        if self._stype in _SKIP_STYPES:
+            _slog.info(f'RecognitionWorker: {self._stype} screen — skipping recognition')
+            self.finished.emit([])
+            return
+
         from warp.warp_importer import SCREEN_TYPE_TO_BUILD_TYPE
         importer_type = SCREEN_TYPE_TO_BUILD_TYPE.get(self._stype)   # None → UNKNOWN
 

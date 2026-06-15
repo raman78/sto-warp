@@ -48,7 +48,7 @@ except Exception:
 # ladder. See warp.trainer.trainer_window._folder_environment.
 SCREEN_TYPES = [
     'SPACE_EQ', 'GROUND_EQ', 'TRAITS', 'BOFFS',
-    'SPECIALIZATIONS', 'SPACE_MIXED', 'GROUND_MIXED',
+    'SPECIALIZATIONS', 'SKILLS', 'SPACE_MIXED', 'GROUND_MIXED', 'DISCARD',
 ]
 
 INPUT_SIZE        = 224     # MobileNetV3 input
