@@ -8,6 +8,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.19] — 2026-06-16
+
+### Added
+- Right-clicking a Bridge Officer group header in the review tree shows
+  a **Change Group Type** menu. Selecting a new type rematches all
+  abilities in the group against the new profession at once, instead
+  of requiring each ability to be corrected individually.
+- Alt+Up / Alt+Down keyboard shortcuts navigate between screenshots in
+  the trainer file list.
+- Screenshots that are not build screens (menus, loading screens, etc.)
+  are now classified as **Discard** and automatically marked Done — no
+  manual review needed.
+- Skills screens are now recognised as a separate screen type instead
+  of being misclassified as equipment or traits.
+
+### Fixed
+- Empty and inactive slots — locked equipment positions, unequipped
+  slots, locked Bridge Officer abilities — are now correctly recognised
+  as empty or inactive instead of being mislabelled as random items.
+- After changing a Bridge Officer group's type, the group stays in its
+  original visual position instead of jumping to the wrong spot.
+- When a numbered Bridge Officer group is removed or reassigned
+  (e.g. "Boff Science #2" becomes Tactical), the remaining group drops
+  its unnecessary "#1" suffix.
+
 ## [1.0.18] — 2026-06-11
 
 ### Added
