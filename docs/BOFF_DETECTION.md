@@ -235,21 +235,27 @@ nearly all such errors fall in `[0.0..0.1)` — a `conf < 0.10`
 suppression rule would catch ~98% of them, but doesn't recover the
 correct label.
 
-### 6a. HSV pre-classification of BOFF cells
+### 6a. HSV pre-classification of cells (all slot types)
 
 The ML classifier's inactive/empty confusion (above) is bypassed
 entirely in production by a fast HSV heuristic that runs **before** icon
-matching.  `warp/warp_importer.py:2216` checks every marker-projected
-BOFF cell:
+matching.  `warp/warp_importer.py:2219` checks **every** projected cell —
+BOFF seats, equipment rows, and trait slots alike:
 
 ```python
 # warp/warp_importer.py
-if slot_name.startswith('Boff Seat') and len(bbox) == 4:
+if len(bbox) == 4:
     from warp.recognition.layout_detector import LayoutDetector as _LD
     cell_state = _LD._classify_cell(crop)
     if cell_state in ('empty', 'inactive'):
         ...   # emit __empty__ / __inactive__ at conf=1.0, skip matcher
 ```
+
+The gate was originally restricted to `slot_name.startswith('Boff Seat')`
+(v1.0.19−). Extending it to all slot types fixes false positives on
+equipment cells too — e.g. locked equipment slots (padlock icon on
+near-black background) and unequipped positions that `_detect_via_pixel_analysis`
+projects from the ship profile count.
 
 `LayoutDetector._classify_cell(crop_bgr)`
 (`warp/recognition/layout_detector.py:2051`) samples the **inner 60%**
@@ -291,6 +297,12 @@ Cells classified as `empty` or `inactive` short-circuit with
 `__empty__` / `__inactive__` at `conf=1.0`. No icon matcher call is
 made — the crop never reaches template matching, the embedder, or the
 softmax classifier.
+
+For BOFF cells classified as `active`, a debug-level log line emits the
+four HSV statistics (`mean_v`, `std_v`, `mean_s`, `mean_h`) so false
+negatives — inactive cells that slip through as active — can be
+diagnosed without modifying thresholds
+(`warp/warp_importer.py:2240`).
 
 ## Visualisation
 
@@ -352,7 +364,8 @@ When wired into `warp/recognition/layout_detector.py`:
   heuristic identifies as empty or inactive; false positives like
   "Charged Particle Burst" at 0.89+ are eliminated. The classifier
   itself still confuses the two states, but that code path is never
-  reached in production for marker-detected BOFF seats.
+  reached in production — the gate covers all slot types (BOFF,
+  equipment, traits) since v1.0.19.
 
 ## Display ordering — `order_items_for_display`
 
