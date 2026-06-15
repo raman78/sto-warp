@@ -808,6 +808,11 @@ class ResultsView(QWidget):
             fallback_canonical_slots=DISPLAY_CANONICAL_ORDER,
         )
 
+        _boff_order = [lbl for lbl, _ in ordered_groups if lbl.startswith('Boff')]
+        if _boff_order:
+            from warp.debug import log as _wlog
+            _wlog.info(f'results_view: BOFF group order: {_boff_order}')
+
         parent_brush = QBrush(QColor(_THEME_LBG))
         for slot, entries in ordered_groups:
             parent = QTreeWidgetItem(self._tree)

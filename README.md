@@ -7,7 +7,7 @@ standalone Python package.
 
 **STO-WARP** combines two tools in one package:
 
-**WARP** *(Weaponry & Armament Recognition Platform)* — reads your in-game screenshots and automatically fills in your SETS build. Detects equipment, traits, bridge officers, and ship information using computer vision and machine learning.
+**WARP** *(Weaponry & Armament Recognition Platform)* — reads your in-game screenshots from the **PC version** of Star Trek Online and automatically fills in your SETS build. Detects equipment, traits, bridge officers, and ship information using computer vision and machine learning. Console screenshots (PlayStation, Xbox) are not supported.
 
 **WARP CORE** — trainer interface built into WARP. Review and correct recognition results, confirm annotations, and retrain the local ML models (Icon Classifier + Layout Regressor) on your own data to improve accuracy over time.
 

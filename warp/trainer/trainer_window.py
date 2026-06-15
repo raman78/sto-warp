@@ -1789,6 +1789,16 @@ class WarpCoreWindow(QMainWindow):
             # `_populate_review_item` itself (cols 0-1 always white), and
             # `refresh_parent_of` mirrors that onto each group header — so
             # no extra post-pass is needed here.
+            # Diagnostic: log actual tree parent order
+            rl = self._review_list
+            _actual_parents = [
+                rl.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole)
+                for i in range(rl.topLevelItemCount())
+            ]
+            _boff_parents = [p for p in _actual_parents if p and p.startswith('Boff')]
+            if _boff_parents:
+                from warp.debug import log as _wlog
+                _wlog.info(f'FC populate: tree BOFF parent order: {_boff_parents}')
             self._ann_widget.set_review_items(self._recognition_items)
             self._ann_widget.set_selected_row(-1)
             n = len(self._recognition_items)
@@ -2036,6 +2046,15 @@ class WarpCoreWindow(QMainWindow):
         for ri in self._recognition_items:
             _conflict = ri.get('disk_name', '') if ri.get('state') == 'community_conflict' else ''
             self._add_review_row(ri['name'], ri['slot'], ri.get('conf', 0.0), confirmed=(ri.get('state') == 'confirmed'), cross_check_failed=ri.get('cross_check_failed', False), auto_confirmed=ri.get('auto_confirmed', False), conflict_disk_name=_conflict, group_label=ri.get('_group_label'))
+        # Diagnostic: log actual tree parent order vs expected
+        rl = self._review_list
+        _actual_parents = [
+            rl.topLevelItem(i).data(0, Qt.ItemDataRole.UserRole)
+            for i in range(rl.topLevelItemCount())
+        ]
+        _boff_parents = [p for p in _actual_parents if p and p.startswith('Boff')]
+        if _boff_parents:
+            log.info(f'populate: tree BOFF parent order: {_boff_parents}')
         self._ann_widget.set_review_items(self._recognition_items)
         self._ann_widget.set_selected_row(-1)
         n = len(self._recognition_items)
@@ -2397,10 +2416,40 @@ class WarpCoreWindow(QMainWindow):
                 )
 
         # Reparent all children to the new group
+        rl = self._review_list
         for row in rows:
-            litem = self._review_list.item(row)
+            litem = rl.item(row)
             if litem:
-                self._review_list.reparent_item(litem, new_label, new_label)
+                rl.reparent_item(litem, new_label, new_label)
+
+        # ── Renumber sibling groups ──────────────────────────────────
+        # When old_label had a "#N" suffix (e.g. "Boff Science #2"),
+        # the remaining siblings may need renumbering: if only one
+        # Science seat remains, drop the "#1" suffix → "Boff Science".
+        import re as _re
+        _m = _re.match(r'^(.+?)\s*#\d+$', old_label)
+        if _m:
+            _base = _m.group(1)
+            _siblings = [
+                (k, rl._slot_parents[k])
+                for k in list(rl._slot_parents)
+                if k == _base or k.startswith(_base + ' #')
+            ]
+            if len(_siblings) == 1:
+                _old_key, _parent = _siblings[0]
+                if _old_key != _base:
+                    # Only one left — drop the #N suffix
+                    rl._slot_parents[_base] = _parent
+                    del rl._slot_parents[_old_key]
+                    _parent.setData(0, Qt.ItemDataRole.UserRole, _base)
+                    _parent.setText(0, _base)
+                    for ci in range(_parent.childCount()):
+                        ch = _parent.child(ci)
+                        if ch in rl._flat:
+                            idx = rl._flat.index(ch)
+                            if idx < len(self._recognition_items):
+                                self._recognition_items[idx]['_group_label'] = _base
+                                ch.setData(0, Qt.ItemDataRole.UserRole, _base)
 
         self._resort_parents_canonical()
         self._ann_widget.set_review_items(self._recognition_items)
@@ -2826,24 +2875,90 @@ class WarpCoreWindow(QMainWindow):
         for a slot that wasn't on the list yet, or a slot change that
         opens a new parent) ends up appended to the bottom — adapter's
         `_get_or_create_parent` always tacks new parents on at the end.
+
+        Uses the tree's actual `_slot_parents` keys (not re-derived
+        labels from `order_items_for_display`) so BOFF groups whose type
+        was changed via the context menu keep the correct position — the
+        group's physical Y order is read from the children's bboxes.
         """
         if self._current_idx < 0:
             return
         path = self._screenshots[self._current_idx]
         stype = self._screen_types.get(path.name, 'UNKNOWN')
-        from warp.recognition.boff_keys import order_items_for_display
         from warp.warp_importer import DISPLAY_CANONICAL_ORDER
         build_type = self._STYPE_TO_BUILD.get(stype, 'SPACE')
-        # Match `_order_items_for_review`: a TRAITS screen uses the
-        # mixed ground+space canonical for display ordering.
         canonical_bt = 'TRAITS' if stype == 'TRAITS' else build_type
         canonical = [sd['name'] for sd in _SLOT_ORDER.get(canonical_bt, [])]
-        ordered = order_items_for_display(
-            self._recognition_items, canonical,
-            fallback_canonical_slots=DISPLAY_CANONICAL_ORDER,
+
+        rl = self._review_list
+        parent_keys = set(rl._slot_parents.keys())
+
+        # ── non-BOFF ordering: meta → canonical → fallback → alpha ──
+        meta = ('Ship Name', 'Ship Type', 'Ship Tier')
+        canonical_nb = [s for s in canonical if not s.startswith('Boff')]
+        fallback_nb = [s for s in DISPLAY_CANONICAL_ORDER
+                       if not s.startswith('Boff')]
+
+        seen: set[str] = set()
+        slot_order: list[str] = []
+        for s in list(meta) + canonical_nb:
+            if s in parent_keys and s not in seen:
+                slot_order.append(s)
+                seen.add(s)
+
+        # ── BOFF ordering: sort parents by min-Y of children's bboxes ──
+        boff_keys = [k for k in parent_keys if k.startswith('Boff')]
+
+        def _child_min_yx(key):
+            p = rl._slot_parents.get(key)
+            if p is None:
+                return (1_000_000, 1_000_000)
+            min_y, min_x = 1_000_000, 1_000_000
+            for ci in range(p.childCount()):
+                ch = p.child(ci)
+                if ch in rl._flat:
+                    idx = rl._flat.index(ch)
+                    if idx < len(self._recognition_items):
+                        bbox = self._recognition_items[idx].get('bbox')
+                        if bbox and len(bbox) >= 2:
+                            if bbox[1] < min_y or (bbox[1] == min_y
+                                                   and bbox[0] < min_x):
+                                min_y, min_x = bbox[1], bbox[0]
+            return (min_y, min_x)
+
+        # Row-bucket so seats in the same physical row sort by X
+        ROW_TOL = 50
+        yx_map = {k: _child_min_yx(k) for k in boff_keys}
+        unique_ys = sorted({yx[0] for yx in yx_map.values()})
+        row_of: dict[int, int] = {}
+        cur_row = 0
+        prev_y: int | None = None
+        for y in unique_ys:
+            if prev_y is not None and y - prev_y > ROW_TOL:
+                cur_row += 1
+            row_of[y] = cur_row
+            prev_y = y
+
+        boff_sorted = sorted(
+            boff_keys,
+            key=lambda k: (row_of.get(yx_map[k][0], 0), yx_map[k][1]),
         )
-        slot_order = [label for label, _ in ordered]
-        self._review_list.reorder_parents(slot_order)
+        for s in boff_sorted:
+            if s not in seen:
+                slot_order.append(s)
+                seen.add(s)
+
+        # ── fallback non-BOFF + remaining ──
+        for s in fallback_nb:
+            if s in parent_keys and s not in seen:
+                slot_order.append(s)
+                seen.add(s)
+        for s in sorted(parent_keys):
+            if s not in seen:
+                slot_order.append(s)
+                seen.add(s)
+
+        rl.reorder_parents(slot_order)
         self._resync_recognition_with_visual()
 
     def _resync_recognition_with_visual(self):

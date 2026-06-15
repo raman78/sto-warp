@@ -9,10 +9,11 @@
 ## 1. What sto-warp is
 
 **sto-warp** is a Star Trek Online screenshot recognition + ML training
-toolkit. It reads STO screenshots and identifies every slotted item
-(weapons, consoles, traits, BOFF abilities, …), and ships with a
-trainer UI to review/correct those results and feed them back into the
-community model.
+toolkit. It reads **PC-version** STO screenshots and identifies every
+slotted item (weapons, consoles, traits, BOFF abilities, …), and ships
+with a trainer UI to review/correct those results and feed them back
+into the community model. Console platforms (PlayStation, Xbox) are not
+supported — their screenshots are classified as `DISCARD` and skipped.
 
 It is the standalone successor to the **WARP / WARP CORE** modules that
 used to live inside the **sets-warp** build planner. The split was

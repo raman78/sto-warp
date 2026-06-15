@@ -141,6 +141,7 @@ Bumping it requires updating both this number and the user-facing doc.
 | Crops in the community upload queue | Confirmed crops still flow into `SyncWorker`'s upload path, so the community model still benefits from the corrections. The staged dir contributes the same way a normal training dir does — the staging hash never leaves the user's disk. |
 | Anchors / layout DB | Each **Mark Done** inside FC writes the confirmed layout to `community_anchors`-equivalent files so future Auto-Detect on similar layouts improves. Layout learning is not isolated; it does not carry identifying information about *which* build was used. |
 | Local model (`icon_classifier.pt`) | Never written. Production model files are downloaded only, never overwritten by FC. |
+| `DISCARD` screenshots | Auto-marked Done on entry (both ML-detected and manual override). `RecognitionWorker` emits `[]` — no recognition pipeline runs. Discarded files contribute no items to `_on_send_to_warp()` and are excluded from the exported result. |
 
 The "what gets saved" matrix in [`WARP_GUIDE.md` §6.5](WARP_GUIDE.md#65-fast-correction-mode)
 is the user-readable version of this table; this table is the source of

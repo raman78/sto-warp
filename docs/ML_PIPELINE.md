@@ -13,7 +13,7 @@ sto-warp uses two production classifiers plus one embedder:
 | Model | Architecture | Purpose |
 |-------|-------------|---------|
 | `icon_classifier.pt` | EfficientNet-B0 | Matches item icon crops to item names |
-| `screen_classifier.pt` | MobileNetV3-Small | Classifies screenshot type (SPACE_EQ, BOFFS, TRAITS, …) |
+| `screen_classifier.pt` | MobileNetV3-Small | Classifies screenshot type (SPACE_EQ, BOFFS, TRAITS, …, SKILLS, DISCARD) — 9-class softmax |
 | `icon_embedder.pt` | EfficientNet-B0 + ArcFace head | k-NN gallery lookup used as a confidence cross-check |
 
 **The client does not train the production models.** All three files are
@@ -70,6 +70,8 @@ The user accepts a bounding box in WARP CORE (Enter, autocomplete pick,
 └── screen_types/
     ├── SPACE_EQ/
     │   └── <filename>.png    ← confirmed full screenshot per type
+    ├── SKILLS/               ← captain skill tree screens (space or ground)
+    ├── DISCARD/              ← non-build images (console screenshots, irrelevant files)
     └── ...
 ```
 
@@ -237,8 +239,14 @@ the next run's skip-if-unchanged check compares against this.
 
 File: `sets-warp-backend/admin_train.py` — `train_screen_classifier()`
 
-Same flow with MobileNetV3-Small. Only runs if ≥ 7 screen type screenshots
-are available. Fine-tunes from previous `screen_classifier.pt` backbone.
+Same flow with MobileNetV3-Small. 9-class output: `SPACE_EQ`, `GROUND_EQ`,
+`TRAITS`, `BOFFS`, `SPECIALIZATIONS`, `SKILLS`, `SPACE_MIXED`, `GROUND_MIXED`,
+`DISCARD`. `SKILLS` covers the captain skill tree (space/ground tabs);
+`SPACE_SKILLS` and `GROUND_SKILLS` are post-hoc environment refinements
+(same pattern as `BOFFS` → `SPACE_BOFFS` / `GROUND_BOFFS`). Both `SKILLS`
+and `DISCARD` skip all recognition — WARP returns an empty `ImportResult`
+for images classified into either (conf ≥ 0.50). Fine-tunes from previous
+`screen_classifier.pt` backbone.
 
 ### Ship type / tier OCR correction map
 

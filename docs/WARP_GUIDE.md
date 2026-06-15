@@ -31,7 +31,9 @@ WARP CORE lets you review, correct, and confirm what WARP found — and feed tho
 
 ### What to capture
 
-WARP reads the standard STO build screens. Open your ship/character loadout in-game and take full-screen screenshots of:
+WARP reads the standard STO build screens **from the PC version of the game**. Console screenshots (PlayStation, Xbox) are not supported — if any end up in your folder, mark them as *Discard* (see [Right-click — change screen type](#right-click--change-screen-type) in section 5).
+
+Open your ship/character loadout in-game and take full-screen screenshots of:
 
 | Screen | Contains |
 |--------|----------|
@@ -41,6 +43,7 @@ WARP reads the standard STO build screens. Open your ship/character loadout in-g
 | Ground Traits | Personal ground traits, reputation traits |
 | Bridge Officers | Boff seats and abilities (space or ground) |
 | Specializations | Primary and secondary specialization trees |
+| Skills | Captain skill tree (Engineering / Science / Tactical columns, Lieutenant through Admiral ranks). WARP classifies these screens but does not yet recognise individual skills — this may be added in a future release. |
 
 > **Screenshot tip:** Use the default STO screenshot key (default: **Print Screen**) to save full-resolution screenshots. Cropped or resized images may reduce recognition accuracy.
 
@@ -323,7 +326,7 @@ glance, then jump into WARP CORE to correct them.
 
 #### Per-file screen-type override + Rerun Recognition
 
-Above the canvas a **Screen type:** dropdown lets the detected type of the currently-selected screenshot be overridden. When at least one file has been changed, a **Rerun Recognition** button appears at the bottom of the file list — clicking it re-processes the affected files with the corrected types, without touching the rest of the batch. Useful when WARP misclassified a single screenshot (e.g. mistook a *Boffs* screen for *Specialisations*) and only that one needs a second pass.
+Above the canvas a **Screen type:** dropdown lets the detected type of the currently-selected screenshot be overridden. The dropdown includes a **Discard** option — pick it for any screenshot that is not a PC build screenshot (console screenshots, irrelevant images, etc.). Discarded files produce no recognition results. When at least one file has been changed, a **Rerun Recognition** button appears at the bottom of the file list — clicking it re-processes the affected files with the corrected types, without touching the rest of the batch. Useful when WARP misclassified a single screenshot (e.g. mistook a *Boffs* screen for *Specialisations*) and only that one needs a second pass.
 
 A small amber label next to the dropdown indicates when the current file is using an override rather than the auto-detected type.
 
@@ -420,7 +423,9 @@ Click a filename to load it into the canvas.
 
 #### Right-click — change screen type
 
-Right-clicking a filename in the list opens a popup menu with every supported screen type (*Space Equipment*, *Ground Equipment*, *Space Traits*, *Ground Traits*, *Bridge Officers*, *Specialisations*, *Unknown*). The current type is shown as ticked. Picking a different one immediately reclassifies that screenshot, ticks the confirmation checkbox and clears the cached recognition so the next Auto-Detect runs against the corrected type. Faster than reaching for the Screen Type dropdown above the canvas when several files need re-typing in a row.
+Right-clicking a filename in the list opens a popup menu with every supported screen type (*Space Equipment*, *Ground Equipment*, *Space Traits*, *Ground Traits*, *Bridge Officers*, *Specialisations*, *Skills*, *Space Skills*, *Ground Skills*, *Discard*, *Unknown*). The current type is shown as ticked. Picking a different one immediately reclassifies that screenshot, ticks the confirmation checkbox and clears the cached recognition so the next Auto-Detect runs against the corrected type. Faster than reaching for the Screen Type dropdown above the canvas when several files need re-typing in a row.
+
+Picking **Discard** marks the screenshot as "not a build screenshot" — for example, a console screenshot, a random image, or anything else that is not part of a PC build. Discarded screenshots are automatically marked as Done. No recognition is attempted on them, and they are not included in any export. Over time, the ML model learns to recognise and auto-discard such images.
 
 #### Screenshot colour coding
 
@@ -953,6 +958,8 @@ and never uploaded — ship names are treated as personal data.
 | **Alt + A** | Toggle Add BBox draw mode |
 | **Alt + D** | Toggle Mark Done / Back to Edit |
 | **Alt + R** | Remove selected bounding box |
+| **Alt + Up** | Previous screenshot |
+| **Alt + Down** | Next screenshot |
 | **Alt + LMB drag** | Draw new bounding box directly |
 | **Ctrl + Wheel** | Zoom canvas in/out (1× – 6×, anchored to cursor) |
 
