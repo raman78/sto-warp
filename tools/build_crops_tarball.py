@@ -19,9 +19,10 @@ import sys
 import tarfile
 import tempfile
 import time
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+from huggingface_hub import HfApi, hf_hub_download
 
 REPO          = 'sets-sto/sto-icon-dataset'
 REPO_TYPE     = 'dataset'
@@ -60,15 +61,38 @@ def main() -> int:
 
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
-        print(f'snapshot_download → {tmp}')
-        snapshot_download(
-            repo_id=REPO, repo_type=REPO_TYPE,
-            local_dir=str(tmp),
-            allow_patterns=['data/crops/*.png', 'data/annotations.jsonl'],
-            revision=current_sha,
-            token=token,
-            max_workers=4,
+
+        # Enumerate matching files first — gives progress visibility and
+        # avoids snapshot_download's opaque stalls on large repos.
+        all_files = list(api.list_repo_files(
+            REPO, repo_type=REPO_TYPE, revision=current_sha,
+        ))
+        to_download = sorted(
+            f for f in all_files
+            if (f.startswith('data/crops/') and f.endswith('.png'))
+            or f == 'data/annotations.jsonl'
         )
+        total = len(to_download)
+        print(f'files to download: {total}', flush=True)
+
+        def _dl(fname: str) -> str:
+            hf_hub_download(
+                repo_id=REPO, repo_type=REPO_TYPE,
+                filename=fname, revision=current_sha,
+                local_dir=str(tmp), token=token,
+            )
+            return fname
+
+        done = 0
+        report_every = max(1, total // 10)
+        with ThreadPoolExecutor(max_workers=4) as pool:
+            for fut in as_completed(
+                [pool.submit(_dl, f) for f in to_download]
+            ):
+                fut.result()
+                done += 1
+                if done % report_every == 0 or done == total:
+                    print(f'  {done}/{total} downloaded', flush=True)
 
         crops_dir = tmp / 'data' / 'crops'
         ann_file  = tmp / 'data' / 'annotations.jsonl'

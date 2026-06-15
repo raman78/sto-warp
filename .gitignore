@@ -62,3 +62,6 @@ conflict_decisions.json
 
 # Local-only audit log — żywy dokument, nie commitujemy
 docs/data_source_audit.md
+
+# Local-only release instructions
+docs/RELEASE_HOWTO.md
