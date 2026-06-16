@@ -15,16 +15,18 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import subprocess
 import sys
 import tarfile
 import tempfile
 import time
 from pathlib import Path
 
-from huggingface_hub import HfApi, hf_hub_download, snapshot_download
+from huggingface_hub import HfApi, hf_hub_download
 
 REPO          = 'sets-sto/sto-icon-dataset'
 REPO_TYPE     = 'dataset'
+HF_CLONE_URL  = f'https://huggingface.co/datasets/{REPO}'
 TARBALL_FILE  = 'crops.tar'
 MANIFEST_FILE = 'crops_manifest.json'
 
@@ -61,21 +63,37 @@ def main() -> int:
     with tempfile.TemporaryDirectory() as tmpdir:
         tmp = Path(tmpdir)
 
-        # Batch-download via snapshot_download — uses HF's xet/LFS
-        # protocol which is far more efficient than per-file HTTP for
-        # thousands of small files.  Explicit token= is critical to
-        # avoid anonymous rate-limits (~2 k files then stall).
-        snapshot_download(
-            repo_id=REPO, repo_type=REPO_TYPE,
-            revision=current_sha,
-            local_dir=str(tmp),
-            allow_patterns=['data/crops/*.png', 'data/annotations.jsonl'],
-            token=token,
-        )
-        print('download complete', flush=True)
+        # Use git sparse-checkout to fetch only data/crops + annotations.
+        # snapshot_download stalls on the HF file-enumeration API at ~1 k
+        # files; git clone bypasses that entirely (git protocol, no REST).
+        clone_url = HF_CLONE_URL.replace('https://', f'https://user:{token}@')
+        repo_dir = tmp / 'repo'
+        t0 = time.monotonic()
 
-        crops_dir = tmp / 'data' / 'crops'
-        ann_file  = tmp / 'data' / 'annotations.jsonl'
+        subprocess.run(['git', 'lfs', 'install'], check=True)
+
+        def _git(*args: str, **kw) -> None:
+            """Run a git command; mask the token in any error output."""
+            try:
+                subprocess.run(['git', *args], check=True, **kw)
+            except subprocess.CalledProcessError as exc:
+                if token and exc.stderr:
+                    exc.stderr = exc.stderr.replace(token, '***')
+                raise
+
+        _git('clone', '--no-checkout', '--depth', '1',
+             '--filter=blob:none', clone_url, str(repo_dir))
+        print(f'clone (metadata only) in {time.monotonic() - t0:.0f}s', flush=True)
+
+        _git('sparse-checkout', 'set', 'data/crops', 'data/annotations.jsonl',
+             cwd=repo_dir)
+        _git('checkout', cwd=repo_dir)
+        crops_dir = repo_dir / 'data' / 'crops'
+        ann_file  = repo_dir / 'data' / 'annotations.jsonl'
+        elapsed = time.monotonic() - t0
+        crop_count_dl = len(list(crops_dir.glob('*.png'))) if crops_dir.is_dir() else 0
+        print(f'sparse checkout complete in {elapsed:.0f}s — '
+              f'{crop_count_dl} crops fetched', flush=True)
         tar_path  = tmp / TARBALL_FILE
 
         # Deterministic ordering + a stable mtime so the same dataset state
