@@ -1954,7 +1954,11 @@ class WarpImporter:
                 if changed:
                     # Keep confirmed layout — re-detection would overwrite pixel-perfect bboxes
                     if not confirmed_layout:
-                        layout = self._get_layout().detect(img, build_type, profile)
+                        layout = self._get_layout().detect(
+                            img, build_type, profile,
+                            icon_matcher=self._get_matcher() if _needs_matcher else None,
+                            app_cache=self._cache if _needs_matcher else None,
+                        )
                     _slog.info(f'WarpImporter: refined profile from pixel counts: '
                                f'{dict((k,v) for k,v in profile.items() if v)}')
 
