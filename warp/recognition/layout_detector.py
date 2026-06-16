@@ -573,6 +573,7 @@ class LayoutDetector:
                            f'{list(trait_grid_res.keys())} (+{added} bboxes)')
                 return result
 
+
             # GROUND_MIXED Strategy 1: ground EQ geometry + traits + BOFFs.
             # Ground panel uses different OCR anchors than space, so the
             # space _get_eq_geometry path below would miss the entire EQ
@@ -592,9 +593,8 @@ class LayoutDetector:
                         ground_eq.update(
                             self._detect_traits_via_ocr(
                                 img, trait_labels, cell_w, icon_h))
-                    boff_result = marker_boffs or self._detect_boffs_in_mixed(img)
-                    if boff_result:
-                        ground_eq.update(boff_result)
+                    if marker_boffs:
+                        ground_eq.update(marker_boffs)
                     _slog.info(
                         f'LayoutDetector: GROUND_MIXED Strategy 1 '
                         f'(ground_eq_geometry + OCR traits) → '
@@ -622,9 +622,8 @@ class LayoutDetector:
                     eq_result.update(
                         self._detect_traits_via_ocr(img, trait_labels, cell_w, icon_h))
 
-                    boff_result = marker_boffs or self._detect_boffs_in_mixed(img)
-                    if boff_result:
-                        eq_result.update(boff_result)
+                    if marker_boffs:
+                        eq_result.update(marker_boffs)
                     _slog.info(f'LayoutDetector: Strategy 1 (geom/pixel + OCR traits) → '
                                f'{len(eq_result)} slot groups, '
                                f'{sum(len(v) for v in eq_result.values())} bboxes')
@@ -635,9 +634,8 @@ class LayoutDetector:
             # cluster-based right-edge logic.
             ocr_anch = self._detect_via_ocr_anchored(img, build_type, slot_order, profile)
             if ocr_anch and len(ocr_anch) >= 3:
-                boff_result = marker_boffs or self._detect_boffs_in_mixed(img)
-                if boff_result:
-                    ocr_anch.update(boff_result)
+                if marker_boffs:
+                    ocr_anch.update(marker_boffs)
                 _slog.info(f'LayoutDetector: Strategy 1a (OCR-anchored fallback) → '
                            f'{len(ocr_anch)} slot groups, '
                            f'{sum(len(v) for v in ocr_anch.values())} bboxes')
@@ -656,11 +654,9 @@ class LayoutDetector:
                 full = self._detect_via_full_scan(img, build_type, icon_matcher, app_cache)
                 if full and len(full) >= 3:
                     has_boff = any(k.startswith('Boff ') for k in full)
-                    if not has_boff:
-                        boff_result = marker_boffs or self._detect_boffs_in_mixed(img)
-                        if boff_result:
-                            full.update(boff_result)
-                            _slog.info(f'LayoutDetector: MIXED merged → {len(full)} slot groups total')
+                    if not has_boff and marker_boffs:
+                        full.update(marker_boffs)
+                        _slog.info(f'LayoutDetector: MIXED merged → {len(full)} slot groups total')
                     return _merge_traits(full)
 
             # All EQ strategies failed. BOFF/trait detection is independent of
@@ -1708,6 +1704,34 @@ class LayoutDetector:
             f'LayoutDetector: _detect_boffs — {len(result)} sections, '
             f'{sum(len(v) for v in result.values())} bboxes'
         )
+
+        # Grid regularity check: real BOFF panels have consistent row spacing
+        # and aligned column starts. Reject irregular grids (e.g. trait rows
+        # or UI elements that passed the band scan but aren't a real grid).
+        if len(result) >= 2:
+            ys = sorted({bxs[0][1] for bxs in result.values()})
+            if len(ys) >= 2:
+                pitches = [ys[i + 1] - ys[i] for i in range(len(ys) - 1)]
+                p_min, p_max = min(pitches), max(pitches)
+                if p_min > 0 and p_max / p_min > 2.0:
+                    _slog.debug(
+                        f'LayoutDetector: _detect_boffs — rejected: '
+                        f'irregular row spacing {pitches}')
+                    return {}
+
+            # Check column alignment: left-column x_start values should be
+            # within ~1 icon_w of each other across rows.
+            left_xs = [bxs[0][0] for key, bxs in result.items()
+                       if key.startswith('Boff Seat L')]
+            if len(left_xs) >= 2:
+                x_spread = max(left_xs) - min(left_xs)
+                if x_spread > icon_w * 1.5:
+                    _slog.debug(
+                        f'LayoutDetector: _detect_boffs — rejected: '
+                        f'column misalignment x_spread={x_spread} '
+                        f'(max={icon_w * 1.5:.0f})')
+                    return {}
+
         return result
 
     def _detect_boffs_in_mixed(self, img) -> dict[str, list]:
