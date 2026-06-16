@@ -81,8 +81,7 @@ def main() -> int:
                     exc.stderr = exc.stderr.replace(token, '***')
                 raise
 
-        _git('clone', '--no-checkout', '--depth', '1',
-             '--filter=blob:none', clone_url, str(repo_dir))
+        _git('clone', '--no-checkout', '--depth', '1', clone_url, str(repo_dir))
         print(f'clone (metadata only) in {time.monotonic() - t0:.0f}s', flush=True)
 
         _git('sparse-checkout', 'set', 'data/crops', 'data/annotations.jsonl',
