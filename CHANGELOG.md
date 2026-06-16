@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.20] — 2026-06-16
+
+### Fixed
+- Bridge Officer abilities on mixed screens (showing both equipment and
+  officers) are no longer falsely detected when no profession colour
+  markers are visible. Previously, unrelated UI elements could be
+  misidentified as officer ability slots.
+- Starship Trait icon positions on the second row are now correctly
+  placed after the ship-name divider gap, instead of using a fixed
+  spacing that could miss or misalign the trait boxes.
+
 ## [1.0.19] — 2026-06-16
 
 ### Added
