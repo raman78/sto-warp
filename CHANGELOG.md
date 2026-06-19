@@ -8,6 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.21] — 2026-06-19
+
+### Fixed
+- Universal Bridge Officer seats with mostly empty or inactive abilities
+  are now identified by the correct profession instead of defaulting to
+  Science.
+- Changing a Bridge Officer group's type to a profession that already has
+  a group no longer merges the two groups — each physical seat keeps its
+  own group, and groups of the same type are numbered by their position
+  on screen.
+- The Kit slot on ground equipment screens is now detected even when OCR
+  fails to read the short "Kit" label.
+
+### Changed
+- Ship Name is no longer shown as a separate slot in the results or on
+  the preview canvas. The ship name is still used internally for layout
+  detection.
+
 ## [1.0.20] — 2026-06-16
 
 ### Fixed
