@@ -40,19 +40,7 @@ from dataclasses import dataclass, field
 from statistics import median
 from typing import Optional
 
-import cv2
 import numpy as np
-
-# Lazy import to avoid circular dependency
-_TEXT_EXTRACTOR = None
-
-
-def _get_easyocr_reader():
-    global _TEXT_EXTRACTOR
-    if _TEXT_EXTRACTOR is None:
-        from warp.recognition.text_extractor import TextExtractor
-        _TEXT_EXTRACTOR = TextExtractor()
-    return _TEXT_EXTRACTOR._get_ocr()
 
 
 # ----------------------------------------------------------------------------
@@ -179,37 +167,6 @@ class GroundEQGeometry:
 # ----------------------------------------------------------------------------
 # OCR helpers
 # ----------------------------------------------------------------------------
-
-def _run_ocr(img: np.ndarray) -> list[dict]:
-    reader = _get_easyocr_reader()
-    if reader is None:
-        return []
-    rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
-    try:
-        raw = reader.readtext(rgb, detail=1, paragraph=False)
-    except Exception:
-        return []
-    out = []
-    for box, text, conf in raw:
-        if not text:
-            continue
-        xs = [p[0] for p in box]
-        ys = [p[1] for p in box]
-        out.append({
-            'text': text,
-            'low':  text.lower().strip(),
-            'conf': float(conf),
-            'cx':   int(sum(xs) / 4),
-            'cy':   int(sum(ys) / 4),
-            'x0':   int(min(xs)),
-            'y0':   int(min(ys)),
-            'x1':   int(max(xs)),
-            'y1':   int(max(ys)),
-            'w':    int(max(xs) - min(xs)),
-            'h':    int(max(ys) - min(ys)),
-        })
-    return out
-
 
 def _match_label(tok: dict) -> Optional[str]:
     """Return canonical slot name if token text matches an EQ label.
@@ -350,8 +307,16 @@ def _score_combo(combo: dict[str, dict]) -> tuple[float, dict]:
 # Public entry point
 # ----------------------------------------------------------------------------
 
-def detect_ground_eq_geometry(img: np.ndarray) -> Optional[GroundEQGeometry]:
+def detect_ground_eq_geometry(
+    img: np.ndarray,
+    ocr_tokens: list[dict] | None = None,
+) -> Optional[GroundEQGeometry]:
     """Full pipeline. Returns None if OCR finds no usable EQ labels.
+
+    *ocr_tokens* — pre-computed tokens from ``TextExtractor.scan_image``.
+    Each dict must have at least: ``low``, ``conf``, ``cx``, ``cy``,
+    ``x0``, ``y0``, ``w``, ``h`` (same schema as scan_image output).
+    When *None*, the function cannot proceed (caller must supply tokens).
 
     Uses multi-candidate scoring: each canonical slot may have multiple OCR
     tokens (e.g. duplicate "Body" hits from HUD/tooltips), and the optimal
@@ -362,7 +327,7 @@ def detect_ground_eq_geometry(img: np.ndarray) -> Optional[GroundEQGeometry]:
     """
     if img is None or img.size == 0:
         return None
-    ocr = _run_ocr(img)
+    ocr = ocr_tokens or []
     if not ocr:
         return None
 
@@ -419,6 +384,13 @@ def detect_ground_eq_geometry(img: np.ndarray) -> Optional[GroundEQGeometry]:
     # Real slot_label_cys: keep all chosen hits (including synthetic EV Suit
     # so it projects a right column for Devices/Body row pairing).
     slot_label_cys = {s: h['cy'] for s, h in hits.items()}
+
+    # Interpolate Kit when OCR missed the short "Kit" label but Body Armor
+    # is present — Kit is always exactly 1 row_pitch above Body Armor.
+    if SLOT_KIT not in slot_label_cys and SLOT_BODY_ARMOR in slot_label_cys:
+        kit_cy = slot_label_cys[SLOT_BODY_ARMOR] - row_pitch
+        if kit_cy >= 0:
+            slot_label_cys[SLOT_KIT] = kit_cy
 
     return GroundEQGeometry(
         row_pitch=row_pitch,

@@ -410,6 +410,8 @@ class TextExtractor:
 
     def __init__(self):
         self._ocr = None
+        self._scan_cache_key = None
+        self._scan_cache_tokens: list[dict] = []
 
     @staticmethod
     def _poly_to_xywh(poly) -> tuple[int, int, int, int]:
@@ -1171,6 +1173,102 @@ class TextExtractor:
                 _slog.info(f'TextExtractor: type refined from crop → {text!r} (raw={raw!r}, conf={conf:.2f})')
 
         return info
+
+    # ------------------------------------------------------------------
+    # Centralised full-image OCR scan
+    # ------------------------------------------------------------------
+
+    def scan_image(self, img: np.ndarray) -> list[dict]:
+        """Scan full image in horizontal strips and return all OCR tokens.
+
+        Splits the image into 5 strips (~20 % height each, with small
+        overlap at boundaries) so that small labels get adequate
+        effective resolution.  Results are cached per image (by
+        ``id(img)``); call ``clear_scan_cache()`` when moving to a new
+        image.
+
+        Returns list of dicts, each with:
+            text, low, conf, x0, y0, x1, y1, cx, cy, w, h
+        Coordinates are in full-image pixel space.
+        """
+        import cv2
+
+        key = id(img)
+        if self._scan_cache_key == key:
+            return self._scan_cache_tokens
+
+        h, w = img.shape[:2]
+        reader = self._get_ocr()
+        raw_tokens: list[dict] = []
+
+        _STEP = 0.20
+        _MARGIN = 0.03  # 3 % overlap on each side of a boundary
+        for i in range(5):
+            y_start = max(0.0, i * _STEP - (0.0 if i == 0 else _MARGIN))
+            y_end = min(1.0, (i + 1) * _STEP + (0.0 if i == 4 else _MARGIN))
+            y0_px = int(h * y_start)
+            y1_px = int(h * y_end)
+            strip = img[y0_px:y1_px, :]
+            if strip.size == 0:
+                continue
+            try:
+                rgb = cv2.cvtColor(strip, cv2.COLOR_BGR2RGB)
+                raw = reader.readtext(rgb, detail=1, paragraph=False)
+            except Exception:
+                continue
+            for box, text, conf in raw:
+                text = text.strip()
+                if not text:
+                    continue
+                xs = [p[0] for p in box]
+                ys = [p[1] for p in box]
+                raw_tokens.append({
+                    'text': text,
+                    'low':  text.lower(),
+                    'conf': float(conf),
+                    'x0':   int(min(xs)),
+                    'y0':   int(min(ys)) + y0_px,
+                    'x1':   int(max(xs)),
+                    'y1':   int(max(ys)) + y0_px,
+                    'cx':   int(sum(xs) / len(xs)),
+                    'cy':   int(sum(ys) / len(ys)) + y0_px,
+                    'w':    int(max(xs) - min(xs)),
+                    'h':    int(max(ys) - min(ys)),
+                })
+
+        tokens = self._dedup_tokens(raw_tokens)
+        _slog.info(f'TextExtractor: scan_image → {len(tokens)} tokens '
+                   f'({len(raw_tokens)} raw, {len(raw_tokens) - len(tokens)} deduped)')
+
+        self._scan_cache_key = key
+        self._scan_cache_tokens = tokens
+        return tokens
+
+    def clear_scan_cache(self) -> None:
+        """Drop cached scan_image results (call when switching images)."""
+        self._scan_cache_key = None
+        self._scan_cache_tokens = []
+
+    @staticmethod
+    def _dedup_tokens(tokens: list[dict]) -> list[dict]:
+        """Remove duplicate tokens produced by overlapping strips."""
+        if not tokens:
+            return tokens
+        tokens = sorted(tokens, key=lambda t: (t['cy'], t['cx']))
+        kept: list[dict] = []
+        for tok in tokens:
+            is_dup = False
+            for prev in kept:
+                if (prev['low'] == tok['low']
+                        and abs(prev['cx'] - tok['cx']) < max(10, tok['w'] * 0.3)
+                        and abs(prev['cy'] - tok['cy']) < max(10, tok['h'] * 0.5)):
+                    if tok['conf'] > prev['conf']:
+                        prev.update(tok)
+                    is_dup = True
+                    break
+            if not is_dup:
+                kept.append(tok)
+        return kept
 
     def _get_ocr(self):
         if self._ocr is None:

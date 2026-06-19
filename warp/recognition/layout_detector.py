@@ -391,14 +391,16 @@ class LayoutDetector:
                 f'rows={len(geom.row_cys)}')
         return geom
 
-    def _get_ground_eq_geometry(self, img: np.ndarray) -> GroundEQGeometry | None:
+    def _get_ground_eq_geometry(self, img: np.ndarray,
+                               ocr_tokens: list[dict] | None = None,
+                               ) -> GroundEQGeometry | None:
         """Cached wrapper around detect_ground_eq_geometry. Returns None when
         OCR yields fewer than 2 left-column EQ labels."""
         key = id(img)
         if key in self._ground_eq_geom_cache:
             return self._ground_eq_geom_cache[key]
         try:
-            geom = detect_ground_eq_geometry(img)
+            geom = detect_ground_eq_geometry(img, ocr_tokens=ocr_tokens)
         except Exception as e:
             _slog.warning(f'LayoutDetector: detect_ground_eq_geometry crashed: {e}')
             geom = None
@@ -412,7 +414,8 @@ class LayoutDetector:
         return geom
 
     def _detect_via_ground_geometry(
-        self, img: np.ndarray, profile: dict
+        self, img: np.ndarray, profile: dict,
+        ocr_tokens: list[dict] | None = None,
     ) -> dict[str, list[tuple[int, int, int, int]]] | None:
         """Ground EQ detection via OCR-anchored geometry.
 
@@ -421,7 +424,7 @@ class LayoutDetector:
         (profile is the floor for KM; cap Devices to profile when projected
         rows exceed). Returns None when geometry detection failed.
         """
-        geom = self._get_ground_eq_geometry(img)
+        geom = self._get_ground_eq_geometry(img, ocr_tokens=ocr_tokens)
         if geom is None:
             return None
         h, w = img.shape[:2]
@@ -446,7 +449,9 @@ class LayoutDetector:
         return {k: v for k, v in projected.items() if v}
 
     def detect(self, img: np.ndarray, build_type: str, ship_profile: dict | None = None,
-               icon_matcher=None, app_cache=None) -> dict[str, list[tuple[int, int, int, int]]]:
+               icon_matcher=None, app_cache=None,
+               ocr_tokens: list[dict] | None = None,
+               ) -> dict[str, list[tuple[int, int, int, int]]]:
         # Reset per-image caches: id(img) is unstable across calls (Python
         # may reuse ids after GC), so stale entries can silently match a
         # different image and corrupt downstream detection.
@@ -499,7 +504,8 @@ class LayoutDetector:
         # Weapons stack + Devices grid). 94.4% recall, 91.2% precision,
         # mean IoU 0.814 on 12 GT-annotated screens.
         if build_type == 'GROUND':
-            ground = self._detect_via_ground_geometry(img, profile)
+            ground = self._detect_via_ground_geometry(img, profile,
+                                                        ocr_tokens=ocr_tokens)
             if ground and len(ground) >= 3:
                 _slog.info(
                     f'LayoutDetector: GROUND Strategy 1 (ground_eq_geometry) → '
@@ -579,9 +585,10 @@ class LayoutDetector:
             # space _get_eq_geometry path below would miss the entire EQ
             # grid on ground screens.
             if build_type == 'GROUND_MIXED':
-                ground_eq = self._detect_via_ground_geometry(img, profile)
+                ground_eq = self._detect_via_ground_geometry(img, profile,
+                                                              ocr_tokens=ocr_tokens)
                 if ground_eq and len(ground_eq) >= 3:
-                    g_geom = self._get_ground_eq_geometry(img)
+                    g_geom = self._get_ground_eq_geometry(img, ocr_tokens=ocr_tokens)
                     if g_geom is not None:
                         labels = self._ocr_section_labels(img)
                         # GROUND_MIXED: drop any phantom space-trait OCR hits

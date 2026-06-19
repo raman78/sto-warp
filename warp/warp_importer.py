@@ -1818,10 +1818,12 @@ class WarpImporter:
             'TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS',
         )
         _emit_stage(0.25, 'Detecting layout…')
+        ocr_tokens = self._get_text().scan_image(img)
         layout = self._get_layout().detect(
             img, build_type, profile,
             icon_matcher=self._get_matcher() if _needs_matcher else None,
             app_cache=self._cache if _needs_matcher else None,
+            ocr_tokens=ocr_tokens,
         )
         # Inject Ship Name/Type/Tier bboxes captured by the OCR pass so WARP
         # CORE can render them as reviewable slots on the canvas. Pure pass-
@@ -1958,6 +1960,7 @@ class WarpImporter:
                             img, build_type, profile,
                             icon_matcher=self._get_matcher() if _needs_matcher else None,
                             app_cache=self._cache if _needs_matcher else None,
+                            ocr_tokens=ocr_tokens,
                         )
                     _slog.info(f'WarpImporter: refined profile from pixel counts: '
                                f'{dict((k,v) for k,v in profile.items() if v)}')
