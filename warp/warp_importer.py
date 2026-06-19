@@ -1831,8 +1831,10 @@ class WarpImporter:
         # Space-only screens (SPACE / SPACE_MIXED / SPACE_TRAITS) are the only
         # ones where the top band carries the ship-info line.
         if build_type in ('SPACE', 'SPACE_MIXED', 'SPACE_TRAITS'):
+            # Ship Name is OCR-internal only (anchor for locating ship_type) —
+            # not emitted as a visible slot.  Ship Type and Ship Tier carry
+            # real information for ShipDB and are shown in the review UI.
             for _slot, _bbkey, _valkey in (
-                ('Ship Name', 'ship_name_bbox', 'ship_name'),
                 ('Ship Type', 'ship_type_bbox', 'ship_type'),
                 ('Ship Tier', 'ship_tier_bbox', 'ship_tier'),
             ):
@@ -1841,15 +1843,7 @@ class WarpImporter:
                     continue
                 _bb_t = tuple(_bb)
                 layout[_slot] = [_bb_t]
-                # Append as RecognisedItem so trainer review list picks it up.
-                # Ship Name is position-only in WARP CORE (no content stored),
-                # so name='' there; Tier carries the OCR value; Type uses the
-                # canonical class string from ShipDB.resolve() (already promoted
-                # into local `ship_type` above) so the bbox label shows the
-                # cargo-validated name instead of the raw OCR text.
-                if _slot == 'Ship Name':
-                    _val = ''
-                elif _slot == 'Ship Type':
+                if _slot == 'Ship Type':
                     _val = ship_type
                 else:
                     _val = text_info.get(_valkey, '')
@@ -1857,7 +1851,7 @@ class WarpImporter:
                     slot        = _slot,
                     slot_index  = 0,
                     name        = _val,
-                    confidence  = 1.0 if _val or _slot == 'Ship Name' else 0.0,
+                    confidence  = 1.0 if _val else 0.0,
                     thumbnail   = None,
                     source_file = source,
                     bbox        = _bb_t,
@@ -2858,7 +2852,7 @@ class WarpImporter:
                 _slog.info(f'│ Per-slot:')
                 # Same display order as the Results tree: ship metadata
                 # first, then canonical SLOT_ORDER[build_type], then leftovers.
-                meta_slots = ['Ship Name', 'Ship Type', 'Ship Tier']
+                meta_slots = ['Ship Type', 'Ship Tier']
                 canonical = [sd['name'] for sd in SLOT_ORDER.get(build_type, [])]
                 seen: set[str] = set()
                 ordered: list[str] = []
@@ -2942,7 +2936,7 @@ class WarpImporter:
         This gives pixel-perfect bboxes instead of estimated positions.
         Returns None if no confirmed annotations found.
         """
-        _NON_ICON = frozenset({'Ship Name', 'Ship Type', 'Ship Tier',
+        _NON_ICON = frozenset({'Ship Type', 'Ship Tier',
                                'Primary Specialization', 'Secondary Specialization'})
         try:
             from warp import userdata as _userdata
@@ -2983,7 +2977,7 @@ class WarpImporter:
             data = json.loads(ann_path.read_text(encoding='utf-8'))
             fname = Path(source).name
             ann_list = data.get(fname, [])
-            _NON_PROFILE = frozenset({'Ship Name', 'Ship Type', 'Ship Tier',
+            _NON_PROFILE = frozenset({'Ship Type', 'Ship Tier',
                                       'Primary Specialization', 'Secondary Specialization'})
             counts: dict[str, int] = {}
             for a in ann_list:

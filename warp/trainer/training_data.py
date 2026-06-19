@@ -55,7 +55,7 @@ class AnnotationState(str, Enum):
 # Accepting a new confirmed annotation for these slots removes any existing one
 # at a different bbox position (prevents duplicates from misclicks).
 SINGLE_INSTANCE_SLOTS: frozenset = frozenset({
-    'Ship Name', 'Ship Type', 'Ship Tier',
+    'Ship Type', 'Ship Tier',
     'Deflector', 'Sec-Def', 'Engines', 'Warp Core', 'Shield',
     'Kit', 'Body Armor', 'EV Suit', 'Personal Shield',
     'Primary Specialization', 'Secondary Specialization',
@@ -66,17 +66,9 @@ SINGLE_INSTANCE_SLOTS: frozenset = frozenset({
 # (so OCR can be directed to the right region) but must NOT generate crop PNGs
 # or crop_index entries, since ML cannot classify free-form text.
 NON_ICON_SLOTS: frozenset = frozenset({
-    'Ship Name',   # free-text, unique per ship — OCR only
     'Ship Type',   # fixed vocabulary, but text — OCR only
     'Ship Tier',   # T1–T6-X2 — OCR only
 })
-
-# Sub-categories of NON_ICON_SLOTS with different data-handling behaviour:
-#
-# POSITION_ONLY_SLOTS — bbox saved for layout anchoring only.
-#   No crop PNG, no crop_index entry, no upload. (Privacy: Ship Name is the
-#   player's character name — never stored beyond bbox coordinates.)
-POSITION_ONLY_SLOTS: frozenset = frozenset({'Ship Name'})
 
 
 def _bbox_iou(a: tuple, b: tuple) -> float:
@@ -612,14 +604,9 @@ class TrainingDataManager:
         - Updates state (PENDING → CONFIRMED etc.)
         - Updates name and slot (may change after user confirmation)
         - Re-exports crop if it doesn't exist yet
-        - POSITION_ONLY_SLOTS are skipped — their bbox is kept in annotations.json
-          for layout learning, but no crop PNG or crop_index entry is created.
         - TEXT_LEARNING_SLOTS get a crop PNG + crop_index entry that includes ml_name
           so SyncWorker can upload them for OCR correction training.
         """
-        if ann.slot in POSITION_ONLY_SLOTS:
-            return
-
         safe_slot = ann.slot.replace(" ", "_").lower()
         safe_name = (ann.name or "unknown").replace(" ", "_").lower()[:40]
         fname     = f"{safe_slot}__{safe_name}__{ann.ann_id}.png"
@@ -664,11 +651,8 @@ class TrainingDataManager:
         """
         Crops the icon region from the original screenshot and saves it as PNG.
         Filename is derived from item name + slot (for easy dataset browsing).
-        POSITION_ONLY_SLOTS are skipped — no crop needed (position anchor only).
         TEXT_LEARNING_SLOTS get a crop so the text region can be uploaded for OCR training.
         """
-        if ann.slot in POSITION_ONLY_SLOTS:
-            return
         import cv2
         img = cv2.imread(str(image_path))
         if img is None:

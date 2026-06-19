@@ -853,7 +853,7 @@ class SETSIconMatcher:
 
         # These slots have no crop PNGs — skip them
         _TEXT_SLOTS = frozenset({
-            'Ship Name', 'Ship Type', 'Ship Tier',
+            'Ship Type', 'Ship Tier',
             'Primary Specialization', 'Secondary Specialization',
         })
         crops_dir = training_data_dir / 'crops'
@@ -966,7 +966,7 @@ class SETSIconMatcher:
             return 0
 
         _TEXT_SLOTS = frozenset({
-            'Ship Name', 'Ship Type', 'Ship Tier',
+            'Ship Type', 'Ship Tier',
             'Primary Specialization', 'Secondary Specialization',
         })
 

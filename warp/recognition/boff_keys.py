@@ -311,7 +311,7 @@ def group_items_by_seat(items):
     return result
 
 
-_META_SLOTS: tuple[str, ...] = ('Ship Name', 'Ship Type', 'Ship Tier')
+_META_SLOTS: tuple[str, ...] = ('Ship Type', 'Ship Tier')
 
 
 def order_items_for_display(

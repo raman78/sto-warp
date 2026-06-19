@@ -25,7 +25,7 @@ SLOT_GROUPS: dict[str, list[str]] = {
         'Fore Weapons', 'Deflector', 'Sec-Def', 'Engines', 'Warp Core', 'Shield',
         'Aft Weapons', 'Experimental', 'Devices', 'Universal Consoles',
         'Engineering Consoles', 'Science Consoles', 'Tactical Consoles', 'Hangars',
-        'Ship Name', 'Ship Type', 'Ship Tier',
+        'Ship Type', 'Ship Tier',
     ],
     # GROUND_EQ: ground equipment only — no ship metadata
     'GROUND_EQ': [
@@ -63,7 +63,7 @@ SLOT_GROUPS: dict[str, list[str]] = {
         'Fore Weapons', 'Deflector', 'Sec-Def', 'Engines', 'Warp Core', 'Shield',
         'Aft Weapons', 'Experimental', 'Devices', 'Universal Consoles',
         'Engineering Consoles', 'Science Consoles', 'Tactical Consoles', 'Hangars',
-        'Ship Name', 'Ship Type', 'Ship Tier',
+        'Ship Type', 'Ship Tier',
         'Personal Space Traits', 'Starship Traits', 'Space Reputation', 'Active Space Rep',
         'Boff Tactical', 'Boff Engineering', 'Boff Science',
         'Boff Intelligence', 'Boff Command', 'Boff Pilot', 'Boff Miracle Worker', 'Boff Temporal',
@@ -119,7 +119,7 @@ SCREEN_TO_SLOT_GROUP: dict[str, str] = {
 }
 
 FIXED_VALUE_SLOTS: frozenset[str] = frozenset(['Ship Tier', 'Ship Type'])
-_SHIP_INFO_SLOTS = ['Ship Name', 'Ship Type', 'Ship Tier']
+_SHIP_INFO_SLOTS = ['Ship Type', 'Ship Tier']
 
 
 # Build ALL_SLOTS as a flat deduplicated list of every slot across all groups

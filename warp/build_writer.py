@@ -82,7 +82,7 @@ SLOT_MAP: dict[str, tuple[str, str, bool]] = {
 
 
 _META_SLOTS = frozenset({
-    'Ship Name', 'Ship Type', 'Ship Tier',
+    'Ship Type', 'Ship Tier',
     'Primary Specialization', 'Secondary Specialization',
 })
 
