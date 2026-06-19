@@ -484,22 +484,18 @@ class TextExtractor:
             h, w = img.shape[:2]
 
             # ── Pass 1: screen type detection ────────────────────────────────
-            # Two-stage: fast partial scan first, full scan if needed.
-            # Partial covers most cases; full scan handles MIXED layouts
-            # where labels can appear anywhere on screen.
-            def _ocr_region(region):
-                if region.size == 0: return []
-                try:
-                    out = self._get_ocr().readtext(region)
-                    return [t.lower() for (_, t, c) in out if c > 0.25]
-                except Exception:
-                    return []
+            # Uses centralised scan_image (5 horizontal strips with overlap).
+            # Partial filter covers most cases; full token set handles MIXED
+            # layouts where labels can appear anywhere on screen.
+            all_scan = self.scan_image(img)
 
-            # Stage 1a: fast partial scan
-            partial_lines = (
-                _ocr_region(img[0:int(h * 0.55), int(w * 0.45):]) +  # top-right
-                _ocr_region(img[int(h * 0.65):, :])                   # bottom
-            )
+            # Stage 1a: partial filter (top-right + bottom — same regions as
+            # the old dedicated OCR calls)
+            partial_tokens = [t for t in all_scan
+                              if ((t['cy'] < h * 0.55 and t['x0'] >= w * 0.45)
+                                  or t['cy'] >= h * 0.65)
+                              and t['conf'] > 0.25]
+            partial_lines = [t['low'] for t in partial_tokens]
             detected = _detect_type_from_text(partial_lines)
             _slog.info(f'TextExtractor: partial scan → {detected!r} '
                        f'({len(partial_lines)} tokens)')
@@ -508,17 +504,15 @@ class TextExtractor:
                 'TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS',
                 'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
             }
+            full_lines = [t['low'] for t in all_scan if t['conf'] > 0.25]
             if detected in _TRAIT_BOFF_VARIANTS:
                 # Trait/boff classification must see BOTH sides of a mixed
-                # screenshot before deciding pure-vs-mixed. The partial scan
-                # only covers top-right + bottom strips, so a Personal Ground
-                # Traits section in the upper-left can be invisible to it and
-                # the result wrongly narrows to SPACE_TRAITS. Re-run on the
-                # full image and let _detect_type_from_text count headers per
-                # side.
+                # screenshot before deciding pure-vs-mixed. The partial
+                # filter only covers top-right + bottom, so a Personal
+                # Ground Traits section in the upper-left can be invisible
+                # and the result wrongly narrows to SPACE_TRAITS.
                 _slog.info(f'TextExtractor: partial {detected!r} — '
-                           f'rescanning full image to count trait/boff sides')
-                full_lines = _ocr_region(img)
+                           f'using full token set to count trait/boff sides')
                 refined = _detect_type_from_text(full_lines)
                 if refined and refined != detected:
                     _slog.info(f'TextExtractor: {detected!r} refined to '
@@ -526,55 +520,43 @@ class TextExtractor:
                     detected = refined
                 elif refined:
                     detected = refined
-                all_lines = full_lines
                 result['scan_scope'] = 'full'
             elif not detected:
-                # Stage 1b: full image scan — needed for MIXED screens
-                _slog.info('TextExtractor: partial scan inconclusive — scanning full image')
-                full_lines = _ocr_region(img)
+                # Stage 1b: full token set — needed for MIXED screens
+                _slog.info('TextExtractor: partial scan inconclusive — using full token set')
                 detected = _detect_type_from_text(full_lines)
-                all_lines = full_lines
                 result['scan_scope'] = 'full'
                 _slog.info(f'TextExtractor: full scan → {detected!r} '
                            f'({len(full_lines)} tokens)')
             else:
-                all_lines = partial_lines
                 result['scan_scope'] = 'partial'
 
             if detected:
                 result['build_type'] = detected
 
-            # ── Pass 2: wide-scan for ship info ───────────────────────────────
-            # Scan entire top 20% of image — works regardless of where ship info
-            # appears (left, centre, right, cropped screenshots)
-            top_band = img[0:int(h * 0.20), :]
-            try:
-                ocr_out = self._get_ocr().readtext(top_band)
-            except Exception as e:
-                _slog.debug(f'TextExtractor OCR failed: {e}')
+            # ── Pass 2: ship info from top-band tokens ────────────────────────
+            # Filter scan_image tokens in the top 20% of the image.
+            top_band_limit = int(h * 0.20)
+            top_scan = [t for t in all_scan
+                        if t['cy'] < top_band_limit and t['conf'] > 0.20]
+            top_scan.sort(key=lambda t: (t['y0'], t['x0']))
+
+            if not top_scan:
                 return result
 
-            if not ocr_out:
-                return result
-
-            # Sort all detections left-to-right, top-to-bottom
-            ocr_out.sort(key=lambda r: (r[0][0][1], r[0][0][0]))
-            items = [(bbox, t.strip(), c) for (bbox, t, c) in ocr_out
-                     if c > 0.20 and t.strip()]
-            _slog.info(f'TextExtractor: {len(items)} OCR tokens in top band')
-            for bbox, t, c in items:
-                _slog.debug(f'  OCR: {t!r} conf={c:.2f} y={bbox[0][1]:.0f}')
+            _slog.info(f'TextExtractor: {len(top_scan)} OCR tokens in top band')
+            for t in top_scan:
+                _slog.debug(f'  OCR: {t["text"]!r} conf={t["conf"]:.2f} y={t["y0"]}')
 
             # ── Pre-compute per-token features ────────────────────────────────
             # xywh + dark-bg flag — ship_* labels sit on near-black panel BG.
             tokens = []
-            for bbox, t, c in items:
-                x, y, w_, h_ = self._poly_to_xywh(bbox)
-                dark = self._is_dark_bg(img, (x, y, w_, h_))
+            for t in top_scan:
+                dark = self._is_dark_bg(img, (t['x0'], t['y0'], t['w'], t['h']))
                 tokens.append({
-                    'x': x, 'y': y, 'w': w_, 'h': h_,
-                    'text': t, 'conf': c, 'dark': dark,
-                    'cy': y + h_ // 2,
+                    'x': t['x0'], 'y': t['y0'], 'w': t['w'], 'h': t['h'],
+                    'text': t['text'], 'conf': t['conf'], 'dark': dark,
+                    'cy': t['cy'],
                 })
 
             # Group tokens into visual rows by y-clustering.
