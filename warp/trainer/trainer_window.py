@@ -2415,12 +2415,24 @@ class WarpCoreWindow(QMainWindow):
                     group_label=new_label,
                 )
 
-        # Reparent all children to the new group
+        # Reparent all children to the new group.
+        # If a group with the target name already exists (different seat),
+        # assign a unique "#N" suffix to keep seats separate.
         rl = self._review_list
+        reparent_key = new_label
+        if new_label in rl._slot_parents:
+            # Target group already exists — find the next free suffix
+            n = 2
+            while f'{new_label} #{n}' in rl._slot_parents:
+                n += 1
+            reparent_key = f'{new_label} #{n}'
         for row in rows:
+            ri = self._recognition_items[row] if row < len(self._recognition_items) else None
+            if ri is not None:
+                ri['_group_label'] = reparent_key
             litem = rl.item(row)
             if litem:
-                rl.reparent_item(litem, new_label, new_label)
+                rl.reparent_item(litem, reparent_key, reparent_key)
 
         # ── Renumber sibling groups ──────────────────────────────────
         # When old_label had a "#N" suffix (e.g. "Boff Science #2"),
@@ -2943,6 +2955,48 @@ class WarpCoreWindow(QMainWindow):
             boff_keys,
             key=lambda k: (row_of.get(yx_map[k][0], 0), yx_map[k][1]),
         )
+
+        # ── renumber sibling BOFF groups by position ──────────────
+        # Groups sharing the same base name (e.g. "Boff Tactical" and
+        # "Boff Tactical #2") are renumbered so the first by position
+        # gets no suffix and later ones get #2, #3, etc.
+        import re as _re
+        _base_groups: dict[str, list[str]] = {}
+        for k in boff_sorted:
+            _m = _re.match(r'^(.+?)\s*#\d+$', k)
+            _base = _m.group(1) if _m else k
+            _base_groups.setdefault(_base, []).append(k)
+
+        _rename: dict[str, str] = {}
+        for _base, _keys in _base_groups.items():
+            if len(_keys) < 2:
+                continue
+            for _i, _old in enumerate(_keys):
+                _new = _base if _i == 0 else f'{_base} #{_i + 1}'
+                if _old != _new:
+                    _rename[_old] = _new
+
+        if _rename:
+            # Pop all old keys first to avoid collisions during swap
+            _popped = {}
+            for _old in _rename:
+                _p = rl._slot_parents.pop(_old, None)
+                if _p is not None:
+                    _popped[_old] = _p
+            for _old, _new in _rename.items():
+                _p = _popped.get(_old)
+                if _p is not None:
+                    rl._slot_parents[_new] = _p
+                    _p.setData(0, Qt.ItemDataRole.UserRole, _new)
+                    _p.setText(0, _new)
+                    for _ci in range(_p.childCount()):
+                        _ch = _p.child(_ci)
+                        if _ch in rl._flat:
+                            _idx = rl._flat.index(_ch)
+                            if _idx < len(self._recognition_items):
+                                self._recognition_items[_idx]['_group_label'] = _new
+            boff_sorted = [_rename.get(k, k) for k in boff_sorted]
+
         for s in boff_sorted:
             if s not in seen:
                 slot_order.append(s)
