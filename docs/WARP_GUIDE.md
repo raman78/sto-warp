@@ -274,7 +274,6 @@ After a run finishes, the **Results** tab shows a tree grouped by slot:
 ```
 Slot              Idx   Item                           Conf   Source
 ─────────────────────────────────────────────────────────────────────
-Ship Name         1     U.S.S. Enterprise              –      eq.jpg
 Ship Type         1     Fleet Heavy Cruiser            –      eq.jpg
 Ship Tier         1     T6-X                           –      eq.jpg
 Fore Weapon       4     ▸ (expanded)
@@ -455,7 +454,7 @@ Displays the current screenshot with coloured bounding boxes drawn over each det
 | Green        | `confirmed (user)`| Accepted by you (Enter / autocomplete pick / Accept button) |
 | Yellow/gold  | `confirmed (auto)`| Auto-accepted by the program because confidence ≥ Auto threshold (default 0.75). Persists across restarts so you can tell at a glance what *you* confirmed vs what the program did. Editing the name re-flags it as user-confirmed (green). |
 | Orange       | `community conflict` | You previously confirmed this slot as one item, but the current community model now proposes a different name. The bbox waits for you to re-verify instead of being silently overwritten. See [Community conflicts](#community-conflicts) in section 6. |
-| Cyan         | `text slot`       | Ship Name / Ship Type / Ship Tier — read by OCR, no icon matching, no confidence score |
+| Cyan         | `text slot`       | Ship Type / Ship Tier — read by OCR, no icon matching, no confidence score |
 | Grey (empty name) | `pending, no match` | The grid found this slot but the icon matcher had low confidence (< 0.35) or the match name had the wrong type for the slot. The bbox is kept so you can correct it manually — type the right name and Accept. |
 | Gold crosshair | (drawing)       | While Alt+LMB drag is in progress — the bbox you're currently drawing |
 
@@ -475,13 +474,15 @@ Diagram:
    └──────────────┘   └┄┄┄┄┄┄┄┄┄┄┄┄┄┄┘   └──────────────┘
 ```
 
-#### Ship Name / Ship Type / Ship Tier bboxes
+#### Ship Type / Ship Tier bboxes
 
 Cyan bboxes are special — they are not matched against the item database. Instead, the text inside them is read by OCR and used to identify the ship and its tier. They behave differently from equipment bboxes:
 
 - **No confidence score** — there is no "correct/incorrect" percentage; the OCR result is shown as the item name.
 - **No autocomplete** — type the text as it appears in the screenshot if you need to correct it.
 - **No duplicate warning** — Ship Type and Ship Tier bboxes are allowed to overlap each other (see below).
+
+The ship name (e.g. *U.S.S. Enterprise*) is detected internally by WARP for layout positioning but is **not** shown as a slot in the results or review tree. You cannot draw or confirm a Ship Name bbox — only Ship Type and Ship Tier are user-facing.
 
 #### Ship Type and Ship Tier overlap
 
@@ -972,11 +973,12 @@ checks for updates **every 15 minutes** (rate-limit cache; uses `requests` with 
 
 No username, account information, full screenshots, or ship names are ever transmitted.
 
-### Privacy note for Ship Name bbox
+### Privacy note
 
-If you draw a bbox over the ship name text in WARP CORE, the **position** (coordinates) is saved
-locally in `annotations.json` for layout learning. The **text content** is never saved as a crop
-and never uploaded — ship names are treated as personal data.
+Ship names (e.g. *U.S.S. Enterprise*) are used internally by WARP to locate
+the ship type text on screen. The name itself is **never saved** as a crop,
+**never uploaded**, and **not shown** in the review tree — it is discarded
+after positioning. Ship names are treated as personal data.
 
 ---
 
@@ -1004,7 +1006,7 @@ and never uploaded — ship names are treated as personal data.
 | Green | User-confirmed (Enter / autocomplete pick / Accept) |
 | Yellow / gold | Auto-confirmed by program (conf ≥ Auto threshold). Persists across restarts. |
 | Orange | Community conflict — community model disagrees with your earlier confirmation. Re-verify and Accept. |
-| Cyan | Text slot (Ship Name / Type / Tier) — OCR, no icon matching |
+| Cyan | Text slot (Ship Type / Tier) — OCR, no icon matching |
 | Grey (empty name) | Detected bbox without a usable match — type the name and Accept |
 | Gold crosshair | Currently being drawn (Alt + LMB drag in progress) |
 
@@ -1026,8 +1028,8 @@ The ship banner above the Results tree shows what WARP picked up from OCR. If
 it's wrong, the underlying OCR tokens are in the Detection logs tab — useful
 when the name is a near-miss (e.g. *"Legondary Bortasqu'"* instead of
 *"Legendary Bortasqu'"*). Open the screenshot in WARP CORE and confirm a
-**Ship Name / Ship Type / Ship Tier** bbox manually; on the next recognition
-run the confirmed text wins.
+**Ship Type** or **Ship Tier** bbox manually; on the next recognition run
+the confirmed text wins.
 
 A ship class with noisy OCR (extra symbols, dropped letters, suffix garbage)
 no longer has to match the class list character-for-character. The matcher
