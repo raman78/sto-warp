@@ -273,7 +273,7 @@ Decision order (critical — navy-blue check must precede the brightness
 gate):
 
 ```
-1. mean_s > 100  AND  95 < mean_h < 130  AND  std_v < 15
+1. mean_s > 100  AND  95 < mean_h < 130  AND  std_v < 20
        → 'inactive'   (bright navy-blue X, mean_v ~70)
 2. mean_v > 45
        → 'active'     (has visible icon content)
@@ -292,6 +292,11 @@ returned false positives like "Charged Particle Burst" at 0.89–0.94
 confidence. The compound check (high saturation + blue hue + low
 brightness variance) fires only on the uniform navy fill; real ability
 icons have `std_v >> 25` (rich visual detail) and pass step 2 as active.
+
+**Threshold history.** The original `std_v < 15` missed borderline
+inactive cells at `std_v ≈ 15.2` (observed on 398×316 px BOFF panel
+crops). All genuinely active icons have `std_v > 65`, so the raised
+threshold of 20 has a safe margin of 45+ against false negatives.
 
 Cells classified as `empty` or `inactive` short-circuit with
 `__empty__` / `__inactive__` at `conf=1.0`. No icon matcher call is
@@ -414,6 +419,21 @@ the group falls to the end. The current implementation avoids re-derivation
 entirely: it reads keys from the tree and sorts them by children's bbox
 coordinates.
 
+## Universal seat profession vote
+
+`warp/warp_importer.py:2105` votes on the profession of Universal BOFF
+seats by classifying each cell's border colour via
+`LayoutDetector._classify_boff_profession()`. The vote runs **before**
+the icon-matching loop, so `_classify_cell` has not yet run on these
+bboxes. Without a pre-filter, inactive cells (navy-blue X pattern) would
+vote — and since `_classify_boff_profession` classifies "no accent
+colour" as Science (the default), three inactive cells can outvote one
+real Tactical icon.
+
+Fix (`warp/warp_importer.py:2125`): each cell is passed through
+`_classify_cell` inside the vote loop. Cells that return `'inactive'` or
+`'empty'` are skipped before `_classify_boff_profession` runs.
+
 ## BOFF group type change
 
 `WarpCoreWindow._show_review_context_menu()`
@@ -436,7 +456,9 @@ right-click "Boff Science #2"
   2. For each child row: rematch crop via SETSIconMatcher.match()
      against the combined candidate set (threshold ≥ 0.40)
   3. Update ri['slot'], ri['name'], ri['conf'], ri['_group_label']
-  4. reparent_item(item, new_label, new_label)
+  4. Reparent: if target group already exists in _slot_parents,
+     assign "#N" suffix to keep seats separate (line 2422).
+     reparent_item(item, reparent_key, reparent_key)
       │
       ▼
   5. Sibling renumbering: if old_label had "#N" suffix and only one
@@ -448,9 +470,17 @@ right-click "Boff Science #2"
       │
       ▼
   6. _resort_parents_canonical() — reorder by children's bbox Y
+     + renumber sibling groups by position (see below)
 ```
 
-**Sibling renumbering** (`trainer_window.py:2425`). When `old_label`
+**Merge prevention** (`trainer_window.py:2422`). When the target label
+already exists in `_slot_parents` (e.g. renaming Universal → Tactical
+while a Tactical group already exists), the reparent key gets a `#N`
+suffix instead of merging items into the existing group. This preserves
+the physical seat boundary — items from different marker-keyed seats
+remain in separate groups even when they share a profession label.
+
+**Sibling renumbering** (`trainer_window.py:2437`). When `old_label`
 matches `r'^(.+?)\s*#\d+$'`, the method scans `_slot_parents` for
 remaining siblings with the same base label. If exactly one survives, its
 `#N` suffix is stripped from:
@@ -462,3 +492,17 @@ remaining siblings with the same base label. If exactly one survives, its
 
 This keeps group labels clean — "Boff Science #1" becomes just "Boff
 Science" when the second Science seat is reclassified.
+
+### Position-based renumbering in `_resort_parents_canonical`
+
+After sorting BOFF groups by children's min-Y position,
+`_resort_parents_canonical()` (`trainer_window.py:2959`) renumbers
+sibling groups that share the same base name. Groups are enumerated in
+position order: the first gets the bare label (e.g. "Boff Tactical"),
+subsequent ones get `#2`, `#3`, etc.
+
+This prevents the scenario where a renamed group receives `#2` while
+appearing above the original on screen. The rename is applied atomically:
+all old keys are popped from `_slot_parents` first to avoid collisions
+during swap, then new keys are inserted. Each parent's display text,
+UserRole data, and children's `_group_label` are updated.

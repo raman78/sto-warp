@@ -248,23 +248,33 @@ root cause is fixed.
 
 ## 8. The poison filter
 
-Two name patterns must **never** reach `data/`:
+Certain names must **never** reach `data/`:
 
-- `__virtual__` style markers (`__empty__`, `__inactive__`,
-  `__boff_*`) — they are legitimate training labels (the model needs
-  them to recognise empty slots), but if they leaked into the lookup
-  table the matcher would override every real crop with conf 1.0 and
-  the slot would always read as empty.
+- `__boff_*` and other internal test markers — dev-time placeholders
+  that would corrupt the training set.
 - `Test Item Name` — dev-time placeholder, never a real item.
+
+`__empty__` and `__inactive__` are **allowed** through the crop merger
+(`democratic_merge_crops.py`). The ArcFace embedder needs them as gallery
+classes so inactive/empty slots map to their own class instead of
+nearest-neighbour-snapping to a real ability (see
+[`ML_PIPELINE.md` §3 — Virtual gallery classes](ML_PIPELINE.md#virtual-gallery-classes-__inactive__-__empty__)).
+
+The pHash override path in `icon_matcher.py` independently suppresses
+virtual names (`name.startswith('__') → suppress=True`), so they never
+enter `knowledge.json` as hard overrides — the risk that originally
+motivated blocking all `__*` names in the merger.
 
 The filter is enforced in **two** places (defence in depth):
 
 1. **Client upload guard** (`warp/knowledge/sync_client.py`,
-   `_poison_filter_enabled` flag) — blocks the names from leaving the
-   client at all.
+   `_poison_filter_enabled` flag) — blocks poison names from leaving
+   the client at all.
 2. **Merger guard** (`_is_poison_name` in each `democratic_merge_*`) —
    blocks them again when promoting to `data/`, in case the client
-   filter is bypassed by an older release.
+   filter is bypassed by an older release. The crop merger exempts
+   `__empty__` / `__inactive__` (see above); other mergers block all
+   `__*` names.
 
 The mapping of every output-side filter on the client is documented
 in [`client_user_view_filter.md`](client_user_view_filter.md).

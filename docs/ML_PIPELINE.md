@@ -14,7 +14,7 @@ sto-warp uses two production classifiers plus one embedder:
 |-------|-------------|---------|
 | `icon_classifier.pt` | EfficientNet-B0 | Matches item icon crops to item names |
 | `screen_classifier.pt` | MobileNetV3-Small | Classifies screenshot type (SPACE_EQ, BOFFS, TRAITS, …, SKILLS, DISCARD) — 9-class softmax |
-| `icon_embedder.pt` | EfficientNet-B0 + ArcFace head | k-NN gallery lookup used as a confidence cross-check |
+| `icon_embedder.pt` | EfficientNet-B0 + ArcFace head | k-NN gallery lookup — primary matcher for BOFF abilities; includes `__inactive__`/`__empty__` as gallery classes |
 
 **The client does not train the production models.** All three files are
 downloaded from `sets-sto/warp-knowledge` on HuggingFace (see §4). The
@@ -247,6 +247,50 @@ Same flow with MobileNetV3-Small. 9-class output: `SPACE_EQ`, `GROUND_EQ`,
 and `DISCARD` skip all recognition — WARP returns an empty `ImportResult`
 for images classified into either (conf ≥ 0.50). Fine-tunes from previous
 `screen_classifier.pt` backbone.
+
+### Central training process (ArcFace embedder)
+
+File: `sets-warp-backend/admin_train_metric.py`
+
+The embedder follows the same community data path as the classifiers above.
+It reads curated crops from `data/annotations.jsonl` (built by
+`democratic_merge_crops.py`), downloads the crop images from HF by SHA,
+trains an EfficientNet-B0 backbone with an ArcFace projection head, builds
+a k-NN gallery from the full training set, and uploads the result to
+`sets-sto/warp-knowledge/models/`.
+
+```
+1. Read data/annotations.jsonl → (sha, name, slot) tuples
+2. Download crop PNGs by SHA from sets-sto/sto-icon-dataset
+3. Stratified train/val split (80/20)
+4. Train EfficientNet-B0 + ArcFace (margin=0.5, scale=30, 256-d embed)
+5. Build gallery: embed every training crop, store per-class centroid
+6. Save: icon_embedder.pt, embedding_index.npz, embedder_label_map.json
+7. Upload to sets-sto/warp-knowledge/models/
+```
+
+#### Virtual gallery classes (`__inactive__`, `__empty__`)
+
+The embedder gallery **must** include `__inactive__` and `__empty__` as
+classes. Without them, the k-NN lookup has no "none of the above" option —
+an inactive cell (uniform navy-blue X) snaps to the nearest real ability
+(e.g. "Charged Particle Burst" at 0.93 conf) because the embedding space
+has no closer alternative.
+
+These virtual labels enter the pipeline through the same democratic voting
+path as real abilities. Client `sync.py` uploads crops labelled
+`__inactive__` / `__empty__` to staging; `democratic_merge_crops.py`
+allows them through its poison filter (see
+[`DATA_LIFECYCLE.md` §8](DATA_LIFECYCLE.md#8-the-poison-filter) for the
+filter's current policy); the central trainer treats them as ordinary
+classes.
+
+The pHash override path in `icon_matcher.py:48` independently suppresses
+virtual names (`name.startswith('__') → suppress=True`), so even if the
+k-NN returns `__inactive__`, it is never written to `knowledge.json` as a
+hard override. The gallery classes are defensive — they exist so the
+embedding space has somewhere to map empty/inactive crops *instead of*
+mapping them to real abilities.
 
 ### Ship type / tier OCR correction map
 
