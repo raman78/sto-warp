@@ -2113,7 +2113,7 @@ class LayoutDetector:
         # Real icons have rich visual detail → std_v >> 25; the uniform
         # navy fill sits at std_v ~6. mean_s > 100 separates the saturated
         # navy from dim-but-desaturated icons (e.g. Hold Together).
-        if mean_s > 100 and 95 < mean_h < 130 and std_v < 15:
+        if mean_s > 100 and 95 < mean_h < 130 and std_v < 20:
             return 'inactive'
         if mean_v > 45:
             return 'active'

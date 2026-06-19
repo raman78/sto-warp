@@ -2122,6 +2122,8 @@ class WarpImporter:
                         _vcrop = self._crop(img, (_vx, _vy + current_dy, _vw, _vh))
                         if _vcrop is None or _vcrop.size == 0:
                             continue
+                        if _layout_obj._classify_cell(_vcrop) != 'active':
+                            continue
                         _vk = _layout_obj._classify_boff_profession(_vcrop)
                         _vmapped = _prof_to_cache.get(_vk) if _vk else None
                         if _vmapped:
