@@ -671,9 +671,15 @@ ability one by one, you can change the entire group at once:
    ability list. The group keeps its position in the tree (matching the
    physical seat position on screen).
 
-If the old group was numbered (e.g. *Boff Science #2*) and only one group
-of that base type remains after the change, the leftover number is dropped
-automatically — *Boff Science #1* becomes just *Boff Science*.
+If you rename a group to a type that already exists (e.g. changing a
+Universal to Tactical when a Tactical seat is already present), the
+renamed group gets a number suffix (*Boff Tactical #2*) so the two seats
+stay separate — abilities from different seats are never merged together.
+
+Groups of the same type are numbered by their position on the screenshot
+(top to bottom). If one group is removed or reclassified and only one of
+that type remains, the leftover number is dropped automatically — *Boff
+Science #1* becomes just *Boff Science*.
 
 > **Tip:** This is most useful for Universal seats, where WARP has to guess
 > the profession from the abilities it recognises. If the guess was wrong,
@@ -1034,11 +1040,16 @@ panel offers a searchable dropdown over the full roster (see section 4).
 ### Bridge Officer slots recognised as wrong abilities
 
 Inactive BOFF slots (the navy-blue "X" icon in-game, indicating a
-locked or unavailable ability at that rank) used to be misrecognised as
-random abilities with moderate confidence. This is now fixed — WARP
-detects the dark-blue pattern and marks those slots as *inactive*
-automatically. They appear in the review list as greyed-out entries and
-require no manual correction.
+locked or unavailable ability at that rank) are detected automatically —
+WARP recognises the dark-blue pattern and marks those slots as *inactive*.
+They appear in the review list as greyed-out entries and require no
+manual correction.
+
+Universal seats with mostly inactive slots (e.g. an Ensign seat where
+only one ability is filled) are now classified correctly. WARP ignores
+empty and inactive slots when voting on the seat's profession, so a
+single Tactical ability is enough to identify the seat as Tactical — it
+is no longer outvoted by three inactive slots.
 
 If you still see a real ability name on a slot that should be inactive,
 draw a bbox over it and type `__inactive__` to correct it (see
