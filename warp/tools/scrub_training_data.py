@@ -93,6 +93,29 @@ def _load_annotations(training_dir: Path) -> dict:
     return json.loads(ann_path.read_text(encoding='utf-8'))
 
 
+def _iter_anns(data: dict):
+    """Yield (screenshot_label, anns_list, ann) for every annotation.
+
+    Tolerates both schemas:
+      - new (post-196e035): ``{sha16: {'filename': ..., 'annotations': [ann, ...]}}``
+      - legacy:             ``{filename: [ann, ...]}``
+
+    ``anns_list`` is the mutable list the ann lives in, so callers can
+    drop entries in place during ``apply_removals``.
+    """
+    for key, val in data.items():
+        if isinstance(val, dict):
+            anns_list = val.get('annotations', [])
+            label = val.get('filename', key)
+        elif isinstance(val, list):
+            anns_list = val
+            label = key
+        else:
+            continue
+        for ann in anns_list:
+            yield label, anns_list, ann
+
+
 def _save_annotations(training_dir: Path, data: dict) -> None:
     ann_path = training_dir / 'annotations.json'
     ann_path.write_text(json.dumps(data, indent=2), encoding='utf-8')
@@ -139,35 +162,34 @@ def find_virtual_label_poison(training_dir: Path,
     """Find confirmed annotations whose label is __empty__/__inactive__
     but whose crop looks like a real, colourful icon."""
     suspects = []
-    for screenshot, anns in data.items():
-        for ann in anns:
-            if ann.get('state') != 'confirmed':
-                continue
-            name = (ann.get('name') or '').strip()
-            if name not in VIRTUAL_LABELS:
-                continue
-            # Skip entries the user already inspected and confirmed OK.
-            if ann.get('poison_reviewed'):
-                continue
-            crop_path = _crop_path_for_ann(training_dir, ann)
-            if crop_path is None:
-                continue
-            img = cv2.imread(str(crop_path))
-            if img is None:
-                continue
-            is_suspect, reason = _looks_real_for_virtual_label(
-                img, bright_ratio_min, rich_ratio_min)
-            if not is_suspect:
-                continue
-            suspects.append({
-                'reason':     f'virtual-label/visual: {reason}',
-                'screenshot': screenshot,
-                'ann_id':     ann.get('ann_id', ''),
-                'slot':       ann.get('slot', ''),
-                'label':      name,
-                'crop_path':  crop_path,
-                'ann':        ann,
-            })
+    for screenshot, _anns_list, ann in _iter_anns(data):
+        if ann.get('state') != 'confirmed':
+            continue
+        name = (ann.get('name') or '').strip()
+        if name not in VIRTUAL_LABELS:
+            continue
+        # Skip entries the user already inspected and confirmed OK.
+        if ann.get('poison_reviewed'):
+            continue
+        crop_path = _crop_path_for_ann(training_dir, ann)
+        if crop_path is None:
+            continue
+        img = cv2.imread(str(crop_path))
+        if img is None:
+            continue
+        is_suspect, reason = _looks_real_for_virtual_label(
+            img, bright_ratio_min, rich_ratio_min)
+        if not is_suspect:
+            continue
+        suspects.append({
+            'reason':     f'virtual-label/visual: {reason}',
+            'screenshot': screenshot,
+            'ann_id':     ann.get('ann_id', ''),
+            'slot':       ann.get('slot', ''),
+            'label':      name,
+            'crop_path':  crop_path,
+            'ann':        ann,
+        })
     return suspects
 
 
@@ -175,19 +197,18 @@ def find_pixel_conflicts(training_dir: Path, data: dict) -> list[dict]:
     """Find groups of pixel-identical crops with different labels.
     All but the majority label are flagged as suspects."""
     by_hash: dict[str, list[dict]] = defaultdict(list)
-    for screenshot, anns in data.items():
-        for ann in anns:
-            if ann.get('state') != 'confirmed':
-                continue
-            crop_path = _crop_path_for_ann(training_dir, ann)
-            if crop_path is None:
-                continue
-            sha = _sha_of_file(crop_path)
-            by_hash[sha].append({
-                'screenshot': screenshot,
-                'ann':        ann,
-                'crop_path':  crop_path,
-            })
+    for screenshot, _anns_list, ann in _iter_anns(data):
+        if ann.get('state') != 'confirmed':
+            continue
+        crop_path = _crop_path_for_ann(training_dir, ann)
+        if crop_path is None:
+            continue
+        sha = _sha_of_file(crop_path)
+        by_hash[sha].append({
+            'screenshot': screenshot,
+            'ann':        ann,
+            'crop_path':  crop_path,
+        })
 
     suspects = []
     for sha, entries in by_hash.items():
@@ -221,10 +242,10 @@ def review_suspects(suspects: list[dict],
                     data: dict | None = None) -> list[dict]:
     """Interactive per-crop review using PySide6 (pipx venv ships headless
     OpenCV, so cv2.imshow is unavailable). Shows each crop scaled 6× with
-    label + reason; user presses Y=delete, N=keep, Q/Esc=quit. Returns the
+    label + reason; user presses D=delete, K=keep, Q/Esc=quit. Returns the
     subset marked for deletion.
 
-    When `training_dir` and `data` are provided, kept (N) entries are
+    When `training_dir` and `data` are provided, kept (K) entries are
     persistently marked with `poison_reviewed=True` in annotations.json
     so the runtime poison guard and future scrub runs ignore them."""
     if not suspects:
@@ -240,7 +261,7 @@ def review_suspects(suspects: list[dict],
     class ReviewDialog(QDialog):
         def __init__(self):
             super().__init__()
-            self.setWindowTitle('WARP scrub — Y=DELETE  N=keep  Q=quit')
+            self.setWindowTitle('WARP scrub — D=DELETE  K=keep  Q=quit')
             self.decision: str | None = None
             self.info_label = QLabel()
             self.info_label.setStyleSheet(
@@ -267,10 +288,10 @@ def review_suspects(suspects: list[dict],
 
         def keyPressEvent(self, ev: QKeyEvent) -> None:
             k = ev.key()
-            if k == Qt.Key.Key_Y:
-                self.decision = 'y'; self.accept()
-            elif k == Qt.Key.Key_N:
-                self.decision = 'n'; self.accept()
+            if k == Qt.Key.Key_D:
+                self.decision = 'd'; self.accept()
+            elif k == Qt.Key.Key_K:
+                self.decision = 'k'; self.accept()
             elif k in (Qt.Key.Key_Q, Qt.Key.Key_Escape):
                 self.decision = 'q'; self.accept()
             else:
@@ -288,8 +309,8 @@ def review_suspects(suspects: list[dict],
             f'<b>[{i}/{len(suspects)}]</b> label=<b>{s["label"]}</b> '
             f'slot=<b>{s["slot"]}</b><br>'
             f'<span style="color:#bbb">{s["reason"]}</span><br>'
-            f'<span style="color:#7f7">Y = DELETE</span> &nbsp; '
-            f'<span style="color:#fff">N = keep</span> &nbsp; '
+            f'<span style="color:#7f7">D = DELETE</span> &nbsp; '
+            f'<span style="color:#fff">K = keep</span> &nbsp; '
             f'<span style="color:#f88">Q / Esc = quit</span>'
         )
         dlg.set_crop(img, info_html)
@@ -300,9 +321,9 @@ def review_suspects(suspects: list[dict],
         dlg.decision = None
         dlg.exec()
         d = dlg.decision
-        if d == 'y':
+        if d == 'd':
             to_delete.append(s); print('  → marked for DELETE\n')
-        elif d == 'n':
+        elif d == 'k':
             if s.get('ann_id'):
                 kept_ann_ids.append(s['ann_id'])
             print('  → keep (marked poison_reviewed)\n')
@@ -313,11 +334,10 @@ def review_suspects(suspects: list[dict],
     if kept_ann_ids and training_dir is not None and data is not None:
         kept_set = set(kept_ann_ids)
         touched = 0
-        for anns in data.values():
-            for ann in anns:
-                if ann.get('ann_id') in kept_set and not ann.get('poison_reviewed'):
-                    ann['poison_reviewed'] = True
-                    touched += 1
+        for _screenshot, _anns_list, ann in _iter_anns(data):
+            if ann.get('ann_id') in kept_set and not ann.get('poison_reviewed'):
+                ann['poison_reviewed'] = True
+                touched += 1
         if touched:
             _save_annotations(training_dir, data)
             print(f'Persisted poison_reviewed=True on {touched} annotation(s).')
@@ -343,10 +363,14 @@ def apply_removals(training_dir: Path,
             stale = [k for k in crop_index if ann_id in k]
             for k in stale:
                 del crop_index[k]
-    # Drop annotation entries
-    for screenshot, anns in list(data.items()):
-        data[screenshot] = [a for a in anns
-                            if a.get('ann_id') not in to_remove_ids]
+    # Drop annotation entries (handles both schemas)
+    for key, val in list(data.items()):
+        if isinstance(val, dict):
+            val['annotations'] = [a for a in val.get('annotations', [])
+                                  if a.get('ann_id') not in to_remove_ids]
+        elif isinstance(val, list):
+            data[key] = [a for a in val
+                         if a.get('ann_id') not in to_remove_ids]
     _save_annotations(training_dir, data)
     _save_crop_index(training_dir, crop_index)
     return removed
@@ -371,7 +395,7 @@ def main(argv: list[str] | None = None) -> int:
     p.add_argument('--apply', action='store_true',
                    help='actually delete suspect crops + annotations (default: dry-run)')
     p.add_argument('--review', action='store_true',
-                   help='show each suspect crop (6× scaled) and ask y/n per crop. '
+                   help='show each suspect crop (6× scaled) and ask d/k per crop. '
                         'After review, prompts once before deleting.')
     p.add_argument('--bright-ratio', type=float, default=DEFAULT_BRIGHT_RATIO,
                    help=f'min fraction of bright pixels (V>150) to flag a '
@@ -417,7 +441,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.review:
-        print('\nEntering interactive review — y=DELETE  n=keep  q=quit')
+        print('\nEntering interactive review — d=DELETE  k=keep  q=quit')
         suspects = review_suspects(suspects, training_dir=training_dir, data=data)
         print(f'\nReview done — {len(suspects)} crop(s) marked for deletion.')
         if not suspects:
