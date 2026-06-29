@@ -465,7 +465,9 @@ class SETSIconMatcher:
             if _name and not _name.startswith('__'):
                 name_votes[_name] = name_votes.get(_name, 0) + 1
         boosted = [
-            (s, n, sc + SOURCE_AGREEMENT_BONUS * max(0, name_votes.get(n, 1) - 1), e)
+            (s, n,
+             min(1.0, sc + SOURCE_AGREEMENT_BONUS * max(0, name_votes.get(n, 1) - 1)),
+             e)
             for (s, n, sc, e) in candidates
         ]
         src, name, score, entry = max(boosted, key=lambda x: x[2])
