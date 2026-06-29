@@ -62,6 +62,26 @@ POISON_GUARD_ML_MIN         = 0.15
 VIRTUAL_SEED_BRIGHT_RATIO   = 0.07
 VIRTUAL_SEED_RICH_RATIO     = 0.07
 VIRTUAL_LABELS              = frozenset({'__empty__', '__inactive__'})
+# Embedder-based virtual suppression: when the top real-icon gallery entry
+# beats the top virtual gallery entry by at least this cosine margin, treat
+# the slot as real regardless of absolute ML confidence. Replaces the crude
+# bright/rich heuristic for slots where the embedder has a clear preference
+# but its absolute conf is below VIRTUAL_OVERRIDE_CONF (e.g. partially clipped
+# edge bbox at y=-1).
+EMBED_REAL_VS_VIRTUAL_MARGIN = 0.05
+# Template matching cutoff (TM_CCOEFF_NORMED below this is silently dropped).
+# The unrestricted floor (TEMPLATE_THRESHOLD * 0.7 = 0.385) is correct when
+# the matcher must discriminate across all 4070+ wiki PNGs. When the caller
+# pins down a slot type (candidate_names), the search space shrinks 10-20x,
+# so a 0.30 cutoff is informative and rescues items the embedder gallery is
+# missing — e.g. Elite Fleet Dranuur Quantum Torpedo Launcher (TM≈0.37 on
+# a real edge-clipped crop, formerly dropped, now wins).
+TEMPLATE_RESTRICTED_THRESHOLD = 0.30
+# Cross-validation: when two or more sources (session/template/ml) return the
+# same real-icon name, boost each agreeing candidate by this amount. Makes
+# agreement break ties between sources whose absolute scales differ (cosine
+# similarity vs template correlation).
+SOURCE_AGREEMENT_BONUS = 0.05
 ML_TRIGGER_THRESHOLD= 0.50   # if combined conf below this, try ML stage (legacy)
 FUSION_THRESHOLD    = 0.75   # P8: run ML and fuse scores when template < this (legacy)
 HIST_BINS           = [18, 16] # H×S bins for _hist_hsv — must match everywhere
@@ -218,6 +238,10 @@ class SETSIconMatcher:
         self._last_stage_scores = {'embed': 0.0, 'soft': 0.0,
                                    'session': 0.0, 'template': 0.0,
                                    'knowledge': 0.0}
+        # Embedder real-vs-virtual diagnostics, populated by _classify_ml_embed
+        # when candidate_names is provided. Used by suppress_virtual logic below.
+        self._last_embed_sim_real    = 0.0
+        self._last_embed_sim_virtual = 0.0
 
         crop64 = cv2.resize(crop_bgr, (MATCH_SIZE, MATCH_SIZE),
                             interpolation=cv2.INTER_AREA)
@@ -265,7 +289,7 @@ class SETSIconMatcher:
                         # identifies blanks as virtual — if it says virtual
                         # with decent confidence, refuse the override.
                         if not self._ml_disabled:
-                            ml_name, ml_conf = self._classify_ml(crop64)
+                            ml_name, ml_conf = self._classify_ml(crop64, candidate_names)
                             ml_computed = True
                             if (ml_name.startswith('__')
                                     and ml_conf >= VIRTUAL_OVERRIDE_CONF):
@@ -286,19 +310,25 @@ class SETSIconMatcher:
         # Stage 1: ML classifier — always consulted (one of three signals).
         # Reuse result from Stage 0 cross-check if already computed.
         if not self._ml_disabled and not ml_computed:
-            ml_name, ml_conf = self._classify_ml(crop64)
+            ml_name, ml_conf = self._classify_ml(crop64, candidate_names)
 
         # Stage 2: template matching + histogram against wiki PNGs
+        # Slot-restricted callers (candidate_names provided) use a lower cutoff
+        # because the search space is much smaller and faint-but-discriminative
+        # matches stop being noise.
         auto_name  = ''
         auto_score = 0.0
         auto_entry = None
+        tm_cutoff = (TEMPLATE_RESTRICTED_THRESHOLD
+                     if candidate_names is not None
+                     else TEMPLATE_THRESHOLD * 0.7)
         for entry in self._index:
             if candidate_names is not None and entry['name'] not in candidate_names:
                 continue
             res      = cv2.matchTemplate(crop64, entry['tmpl64'],
                                          cv2.TM_CCOEFF_NORMED)
             tm_score = float(res.max())
-            if tm_score < TEMPLATE_THRESHOLD * 0.7:
+            if tm_score < tm_cutoff:
                 continue
             h_score = max(0.0, float(cv2.compareHist(
                 q_hist, entry['hist_hsv'], cv2.HISTCMP_CORREL)))
@@ -359,9 +389,16 @@ class SETSIconMatcher:
             _virtual(sess_name) and sess_score >= SESSION_PIXEL_PERFECT
         )
         sess_or_tmpl_virtual = _virtual(sess_name) or _virtual(auto_name)
+        # Embedder-based: best real-icon gallery sim beats best virtual sim by
+        # a clear margin → semantically a real icon, regardless of absolute conf.
+        embed_says_real = (
+            self._last_embed_sim_real
+            > self._last_embed_sim_virtual + EMBED_REAL_VS_VIRTUAL_MARGIN
+        )
         suppress_virtual = (
             (ml_real and ml_conf >= VIRTUAL_OVERRIDE_CONF)
             or (ml_real and ml_conf >= POISON_GUARD_ML_MIN and sess_virtual_perfect)
+            or (embed_says_real and sess_or_tmpl_virtual)
             or (query_looks_real and sess_or_tmpl_virtual)
         )
         if (sess_virtual_perfect and ml_real and ml_conf >= POISON_GUARD_ML_MIN
@@ -379,6 +416,15 @@ class SETSIconMatcher:
                 f"{sess_score:.2f} tmpl={auto_name!r}@{auto_score:.2f} → "
                 f"suppressing virtual"
             )
+        if embed_says_real and sess_or_tmpl_virtual and not (
+                ml_real and ml_conf >= VIRTUAL_OVERRIDE_CONF):
+            log.warning(
+                f"WARP: embed-margin guard fired — embed real="
+                f"{self._last_embed_sim_real:.2f} > virtual="
+                f"{self._last_embed_sim_virtual:.2f} (+{EMBED_REAL_VS_VIRTUAL_MARGIN:.2f}), "
+                f"but session={sess_name!r}@{sess_score:.2f} "
+                f"tmpl={auto_name!r}@{auto_score:.2f} → suppressing virtual"
+            )
 
         candidates = []
         if sess_name and not (suppress_virtual and _virtual(sess_name)):
@@ -390,7 +436,26 @@ class SETSIconMatcher:
         if not candidates:
             self._last_match_src = 'none'
             return '', 0.0, None, False
-        src, name, score, entry = max(candidates, key=lambda x: x[2])
+        # Cross-validation: count how many real-icon sources agree on each name.
+        # When 2+ sources agree, boost each agreeing entry by SOURCE_AGREEMENT_BONUS.
+        # Lets agreement break ties between sources whose scales differ (cosine
+        # similarity vs template correlation). Virtual labels are excluded so a
+        # session-vs-ml '__empty__' agreement doesn't override real candidates.
+        name_votes: dict[str, int] = {}
+        for _src, _name, _score, _entry in candidates:
+            if _name and not _name.startswith('__'):
+                name_votes[_name] = name_votes.get(_name, 0) + 1
+        boosted = [
+            (s, n, sc + SOURCE_AGREEMENT_BONUS * max(0, name_votes.get(n, 1) - 1), e)
+            for (s, n, sc, e) in candidates
+        ]
+        src, name, score, entry = max(boosted, key=lambda x: x[2])
+        if name_votes.get(name, 1) >= 2:
+            agreeing = [s for (s, n, _, _) in candidates if n == name]
+            log.debug(
+                f"WARP: source-agreement bonus → {name!r} backed by "
+                f"{agreeing} (+{SOURCE_AGREEMENT_BONUS:.2f})"
+            )
         # Disambiguate ML source by model kind so logs distinguish the
         # ArcFace embedder from the legacy softmax classifier.
         if src == 'ml' and self._ml_kind == 'embedder':
@@ -558,7 +623,11 @@ class SETSIconMatcher:
 
     # ── ML helpers ──────────────────────────────────────────────────────────────
 
-    def _classify_ml(self, crop64: np.ndarray) -> tuple[str, float]:
+    def _classify_ml(
+        self,
+        crop64: np.ndarray,
+        candidate_names: set[str] | None = None,
+    ) -> tuple[str, float]:
         """Run local PyTorch classifier on a 64x64 BGR crop.
         Falls back to ONNX session for HuggingFace-downloaded model.
 
@@ -568,6 +637,11 @@ class SETSIconMatcher:
           3. ImageNet mean/std normalization  (training uses T.Normalize)
         Missing either step produces a completely wrong input distribution
         (model was trained on normalized RGB, but would receive raw BGR).
+
+        candidate_names: when provided, embedder k-NN selects the best label
+        within that set. Prevents the slot from dropping to src=none when
+        absolute top-1 is a non-slot-valid class (e.g. console picked for a
+        weapon slot). Softmax classifier path is unaffected.
         """
         import cv2
         model = self._get_ml_session()
@@ -575,7 +649,7 @@ class SETSIconMatcher:
             return '', 0.0
         # Metric-learning path: model is an Embedder, _gallery_* hold the k-NN index.
         if self._ml_kind == 'embedder':
-            return self._classify_ml_embed(crop64)
+            return self._classify_ml_embed(crop64, candidate_names)
         rgb = cv2.cvtColor(cv2.resize(crop64, (224, 224)), cv2.COLOR_BGR2RGB)
         inp = rgb.astype(np.float32) / 255.0
         # ImageNet normalization (same as T.Normalize in admin_train.py)
@@ -599,12 +673,23 @@ class SETSIconMatcher:
             log.debug(f'WARP: ML classify error: {e}')
             return '', 0.0
 
-    def _classify_ml_embed(self, crop64: np.ndarray) -> tuple[str, float]:
+    def _classify_ml_embed(
+        self,
+        crop64: np.ndarray,
+        candidate_names: set[str] | None = None,
+    ) -> tuple[str, float]:
         """Embed a crop and return the nearest-neighbour label from the gallery.
 
         Confidence is the cosine similarity to the nearest gallery embedding,
         clamped to [0, 1] — same range as the softmax classifier's confidence,
         so the rest of the fallback chain treats both models interchangeably.
+
+        candidate_names: when provided, k-NN is restricted to gallery entries
+        whose label is in the set (plus virtual classes __empty__/__inactive__,
+        which the upstream guard still gets to suppress). Without this filter,
+        absolute top-1 may be a wrong-slot class (e.g. console on a weapon
+        slot); upstream then drops it as not-in-candidates, leaving the slot
+        with src=none even when a valid weapon was the runner-up.
         """
         import cv2
         if self._gallery_emb is None or self._gallery_lbl is None:
@@ -621,7 +706,31 @@ class SETSIconMatcher:
             with torch.no_grad():
                 emb = self._ml_session(t).numpy()[0]    # (D,) already L2-normed
             sims = self._gallery_emb @ emb              # (N,) cosine similarity
-            top = int(np.argmax(sims))
+            if candidate_names is not None:
+                # Split gallery into real-candidate and virtual partitions, so
+                # the caller can compare best-real vs best-virtual similarity
+                # (embedder-based virtual suppression — more reliable than the
+                # bright/rich heuristic on edge-clipped crops).
+                labels = np.array(
+                    [self._label_map.get(int(lbl), '') for lbl in self._gallery_lbl]
+                )
+                real_mask    = np.array(
+                    [n in candidate_names and n not in VIRTUAL_LABELS for n in labels],
+                    dtype=bool,
+                )
+                virtual_mask = np.array([n in VIRTUAL_LABELS for n in labels], dtype=bool)
+                if real_mask.any():
+                    self._last_embed_sim_real = float(sims[real_mask].max())
+                if virtual_mask.any():
+                    self._last_embed_sim_virtual = float(sims[virtual_mask].max())
+                allowed_mask = real_mask | virtual_mask
+                if allowed_mask.any():
+                    masked = np.where(allowed_mask, sims, -np.inf)
+                    top = int(np.argmax(masked))
+                else:
+                    top = int(np.argmax(sims))
+            else:
+                top = int(np.argmax(sims))
             best_lbl = int(self._gallery_lbl[top])
             conf = float(max(0.0, min(1.0, sims[top])))
             return self._label_map.get(best_lbl, ''), conf
