@@ -88,11 +88,13 @@ TEMPLATE_SCALES = (58, MATCH_SIZE)
 # less on histogram in fallback mode lets raw template correlation dominate.
 TEMPLATE_HIST_WEAK_EMBED_THRESHOLD = 0.50
 TEMPLATE_HIST_WEIGHT_WEAK_EMBED    = 0.10
-# Cross-validation: when two or more sources (session/template/ml) return the
-# same real-icon name, boost each agreeing candidate by this amount. Makes
-# agreement break ties between sources whose absolute scales differ (cosine
-# similarity vs template correlation).
-SOURCE_AGREEMENT_BONUS = 0.05
+# Cross-validation: when the top candidate is within this margin of a runner-
+# up that has more name-agreement (other sources point at the same name), the
+# winner switches to the agreeing candidate. Acts as a pure tiebreaker — the
+# displayed confidence is always the raw score of the winning source, never
+# inflated. Margin sized to typical noise between source scales (cosine vs
+# template-correlation).
+SOURCE_AGREEMENT_TIEBREAKER_MARGIN = 0.05
 ML_TRIGGER_THRESHOLD= 0.50   # if combined conf below this, try ML stage (legacy)
 FUSION_THRESHOLD    = 0.75   # P8: run ML and fuse scores when template < this (legacy)
 HIST_BINS           = [18, 16] # H×S bins for _hist_hsv — must match everywhere
@@ -456,27 +458,31 @@ class SETSIconMatcher:
             self._last_match_src = 'none'
             return '', 0.0, None, False
         # Cross-validation: count how many real-icon sources agree on each name.
-        # When 2+ sources agree, boost each agreeing entry by SOURCE_AGREEMENT_BONUS.
-        # Lets agreement break ties between sources whose scales differ (cosine
-        # similarity vs template correlation). Virtual labels are excluded so a
-        # session-vs-ml '__empty__' agreement doesn't override real candidates.
+        # Used as a tiebreaker only — when the highest-scoring candidate is
+        # within SOURCE_AGREEMENT_TIEBREAKER_MARGIN of a runner-up that has
+        # more agreement votes, switch to the agreeing one. The displayed
+        # confidence is always the winner's raw score (no inflation).
         name_votes: dict[str, int] = {}
         for _src, _name, _score, _entry in candidates:
             if _name and not _name.startswith('__'):
                 name_votes[_name] = name_votes.get(_name, 0) + 1
-        boosted = [
-            (s, n,
-             min(1.0, sc + SOURCE_AGREEMENT_BONUS * max(0, name_votes.get(n, 1) - 1)),
-             e)
-            for (s, n, sc, e) in candidates
-        ]
-        src, name, score, entry = max(boosted, key=lambda x: x[2])
-        if name_votes.get(name, 1) >= 2:
-            agreeing = [s for (s, n, _, _) in candidates if n == name]
-            log.debug(
-                f"WARP: source-agreement bonus → {name!r} backed by "
-                f"{agreeing} (+{SOURCE_AGREEMENT_BONUS:.2f})"
-            )
+        ordered = sorted(candidates, key=lambda x: -x[2])
+        winner = ordered[0]
+        for runner in ordered[1:]:
+            if winner[2] - runner[2] > SOURCE_AGREEMENT_TIEBREAKER_MARGIN:
+                break  # candidates further down are even worse
+            if not runner[1] or runner[1].startswith('__'):
+                continue
+            if name_votes.get(runner[1], 0) > name_votes.get(winner[1], 0):
+                log.debug(
+                    f"WARP: source-agreement tiebreaker → {runner[1]!r} "
+                    f"({runner[0]}@{runner[2]:.2f}) over {winner[1]!r} "
+                    f"({winner[0]}@{winner[2]:.2f}) — within "
+                    f"{SOURCE_AGREEMENT_TIEBREAKER_MARGIN:.2f} margin, "
+                    f"{name_votes[runner[1]]} sources agree"
+                )
+                winner = runner
+        src, name, score, entry = winner
         # Cargo lifeline: wiki PNG template rescued a slot where the embedder
         # was uncertain (likely missing class in gallery). Logged so we can
         # spot which items would benefit most from extra training data.
