@@ -58,47 +58,6 @@ from warp.warp_importer              import SLOT_ORDER as _SLOT_ORDER
 log = logging.getLogger(__name__)
 
 
-class _DebugDict(dict):
-    """Thin dict wrapper that logs every mutation with a traceback.
-
-    Temporary instrumentation to find the code path that evicts
-    _recognition_cache keys during Fast Correction Mode.
-    """
-
-    def __init__(self, tag: str, *a, **kw):
-        super().__init__(*a, **kw)
-        self._tag = tag
-
-    def _log(self, op: str, key=None):
-        import traceback
-        from warp.debug import log as _wlog
-        stack = ''.join(traceback.format_stack(limit=8)[:-1])
-        _wlog.info(f'[DEBUG-DICT] {self._tag}.{op} key={key!r} '
-                   f'keys_after={list(self.keys())}\n{stack}')
-
-    def __delitem__(self, key):
-        super().__delitem__(key)
-        self._log('__delitem__', key)
-
-    def pop(self, key, *default):
-        had = key in self
-        result = super().pop(key, *default)
-        if had:
-            self._log('pop', key)
-        return result
-
-    def clear(self):
-        keys_before = list(self.keys())
-        super().clear()
-        if keys_before:
-            self._log(f'clear (was {keys_before})')
-
-    def __setitem__(self, key, value):
-        super().__setitem__(key, value)
-        # Only log if in FC mode (avoid noise during normal training)
-        # self._log('__setitem__', key)
-
-
 class WarpCoreWindow(QMainWindow):
     # Emitted when the user presses "↗ Send to WARP" on a screenshot
     # marked Done. Payload is an ImportResult built from the user-confirmed
@@ -148,7 +107,7 @@ class WarpCoreWindow(QMainWindow):
         self._screen_types_ml_auto: set[str] = set()  # yellow — ML ≥95% auto-accepted
         self._screenshots_done: set[str] = self._load_done()  # fully annotated, locked
         self._detect_trigger: str = 'unknown'
-        self._recognition_cache: dict[str, list] = _DebugDict('_recognition_cache')
+        self._recognition_cache: dict[str, list] = {}
         self._recognition_items: list[dict] = []
         self._manual_bbox_mode = False
         self._add_bbox_mode = False
@@ -736,7 +695,7 @@ class WarpCoreWindow(QMainWindow):
             self._screen_types         = snap['screen_types']
             self._screen_types_manual  = snap['screen_types_manual']
             self._screen_types_ml_auto = snap['screen_types_ml_auto']
-            self._recognition_cache    = _DebugDict('_recognition_cache', snap['recognition_cache'])
+            self._recognition_cache    = dict(snap['recognition_cache'])
             self._recognition_items    = snap['recognition_items']
             self._screenshots_done     = snap['screenshots_done']
             for p in self._screenshots:
