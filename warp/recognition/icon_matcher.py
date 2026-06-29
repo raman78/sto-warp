@@ -77,6 +77,17 @@ EMBED_REAL_VS_VIRTUAL_MARGIN = 0.05
 # missing — e.g. Elite Fleet Dranuur Quantum Torpedo Launcher (TM≈0.37 on
 # a real edge-clipped crop, formerly dropped, now wins).
 TEMPLATE_RESTRICTED_THRESHOLD = 0.30
+# Multi-scale template matching: build templates at these MATCH_SIZE-relative
+# sizes so cv2.matchTemplate slides the wiki PNG inside the query crop and
+# tolerates small misalignment (e.g. bbox y=-1 edge slots, icon offset by 1-3
+# px). Smaller scales = larger sliding search. Two scales keeps compute modest.
+TEMPLATE_SCALES = (58, MATCH_SIZE)
+# Adaptive histogram weight: when the embedder is weak (conf below this), drop
+# HIST_WEIGHT for template scoring. Game crops carry Mk overlays and rarity
+# borders that distort the HSV histogram relative to clean wiki PNGs; relying
+# less on histogram in fallback mode lets raw template correlation dominate.
+TEMPLATE_HIST_WEAK_EMBED_THRESHOLD = 0.50
+TEMPLATE_HIST_WEIGHT_WEAK_EMBED    = 0.10
 # Cross-validation: when two or more sources (session/template/ml) return the
 # same real-icon name, boost each agreeing candidate by this amount. Makes
 # agreement break ties between sources whose absolute scales differ (cosine
@@ -315,24 +326,32 @@ class SETSIconMatcher:
         # Stage 2: template matching + histogram against wiki PNGs
         # Slot-restricted callers (candidate_names provided) use a lower cutoff
         # because the search space is much smaller and faint-but-discriminative
-        # matches stop being noise.
+        # matches stop being noise. Multi-scale templates absorb small offsets;
+        # histogram weight drops when the embedder is uncertain (game-crop
+        # overlays distort HSV away from clean wiki PNGs).
         auto_name  = ''
         auto_score = 0.0
         auto_entry = None
         tm_cutoff = (TEMPLATE_RESTRICTED_THRESHOLD
                      if candidate_names is not None
                      else TEMPLATE_THRESHOLD * 0.7)
+        weak_embed = ml_conf < TEMPLATE_HIST_WEAK_EMBED_THRESHOLD
+        hist_w     = TEMPLATE_HIST_WEIGHT_WEAK_EMBED if weak_embed else HIST_WEIGHT
         for entry in self._index:
             if candidate_names is not None and entry['name'] not in candidate_names:
                 continue
-            res      = cv2.matchTemplate(crop64, entry['tmpl64'],
-                                         cv2.TM_CCOEFF_NORMED)
-            tm_score = float(res.max())
+            # Multi-scale: try each pre-computed template size, keep best TM.
+            tm_score = 0.0
+            for _size, tmpl in entry.get('tmpl_scales', [(MATCH_SIZE, entry['tmpl64'])]):
+                res = cv2.matchTemplate(crop64, tmpl, cv2.TM_CCOEFF_NORMED)
+                s = float(res.max())
+                if s > tm_score:
+                    tm_score = s
             if tm_score < tm_cutoff:
                 continue
             h_score = max(0.0, float(cv2.compareHist(
                 q_hist, entry['hist_hsv'], cv2.HISTCMP_CORREL)))
-            combined = tm_score * (1.0 - HIST_WEIGHT) + h_score * HIST_WEIGHT
+            combined = tm_score * (1.0 - hist_w) + h_score * hist_w
             if combined > auto_score:
                 auto_score = combined
                 auto_name  = entry['name']
@@ -456,6 +475,16 @@ class SETSIconMatcher:
                 f"WARP: source-agreement bonus → {name!r} backed by "
                 f"{agreeing} (+{SOURCE_AGREEMENT_BONUS:.2f})"
             )
+        # Cargo lifeline: wiki PNG template rescued a slot where the embedder
+        # was uncertain (likely missing class in gallery). Logged so we can
+        # spot which items would benefit most from extra training data.
+        if (src == 'template'
+                and ml_conf < TEMPLATE_HIST_WEAK_EMBED_THRESHOLD
+                and candidate_names is not None):
+            log.info(
+                f"WARP: cargo lifeline → {name!r}@{score:.2f} (embed weak "
+                f"@{ml_conf:.2f} — falling back to wiki PNG template)"
+            )
         # Disambiguate ML source by model kind so logs distinguish the
         # ArcFace embedder from the legacy softmax classifier.
         if src == 'ml' and self._ml_kind == 'embedder':
@@ -570,11 +599,19 @@ class SETSIconMatcher:
 
             tmpl64 = cv2.resize(orig, (MATCH_SIZE, MATCH_SIZE),
                                  interpolation=cv2.INTER_AREA)
+            # Multi-scale templates: each entry holds (size, tmpl) pairs so the
+            # template loop can slide the smaller templates inside the query
+            # crop, absorbing 1-3 px misalignments (edge slots, clipped bboxes).
+            tmpl_scales = [
+                (s, cv2.resize(orig, (s, s), interpolation=cv2.INTER_AREA))
+                for s in TEMPLATE_SCALES
+            ]
             self._index.append({
-                'name':     name,
-                'tmpl64':   tmpl64,
-                'hist_hsv': self._hist_hsv(tmpl64),
-                'orig':     orig,      # kept for thumbnail generation
+                'name':        name,
+                'tmpl64':      tmpl64,
+                'tmpl_scales': tmpl_scales,
+                'hist_hsv':    self._hist_hsv(tmpl64),
+                'orig':        orig,      # kept for thumbnail generation
             })
             count += 1
 
