@@ -8,6 +8,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.22] — 2026-06-29
+
+### Fixed
+- Equipment recognition is more accurate: items missing from the
+  built-in gallery are now correctly identified using their wiki
+  image instead of being labelled with the wrong nearest match,
+  and icons in the top row are no longer cut off at the screenshot
+  edge.
+
 ## [1.0.21] — 2026-06-19
 
 ### Fixed
