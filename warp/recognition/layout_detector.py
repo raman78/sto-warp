@@ -2290,7 +2290,20 @@ class LayoutDetector:
                 bx = int(round(panel_right - (j + 1) * geom.final_dx)) + 1
                 if bx < panel_x_start:
                     break
-                bboxes.append((bx, cy - icon_h // 2, icon_w, icon_h))
+                # Clamp bbox to image bounds. Row 0 with cy<icon_h/2
+                # (e.g. Fore Weapons at cy=28 with icon_h=58) otherwise
+                # emits y=-1, which downstream slicers treat as "last row"
+                # and produce empty crops.
+                _by = cy - icon_h // 2
+                _bh = icon_h
+                if _by < 0:
+                    _bh += _by
+                    _by = 0
+                if _by + _bh > h:
+                    _bh = h - _by
+                if _bh <= 0:
+                    continue
+                bboxes.append((bx, _by, icon_w, _bh))
             if not bboxes:
                 continue
             _slog.info(

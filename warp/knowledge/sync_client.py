@@ -449,6 +449,20 @@ class WARPSyncClient:
             log.debug('WARPSync: contribute called with empty item_name, skipped')
             return
 
+        # Empty-crop gate — callers occasionally pass a zero-sized ndarray
+        # (out-of-bounds bbox, layout-detector y<0, etc.). cv2.imencode
+        # rejects empty arrays with a noisy assertion; drop silently with
+        # enough context to locate the offending callsite.
+        if crop_bgr is None or not isinstance(crop_bgr, np.ndarray) or crop_bgr.size == 0:
+            _shape = getattr(crop_bgr, 'shape', None)
+            log.debug(
+                f'WARPSync: contribute called with empty crop '
+                f'(item={_name!r} type={type(crop_bgr).__name__} shape={_shape}); skipped'
+            )
+            if on_done:
+                on_done(False)
+            return
+
         # Poison-label gate (D-A.1 / D-B.3) — wired through
         # `_is_poison_label`, currently disabled by `_POISON_FILTER_ENABLED`
         # at the top of this module. See policy block there for rationale
