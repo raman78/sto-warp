@@ -2169,23 +2169,33 @@ class WarpCoreWindow(QMainWindow):
         # single-cell label used to embed; col 0 (slot) gets a short copy
         # so users hovering near the slot name still see it.
         if conflict_disk_name:
-            tooltip = (f'Slot: {slot_disp}\n'
-                       f'Disk (your previous confirmation): {conflict_disk_name}\n'
-                       f'Community / current detector: {name or "—"}\n\n'
-                       f'These disagree. Re-verify the icon and Accept the '
-                       f'correct name to cast another community vote.')
+            info_html = (f'<b>{slot_disp}</b><br>'
+                         f'Disk (your previous confirmation): {conflict_disk_name}<br>'
+                         f'Community / current detector: {name or "—"}<br><br>'
+                         f'These disagree. Re-verify the icon and Accept the '
+                         f'correct name to cast another community vote.')
         elif confirmed:
             status = 'auto-confirmed by detector' if auto_confirmed else 'confirmed by user'
             conf_line = f'ML recognition: {conf:.1%}' if conf > 0.0 else \
                         'ML recognition: unknown (previous session)'
-            tooltip = (f'Slot: {slot_disp}\nItem: {name or "—"}\n'
-                       f'Status: {status}\n{conf_line}')
+            info_html = (f'<b>{slot_disp}</b><br>Item: {name or "—"}<br>'
+                         f'Status: {status}<br>{conf_line}')
         elif name:
-            tooltip = f'Slot: {slot_disp}\nItem: {name}\nConfidence: {conf:.1%}'
+            info_html = f'<b>{slot_disp}</b><br>Item: {name}<br>Confidence: {conf:.1%}'
             if cross_check_failed:
-                tooltip += '\n\n⚠ WARNING: Item type does not match slot type!'
+                info_html += '<br><br><span style="color:#ff9966">⚠ WARNING: Item type does not match slot type!</span>'
         else:
-            tooltip = f'Slot: {slot_disp}\nNo item recognised'
+            info_html = f'<b>{slot_disp}</b><br>No item recognised'
+
+        from warp.trainer.annotation_widget import _tooltip_icon_html
+        icon_html = _tooltip_icon_html(None, name) if name else ''
+        if icon_html:
+            tooltip = (f'<table cellspacing="0" cellpadding="0"><tr>'
+                       f'<td style="vertical-align:middle;padding-right:6px">{icon_html}</td>'
+                       f'<td style="vertical-align:middle">{info_html}</td>'
+                       f'</tr></table>')
+        else:
+            tooltip = info_html
         item.setToolTip(0, slot_disp)
         item.setToolTip(2, tooltip)
 
@@ -2261,13 +2271,30 @@ class WarpCoreWindow(QMainWindow):
     _BOFF_SPEC_PROFS = ('Command', 'Intelligence', 'Miracle Worker', 'Pilot', 'Temporal')
 
     def _show_review_context_menu(self, pos):
-        """Right-click on a BOFF group header → Change Group Type submenu."""
+        """Right-click context menu on review items.
+
+        Leaf items  → Open on STO Wiki / Open on vger links.
+        BOFF group headers → Change Group Type submenu.
+        """
         item = self._review_list.itemAt(pos)
         if item is None:
             return
-        # Only act on parent (group header) rows, not leaf items
+
+        # --- leaf item: external-link menu ---
         if item in self._review_list._flat:
+            row = self._review_list._flat.index(item)
+            if row < 0 or row >= len(self._recognition_items):
+                return
+            ri = self._recognition_items[row]
+            name = ri.get('name', '')
+            slot = ri.get('slot', '')
+            if not name:
+                return
+            self._show_item_link_menu(
+                self._review_list.viewport().mapToGlobal(pos), name, slot)
             return
+
+        # --- group header: BOFF type-change menu ---
         group_label = item.data(0, Qt.ItemDataRole.UserRole) or ''
         if not group_label.startswith('Boff'):
             return
@@ -2296,6 +2323,31 @@ class WarpCoreWindow(QMainWindow):
         new_type = chosen.data()
         if new_type and new_type != group_label:
             self._change_boff_group_type(item, group_label, new_type)
+
+    # ------------------------------------------------------------------
+    def _show_item_link_menu(self, global_pos, name: str, slot: str):
+        """Show Open on STO Wiki / Open on vger context menu."""
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        from warp.data.cargo import wiki_url, vger_url
+
+        menu = QMenu(self)
+        header = menu.addAction(name)
+        header.setEnabled(False)
+        f = header.font(); f.setBold(True); header.setFont(f)
+        menu.addSeparator()
+
+        v_url = vger_url(slot)
+        act_vger = None
+        if v_url:
+            act_vger = menu.addAction('Open on vger.stobuilds.com')
+        act_wiki = menu.addAction('Open on STO Wiki')
+
+        chosen = menu.exec(global_pos)
+        if chosen is act_vger and v_url:
+            QDesktopServices.openUrl(QUrl(v_url))
+        elif chosen is act_wiki:
+            QDesktopServices.openUrl(QUrl(wiki_url(name)))
 
     def _change_boff_group_type(self, parent_item, old_label: str, new_label: str):
         """Change all items in a BOFF group to a new group type and rematch."""

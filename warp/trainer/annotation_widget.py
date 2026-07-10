@@ -34,6 +34,41 @@ DRAW_BBOX_COLOR = QColor(255, 200, 0)   # yellow — matches Add BBox button sty
 MANIP_COLOR = QColor(100, 200, 255)  # Action blue
 
 
+def _tooltip_icon_html(thumb, name: str, size: int = 48) -> str:
+    """Return an ``<img>`` tag with a base64-encoded icon, or ``''``.
+
+    *thumb* is a QImage (from the icon matcher).  If ``None``, the local
+    reference-icon PNG is loaded from the cargo icons directory instead.
+    """
+    import base64
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QImage
+
+    img: QImage | None = None
+    if isinstance(thumb, QImage) and not thumb.isNull():
+        img = thumb
+    elif name:
+        try:
+            from warp.data.cargo import ref_icon_path
+            p = ref_icon_path(name)
+            if p:
+                img = QImage(str(p))
+                if img.isNull():
+                    img = None
+        except Exception:
+            pass
+    if img is None:
+        return ''
+    if img.width() > size or img.height() > size:
+        img = img.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                         Qt.TransformationMode.SmoothTransformation)
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    img.save(buf, 'PNG')
+    b64 = base64.b64encode(buf.data().data()).decode('ascii')
+    return f'<img src="data:image/png;base64,{b64}" width="{img.width()}" height="{img.height()}"/>'
+
+
 class AnnotationWidget(QWidget):
     """
     Screenshot viewer with interactive bbox annotation overlay.
@@ -516,6 +551,39 @@ class AnnotationWidget(QWidget):
             else:
                 self.unsetCursor()
 
+    def contextMenuEvent(self, event):
+        """Right-click on a review-item bbox → wiki / vger link menu."""
+        row = self._hit_test_review(event.pos())
+        if row < 0 or row >= len(self._review_items):
+            return
+        ri = self._review_items[row]
+        name = ri.get('name', '')
+        slot = ri.get('slot', '')
+        if not name:
+            return
+        from PySide6.QtWidgets import QMenu
+        from PySide6.QtGui import QDesktopServices
+        from PySide6.QtCore import QUrl
+        from warp.data.cargo import wiki_url, vger_url
+
+        menu = QMenu(self)
+        header = menu.addAction(name)
+        header.setEnabled(False)
+        f = header.font(); f.setBold(True); header.setFont(f)
+        menu.addSeparator()
+
+        v_url = vger_url(slot)
+        act_vger = None
+        if v_url:
+            act_vger = menu.addAction('Open on vger.stobuilds.com')
+        act_wiki = menu.addAction('Open on STO Wiki')
+
+        chosen = menu.exec(event.globalPos())
+        if chosen is act_vger and v_url:
+            QDesktopServices.openUrl(QUrl(v_url))
+        elif chosen is act_wiki:
+            QDesktopServices.openUrl(QUrl(wiki_url(name)))
+
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() != Qt.MouseButton.LeftButton: return
         if self._drawing:
@@ -587,13 +655,23 @@ class AnnotationWidget(QWidget):
                 lines.append(f'ML: <span style="color:{color}">{ml_text} ({conf:.1%})</span>')
             else:
                 lines.append('<span style="color:#888">ML: unknown (previous session)</span>')
-            text = '<br>'.join(lines)
+            info_html = '<br>'.join(lines)
         else:
             pct   = f'{conf:.1%}'
             color = ('#7effc8' if conf >= 0.85 else
                      '#e8c060' if conf >= 0.70 else '#ff9966')
-            text  = (f'<b>{slot}</b><br>{name}'
-                     f'<br>Confidence: <span style="color:{color}">{pct}</span>')
+            info_html = (f'<b>{slot}</b><br>{name}'
+                         f'<br>Confidence: <span style="color:{color}">{pct}</span>')
+
+        icon_html = _tooltip_icon_html(ri.get('thumb'), name)
+        if icon_html:
+            text = (f'<table cellspacing="0" cellpadding="0"><tr>'
+                    f'<td style="vertical-align:middle;padding-right:6px">{icon_html}</td>'
+                    f'<td style="vertical-align:middle">{info_html}</td>'
+                    f'</tr></table>')
+        else:
+            text = info_html
+
         from PySide6.QtWidgets import QToolTip
         from PySide6.QtGui import QCursor
         QToolTip.showText(QCursor.pos(), text, self)

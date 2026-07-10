@@ -591,6 +591,51 @@ def _build_boff_abilities() -> dict:
     return out
 
 
+# --- external-link helpers ------------------------------------------------
+
+_SLOT_TO_VGER_PAGE: dict[str, str] = {
+    # Space equipment
+    'Fore Weapons': 'space-equipment', 'Aft Weapons': 'space-equipment',
+    'Deflector': 'space-equipment', 'Engines': 'space-equipment',
+    'Warp Core': 'space-equipment', 'Shield': 'space-equipment',
+    'Devices': 'space-equipment', 'Engineering Consoles': 'space-equipment',
+    'Science Consoles': 'space-equipment', 'Tactical Consoles': 'space-equipment',
+    'Universal Consoles': 'space-equipment', 'Hangars': 'space-equipment',
+    'Experimental': 'space-equipment', 'Sec-Def': 'space-equipment',
+    # Ground equipment
+    'Kit Modules': 'ground-equipment', 'Kit': 'ground-equipment',
+    'Body Armor': 'ground-equipment', 'EV Suit': 'ground-equipment',
+    'Personal Shield': 'ground-equipment', 'Weapons': 'ground-equipment',
+    'Ground Devices': 'ground-equipment',
+    # Traits
+    'Starship Traits': 'starship-traits',
+    'Personal Space Traits': 'personal-traits', 'Space Reputation': 'personal-traits',
+    'Active Space Rep': 'personal-traits', 'Personal Ground Traits': 'personal-traits',
+    'Ground Reputation': 'personal-traits', 'Active Ground Rep': 'personal-traits',
+}
+
+
+def wiki_url(name: str) -> str:
+    """STO Wiki URL for an item / trait / ability by name."""
+    from urllib.parse import quote_plus
+    return f'https://stowiki.net/wiki/{quote_plus(name.replace(" ", "_"))}'
+
+
+def vger_url(slot: str) -> str | None:
+    """Vger category-page URL for *slot*, or ``None`` for BOFF / unknown."""
+    page = _SLOT_TO_VGER_PAGE.get(slot)
+    if page:
+        return f'https://vger.stobuilds.com/{page}'
+    return None
+
+
+def ref_icon_path(name: str) -> Path | None:
+    """Path to the local reference-icon PNG, or ``None`` if not cached."""
+    from urllib.parse import quote_plus
+    p = icons_dir() / f'{quote_plus(name)}.png'
+    return p if p.is_file() else None
+
+
 # --- introspection helpers (used by `sto-warp check` / diagnostics) -----
 
 def status() -> dict[str, Any]:

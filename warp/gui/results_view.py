@@ -98,6 +98,37 @@ def _color_for_slot(slot: str) -> QColor:
     return QColor.fromHsv(h, 200, 240)
 
 
+def _tooltip_icon_html(thumb, name: str, size: int = 48) -> str:
+    """Return an ``<img>`` tag with a base64-encoded icon, or ``''``."""
+    import base64
+    from PySide6.QtCore import QBuffer, QIODevice
+    from PySide6.QtGui import QImage
+
+    img: QImage | None = None
+    if isinstance(thumb, QImage) and not thumb.isNull():
+        img = thumb
+    elif name:
+        try:
+            from warp.data.cargo import ref_icon_path
+            p = ref_icon_path(name)
+            if p:
+                img = QImage(str(p))
+                if img.isNull():
+                    img = None
+        except Exception:
+            pass
+    if img is None:
+        return ''
+    if img.width() > size or img.height() > size:
+        img = img.scaled(size, size, Qt.AspectRatioMode.KeepAspectRatio,
+                         Qt.TransformationMode.SmoothTransformation)
+    buf = QBuffer()
+    buf.open(QIODevice.OpenModeFlag.WriteOnly)
+    img.save(buf, 'PNG')
+    b64 = base64.b64encode(buf.data().data()).decode('ascii')
+    return f'<img src="data:image/png;base64,{b64}" width="{img.width()}" height="{img.height()}"/>'
+
+
 class _InteractiveCanvas(QWidget):
     """Paints one screenshot with bbox overlay. Tracks hover, emits clicks.
 
@@ -122,6 +153,7 @@ class _InteractiveCanvas(QWidget):
         self._scale: float = 1.0
         self._highlight_set: set[int] = set()
         self._hover_gidx:     int = -1
+        self._hover_timer: object = None
         self.setMinimumSize(200, 200)
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -141,6 +173,7 @@ class _InteractiveCanvas(QWidget):
         self._scaled = None
         self._highlight_set = set()
         self._hover_gidx = -1
+        self._cancel_hover_timer()
         self._compute_fit()
         self.update()
 
@@ -152,6 +185,7 @@ class _InteractiveCanvas(QWidget):
         self._build_type = ''
         self._highlight_set = set()
         self._hover_gidx = -1
+        self._cancel_hover_timer()
         self.update()
 
     def set_highlight(self, gidx: int) -> None:
@@ -240,8 +274,55 @@ class _InteractiveCanvas(QWidget):
         g = self._bbox_at(e.position().x(), e.position().y())
         if g != self._hover_gidx:
             self._hover_gidx = g
+            self._cancel_hover_timer()
+            if g >= 0:
+                self._start_hover_timer(g)
+            else:
+                from PySide6.QtWidgets import QToolTip
+                QToolTip.hideText()
             self.update()
         super().mouseMoveEvent(e)
+
+    def _cancel_hover_timer(self):
+        if self._hover_timer is not None:
+            self._hover_timer.stop()
+            self._hover_timer = None
+
+    def _start_hover_timer(self, gidx: int):
+        from PySide6.QtCore import QTimer
+        self._hover_timer = QTimer(self)
+        self._hover_timer.setSingleShot(True)
+        self._hover_timer.timeout.connect(lambda: self._show_hover_tooltip(gidx))
+        self._hover_timer.start(500)
+
+    def _show_hover_tooltip(self, gidx: int):
+        it: RecognisedItem | None = None
+        for item, g in zip(self._items, self._gidx):
+            if g == gidx:
+                it = item
+                break
+        if it is None or not it.name:
+            return
+        from warp.recognition.boff_keys import pretty_slot
+        slot = pretty_slot(it.slot or '?')
+        conf = it.confidence or 0.0
+        color = ('#7effc8' if conf >= 0.85 else
+                 '#e8c060' if conf >= 0.70 else '#ff9966')
+        info_html = (f'<b>{slot}</b><br>{it.name}'
+                     f'<br>Confidence: <span style="color:{color}">{conf:.0%}</span>')
+
+        icon_html = _tooltip_icon_html(it.thumbnail, it.name)
+        if icon_html:
+            text = (f'<table cellspacing="0" cellpadding="0"><tr>'
+                    f'<td style="vertical-align:middle;padding-right:6px">{icon_html}</td>'
+                    f'<td style="vertical-align:middle">{info_html}</td>'
+                    f'</tr></table>')
+        else:
+            text = info_html
+
+        from PySide6.QtWidgets import QToolTip
+        from PySide6.QtGui import QCursor
+        QToolTip.showText(QCursor.pos(), text, self)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -835,13 +916,33 @@ class ResultsView(QWidget):
                 child.setText(0, '')
                 child.setText(1, str(it.slot_index + 1))
                 _name = it.name or '—'
+                origin_badge = ''
                 if getattr(it, 'match_origin', '') == 'user':
                     _name = f'✓ {_name}'
                     child.setForeground(2, QBrush(QColor('#7effc8')))
-                    child.setToolTip(
-                        2, 'Match from your own WARP CORE correction (live-seed)')
+                    origin_badge = '<br><i>Match from your own WARP CORE correction (live-seed)</i>'
                 child.setText(2, _name)
                 child.setText(3, f'{it.confidence:.0%}')
+                # Rich tooltip with reference icon
+                if it.name:
+                    from warp.recognition.boff_keys import pretty_slot
+                    _slot_disp = pretty_slot(it.slot or '?')
+                    _conf = it.confidence or 0.0
+                    _col = ('#7effc8' if _conf >= 0.85 else
+                            '#e8c060' if _conf >= 0.70 else '#ff9966')
+                    _info = (f'<b>{_slot_disp}</b><br>{it.name}'
+                             f'<br>Confidence: <span style="color:{_col}">'
+                             f'{_conf:.0%}</span>{origin_badge}')
+                    _ico = _tooltip_icon_html(it.thumbnail, it.name)
+                    if _ico:
+                        _tip = (f'<table cellspacing="0" cellpadding="0"><tr>'
+                                f'<td style="vertical-align:middle;'
+                                f'padding-right:6px">{_ico}</td>'
+                                f'<td style="vertical-align:middle">{_info}'
+                                f'</td></tr></table>')
+                    else:
+                        _tip = _info
+                    child.setToolTip(2, _tip)
                 # Stash global index for canvas↔tree sync (col 0 UserRole)
                 # and the resolved screenshot path (col 2 UserRole — used
                 # by the right-click menu / file-tint logic). The visible
@@ -980,14 +1081,18 @@ class ResultsView(QWidget):
         if item is None:
             return
         src = self._resolve_item_source(item)
+        ri = self._resolve_item_recognised(item)
         self._show_context_menu(
-            self._tree.viewport().mapToGlobal(pos), src)
+            self._tree.viewport().mapToGlobal(pos), src, ri)
 
     def _on_canvas_context_menu(self, global_pos: QPoint, gidx: int):
         src = self._current_file
+        ri: RecognisedItem | None = None
         if gidx >= 0 and 0 <= gidx < len(self._gidx_to_file):
             src = self._gidx_to_file[gidx] or src
-        self._show_context_menu(global_pos, src)
+        if self._result and gidx >= 0 and gidx < len(self._result.items):
+            ri = self._result.items[gidx]
+        self._show_context_menu(global_pos, src, ri)
 
     def _resolve_item_source(self, item: QTreeWidgetItem) -> str:
         own = item.data(2, Qt.ItemDataRole.UserRole)
@@ -999,7 +1104,17 @@ class ResultsView(QWidget):
                 return child_src
         return ''
 
-    def _show_context_menu(self, global_pos: QPoint, src: str):
+    def _resolve_item_recognised(self, item: QTreeWidgetItem) -> RecognisedItem | None:
+        """Return the RecognisedItem for a leaf tree row, or None."""
+        gidx = item.data(0, Qt.ItemDataRole.UserRole)
+        if not isinstance(gidx, int) or gidx < 0:
+            return None
+        if self._result and gidx < len(self._result.items):
+            return self._result.items[gidx]
+        return None
+
+    def _show_context_menu(self, global_pos: QPoint, src: str,
+                           ri: RecognisedItem | None = None):
         name = Path(src).name if src else ''
         st = self.style()
         icon_copy = st.standardIcon(QStyle.StandardPixmap.SP_DialogSaveButton)
@@ -1034,6 +1149,19 @@ class ResultsView(QWidget):
             act_open_fast = menu.addAction(
                 icon_fast, 'Open in WARP Fast Correction Mode')
 
+        # --- external-link actions for a specific item ---
+        act_vger = None
+        act_wiki = None
+        if ri and ri.name:
+            from warp.data.cargo import wiki_url, vger_url as _vger_url
+            menu.addSeparator()
+            v_url = _vger_url(ri.slot)
+            if v_url:
+                act_vger = menu.addAction('Open on vger.stobuilds.com')
+                act_vger.setData(v_url)
+            act_wiki = menu.addAction('Open on STO Wiki')
+            act_wiki.setData(wiki_url(ri.name))
+
         chosen = menu.exec(global_pos)
         if chosen is None:
             return
@@ -1053,3 +1181,7 @@ class ResultsView(QWidget):
             self.open_in_warp_fast_corr.emit(
                 {k: list(v) for k, v in self._items_by_file.items()},
                 dict(self._stype_by_file))
+        elif chosen is act_vger or chosen is act_wiki:
+            from PySide6.QtGui import QDesktopServices
+            from PySide6.QtCore import QUrl
+            QDesktopServices.openUrl(QUrl(chosen.data()))
