@@ -2187,7 +2187,7 @@ class WarpCoreWindow(QMainWindow):
         else:
             info_html = f'<b>{slot_disp}</b><br>No item recognised'
 
-        from warp.trainer.annotation_widget import _tooltip_icon_html
+        from warp.gui import _tooltip_icon_html
         icon_html = _tooltip_icon_html(None, name) if name else ''
         if icon_html:
             tooltip = (f'<table cellspacing="0" cellpadding="0"><tr>'
