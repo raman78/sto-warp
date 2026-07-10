@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.23] — 2026-07-10
+
+### Added
+- Hovering over a recognized item — on the canvas or in the review/results
+  tree — now shows a tooltip with the reference icon thumbnail next to the
+  item name, slot, and confidence. Comparing the reference icon with the
+  screenshot bbox helps spot mismatches at a glance.
+- Right-clicking a recognized item anywhere (canvas, review tree, results
+  tree) offers two new actions: **Open on vger.stobuilds.com** opens the
+  matching category page (equipment, traits) for quick search, and
+  **Open on STO Wiki** opens the item's wiki page directly. Both features
+  are available in WARP, WARP CORE, and Fast Correction Mode.
+
 ## [1.0.22] — 2026-06-29
 
 ### Fixed
