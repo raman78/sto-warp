@@ -189,6 +189,22 @@ The **↗ Send this to WARP** button is only visible in Fast Correction
 Mode. The 1.0.13 fix in commit `fa75388` hides it during normal training
 to remove a click target that was inert outside FC.
 
+All generic review-panel UI features carry over unchanged into FC:
+
+- **Hover tooltips with reference icon** on both the canvas
+  (`annotation_widget.py:_show_hover_tooltip`) and the review tree
+  (`trainer_window.py:_populate_review_item`) — HTML tooltip embeds a
+  base64-encoded QImage loaded from `cargo.ref_icon_path(name)`.
+- **Right-click → external links** on canvas bboxes
+  (`annotation_widget.py:contextMenuEvent`) and on review-tree leaf
+  items (`trainer_window.py:_show_item_link_menu`) — "Open on
+  vger.stobuilds.com" (slot → category page via `cargo.vger_url`) and
+  "Open on STO Wiki" (`cargo.wiki_url`). Uses
+  `QDesktopServices.openUrl`.
+
+These are not gated by mode — the same code paths execute in both
+normal training and FC.
+
 ---
 
 ## 5½. Bbox dedup and removal — IoU matching (1.0.18)

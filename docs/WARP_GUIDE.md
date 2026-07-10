@@ -288,6 +288,20 @@ else sorted alphabetically. A bold ship banner appears above the tree with
 the recognised name / type / tier so you can sanity-check OCR at a glance
 before exporting.
 
+#### Hover tooltip with reference icon
+
+Hovering over an item row in the Results tree (or a bounding box on the Preview canvas) pops up a tooltip that shows the **reference icon** from the local icon library alongside the slot name, item name and confidence score. This lets you compare what the detector matched against what you actually see in the screenshot — a quick visual sanity check without leaving the window.
+
+```
+  ┌──────────────────────────────────┐
+  │ ┌────┐  Fore Weapons             │
+  │ │icon│  Phaser Beam Array         │
+  │ └────┘  Confidence: 94%          │
+  └──────────────────────────────────┘
+```
+
+If the reference icon does not match what is in the bounding box, the recognition is probably wrong — right-click and open the wiki link to double-check, or jump into WARP CORE to correct it.
+
 #### Right-click — quick actions on a Results row
 
 Right-clicking any row in the Results tree (slot row or individual item) opens a small popup menu that operates on the source screenshot of that row:
@@ -296,8 +310,12 @@ Right-clicking any row in the Results tree (slot row or individual item) opens a
 - **Copy full path** — copies the absolute path to the screenshot, ready to paste into a file manager or another tool.
 - **Open in WARP CORE** — only shown when WARP is running inside the launcher window (not in standalone `sto-warp gui`). Jumps straight to the WARP CORE tab with the screenshot pre-selected so a correction can be made without scrolling through the file list.
 - **Open in WARP Fast Correction Mode** — hands the **entire current batch** (every screenshot in the run) to WARP CORE in a special temporary workspace that does not touch the local training set. Use this when a few items still need polishing before exporting the SETS JSON, but you do not want the fixes to permanently rewrite the standing training data. See [Fast Correction Mode](#65-fast-correction-mode).
+- **Open on vger.stobuilds.com** — opens the matching category page on vger (e.g. *space-equipment* or *starship-traits*) in your browser, where you can search for the item. Only shown for equipment and trait slots — BOFF abilities do not have a vger page.
+- **Open on STO Wiki** — opens the item's own page on the STO Wiki directly (e.g. *stowiki.net/wiki/Phaser_Beam_Array*).
 
 The clicked filename is shown as a disabled header at the top of the menu, so it is always clear which file the action will affect — useful when the same slot has children from several different screenshots.
+
+> **Tip:** The two external-link actions also appear when you right-click a bounding box on the Preview canvas, so you can look up any item straight from the visual overlay.
 
 ### Preview tab — bbox overlay
 
@@ -319,6 +337,8 @@ gets the same hue across screenshots in a batch:
 | Weapons | Red |
 | Ground armor / kit / kit modules / personal shield / ground devices | Cyan |
 | Everything else | Stable hashed hue derived from the slot string |
+
+Hovering over a bounding box shows a tooltip with the reference icon, item name, slot and confidence — the same tooltip described in [Hover tooltip with reference icon](#hover-tooltip-with-reference-icon) above. Right-clicking a box opens the item-link menu (vger / STO Wiki).
 
 Use Preview to spot mis-aligned bboxes (wrong row, off-by-one column) at a
 glance, then jump into WARP CORE to correct them.
@@ -511,6 +531,8 @@ Tier OCR is tolerant of common misreads in the bracket. Variants such as `[T6-Xz
 |--------|-----|
 | Zoom in / out | **Ctrl + scroll wheel** (1× – 6×, anchored to cursor) |
 | Select a box | **Left click** on the box — highlights it in the review list |
+| Hover over a box | Shows a tooltip with the reference icon, slot, item name and confidence — compare the icon with what you see in the bbox to spot mismatches |
+| Right-click a box | Opens a menu with **Open on vger.stobuilds.com** and **Open on STO Wiki** links to look up the item in your browser |
 | Draw new box | **Alt + LMB drag** — hold Alt, click and drag over an item icon |
 | Draw mode toggle | **Alt+A** button in the right panel — cursor stays as crosshair until toggled off |
 
@@ -533,6 +555,13 @@ Lists all items detected in the current screenshot, one row per slot. Each row s
   - **Green** ≥ 75% — confident match
   - **Yellow** 40–74% — uncertain, review recommended
   - **Red** < 40% — poor match, manual correction needed
+
+**Hover** over any item row to see a tooltip with the matched reference icon, slot, item name and confidence. The reference icon is the picture from the icon library that the detector decided was the best match — if it does not look like the icon in the bounding box, the match is wrong and you should correct it.
+
+**Right-click** any item row to open a menu with external links:
+
+- **Open on vger.stobuilds.com** — opens the relevant vger category page in your browser (equipment or traits). Not shown for BOFF abilities.
+- **Open on STO Wiki** — opens the item's wiki page directly so you can verify what the item looks like, what set it belongs to, etc.
 
 At the bottom:
 - **Add BBox** — enter draw mode to add a missing box (Alt+A)
@@ -615,8 +644,8 @@ The intended WARP CORE workflow, end to end:
 ### Typical micro-loop (per item)
 
 1. Pick the lowest-confidence red item in the review list (sorted automatically).
-2. Compare what's in the Item field against the icon on the canvas.
-3. **Correct** → **Enter**. **Wrong** → type the correct name, pick from autocomplete (instant accept, no Enter needed).
+2. Hover over the row (or the bbox on the canvas) — the tooltip shows the reference icon the detector matched. Compare it against the actual icon in the bounding box. If they look different, the match is wrong.
+3. **Correct** → **Enter**. **Wrong** → type the correct name, pick from autocomplete (instant accept, no Enter needed). Not sure what the item is? Right-click and pick **Open on STO Wiki** or **Open on vger** to look it up in your browser.
 4. **Bbox in wrong position** → **Del** to remove, **Alt+drag** to redraw.
 5. Move to the next item.
 
@@ -837,7 +866,8 @@ The day-to-day workflow inside Fast Correction Mode mirrors the
 normal WARP CORE workflow described in
 [section 5](#5-reviewing-and-correcting-recognition) — same
 keyboard shortcuts, same Add BBox / Accept / Mark Done buttons,
-same colour conventions:
+same colour conventions, same hover tooltips with reference icons,
+and same right-click links to STO Wiki / vger:
 
 1. Click a screenshot in the left list. Its bboxes load on the
    canvas.
