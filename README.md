@@ -32,12 +32,17 @@ curl -sSL https://raw.githubusercontent.com/raman78/sto-warp/main/install.sh | b
 Invoke-WebRequest -Uri "https://raw.githubusercontent.com/raman78/sto-warp/main/install.ps1" -OutFile "install.ps1"; .\install.ps1; Remove-Item "install.ps1"
 ```
 
+**Windows (.exe installer):**
+Prefer a traditional installer? Download the latest **`sto-warp-<version>-setup.exe`** from
+the [Releases page](https://github.com/raman78/sto-warp/releases/latest) —
+no Python or terminal required. See [INSTALLATION.md](INSTALLATION.md) for details.
+
 On first launch sto-warp registers itself in your system menu — Start
 Menu on Windows, Launchpad / Spotlight on macOS, Activities / KRunner
 on Linux — so subsequent runs can be started by clicking the icon
 instead of opening a terminal.
 
-For manual installation methods and more details, see `INSTALLATION.md`.
+For manual installation methods and more details, see [INSTALLATION.md](INSTALLATION.md).
 
 ## Data and models
 
@@ -65,7 +70,7 @@ GPL-3.0 — see `LICENSE`.
 
 ## Project docs
 
-- `INSTALLATION.md` — install methods (pipx, native packages).
+- [INSTALLATION.md](INSTALLATION.md) — install methods (pipx, `.exe` installer, native packages).
 - `CHANGELOG.md` — release notes.
 - `PROJECT_CONTEXT.md` — design context.
 - `CLAUDE.md` — repository rules for AI-assisted development.
