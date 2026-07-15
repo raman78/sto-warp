@@ -61,6 +61,30 @@ user approval.
 
 ---
 
+## Testing
+
+When modifying or adding code under `warp/`, always write or update a
+corresponding test in `tests/`. Follow these conventions:
+
+- **Framework:** pytest (not unittest). Use fixtures, `monkeypatch`, `tmp_path`.
+- **Isolation:** never touch the user's real XDG dirs or network — use
+  `monkeypatch.setenv` to redirect `WARP_CACHE_DIR`, `XDG_CONFIG_HOME`, etc.
+  to `tmp_path`.
+- **GUI tests:** `conftest.py` sets `QT_QPA_PLATFORM=offscreen` globally.
+  Create `QApplication` via `QApplication.instance() or QApplication([])`.
+  Use `addCleanup(widget.close)` for widget teardown.
+- **Heavy deps:** if a test needs opencv / torch / easyocr, gate it with
+  `@pytest.mark.skipif(not _has_dep(), reason='...')` so the lightweight
+  suite stays green without the full ML stack.
+- **Naming:** `test_<module_under_test>.py`, e.g. `test_userdata.py` tests
+  `warp/userdata.py`. Test functions: `test_<behaviour_being_verified>`.
+- **Scope:** keep tests focused — one assertion concept per test. Prefer
+  many small tests over few large ones.
+
+Run the suite: `python -m pytest tests/ -v`
+
+---
+
 ## Diagnostic scripts (`tests/diag_*.py`)
 
 These are **local-only developer benchmarks / ad-hoc probes** — ignored by
