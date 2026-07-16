@@ -238,6 +238,9 @@ class WarpCoreWindow(QMainWindow):
         self._file_list.setItemDelegate(_ColorPreservingDelegate(self._file_list))
         self._file_list.currentRowChanged.connect(self._load_screenshot)
         self._file_list.itemChanged.connect(self._on_file_item_changed)
+        # Double-click a file → choose its screen type; right-click → copy
+        # filename / path (mirrors the WARP Recognition tabs).
+        self._file_list.itemDoubleClicked.connect(self._show_screen_type_menu)
         self._file_list.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._file_list.customContextMenuRequested.connect(self._show_file_list_context_menu)
         ll.addWidget(self._file_list, 1)
@@ -1261,14 +1264,17 @@ class WarpCoreWindow(QMainWindow):
                 else: self._review_summary.setText('Click Auto-Detect to recognise items on this screenshot.')
         self._update_add_bbox_btn()
 
-    def _show_file_list_context_menu(self, pos):
-        item = self._file_list.itemAt(pos)
-        if not item: return
-        menu = QMenu(self)
+    def _show_screen_type_menu(self, item):
+        """Double-click a file → pick its screen type (checkable list)."""
         row = self._file_list.row(item)
         if row < 0 or row >= len(self._screenshots): return
+        # Ensure the double-clicked row is current so _on_type_override_changed
+        # (which targets self._current_idx) applies to the right file.
+        if self._file_list.currentRow() != row:
+            self._file_list.setCurrentRow(row)
         path = self._screenshots[row]
         current_stype = self._screen_types.get(path.name, 'UNKNOWN')
+        menu = QMenu(self)
         for key in SCREEN_TYPE_LABELS:
             icon = SCREEN_TYPE_ICONS.get(key, '')
             label = SCREEN_TYPE_LABELS[key]
@@ -1277,9 +1283,33 @@ class WarpCoreWindow(QMainWindow):
             action.setCheckable(True)
             if key == current_stype:
                 action.setChecked(True)
-        action = menu.exec(self._file_list.mapToGlobal(pos))
+        from PySide6.QtGui import QCursor
+        action = menu.exec(QCursor.pos())
         if action:
             self._on_type_override_changed(action.data())
+
+    def _show_file_list_context_menu(self, pos):
+        """Right-click a file → copy filename / full path (like WARP tabs)."""
+        item = self._file_list.itemAt(pos)
+        if not item: return
+        row = self._file_list.row(item)
+        if row < 0 or row >= len(self._screenshots): return
+        path = self._screenshots[row]
+        menu = QMenu(self)
+        header = menu.addAction(path.name)
+        header.setEnabled(False)
+        f = header.font(); f.setBold(True); header.setFont(f)
+        menu.addSeparator()
+        act_copy_name = menu.addAction('Copy filename')
+        act_copy_path = menu.addAction('Copy full path')
+        chosen = menu.exec(self._file_list.mapToGlobal(pos))
+        if chosen is None:
+            return
+        from PySide6.QtWidgets import QApplication
+        if chosen is act_copy_name:
+            QApplication.clipboard().setText(path.name)
+        elif chosen is act_copy_path:
+            QApplication.clipboard().setText(str(path))
 
     def _update_screen_type_ui(self, stype: str):
         icon = SCREEN_TYPE_ICONS.get(stype, '?')
@@ -2187,15 +2217,8 @@ class WarpCoreWindow(QMainWindow):
         else:
             info_html = f'<b>{slot_disp}</b><br>No item recognised'
 
-        from warp.gui import _tooltip_icon_html
-        icon_html = _tooltip_icon_html(None, name) if name else ''
-        if icon_html:
-            tooltip = (f'<table cellspacing="0" cellpadding="0"><tr>'
-                       f'<td style="vertical-align:middle;padding-right:6px">{icon_html}</td>'
-                       f'<td style="vertical-align:middle">{info_html}</td>'
-                       f'</tr></table>')
-        else:
-            tooltip = info_html
+        from warp.gui import _tooltip_html
+        tooltip = _tooltip_html(None, name, info_html)
         item.setToolTip(0, slot_disp)
         item.setToolTip(2, tooltip)
 

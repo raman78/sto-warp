@@ -43,3 +43,19 @@ def _tooltip_icon_html(thumb, name: str, size: int = 48) -> str:
     img.save(buf, 'PNG')
     b64 = base64.b64encode(buf.data().data()).decode('ascii')
     return f'<img src="data:image/png;base64,{b64}" width="{img.width()}" height="{img.height()}"/>'
+
+
+def _tooltip_html(thumb, name: str, info_html: str) -> str:
+    """Compose a hover tooltip: resolved icon (left) beside *info_html* (right).
+
+    Shared by the Recognition Review tree and the annotation canvas so both
+    lay the icon out identically.  When no icon resolves (empty *name* and no
+    *thumb*) the plain *info_html* is returned unwrapped.
+    """
+    icon_html = _tooltip_icon_html(thumb, name)
+    if not icon_html:
+        return info_html
+    return (f'<table cellspacing="0" cellpadding="0"><tr>'
+            f'<td style="vertical-align:middle;padding-right:6px">{icon_html}</td>'
+            f'<td style="vertical-align:middle">{info_html}</td>'
+            f'</tr></table>')

@@ -98,7 +98,7 @@ def _color_for_slot(slot: str) -> QColor:
     return QColor.fromHsv(h, 200, 240)
 
 
-from warp.gui import _tooltip_icon_html  # noqa: E402  (after top-level imports)
+from warp.gui import _tooltip_html  # noqa: E402  (after top-level imports)
 
 
 class _InteractiveCanvas(QWidget):
@@ -283,14 +283,7 @@ class _InteractiveCanvas(QWidget):
         info_html = (f'<b>{slot}</b><br>{it.name}'
                      f'<br>Confidence: <span style="color:{color}">{conf:.0%}</span>')
 
-        icon_html = _tooltip_icon_html(it.thumbnail, it.name)
-        if icon_html:
-            text = (f'<table cellspacing="0" cellpadding="0"><tr>'
-                    f'<td style="vertical-align:middle;padding-right:6px">{icon_html}</td>'
-                    f'<td style="vertical-align:middle">{info_html}</td>'
-                    f'</tr></table>')
-        else:
-            text = info_html
+        text = _tooltip_html(it.thumbnail, it.name, info_html)
 
         from PySide6.QtWidgets import QToolTip
         from PySide6.QtGui import QCursor
@@ -905,15 +898,7 @@ class ResultsView(QWidget):
                     _info = (f'<b>{_slot_disp}</b><br>{it.name}'
                              f'<br>Confidence: <span style="color:{_col}">'
                              f'{_conf:.0%}</span>{origin_badge}')
-                    _ico = _tooltip_icon_html(it.thumbnail, it.name)
-                    if _ico:
-                        _tip = (f'<table cellspacing="0" cellpadding="0"><tr>'
-                                f'<td style="vertical-align:middle;'
-                                f'padding-right:6px">{_ico}</td>'
-                                f'<td style="vertical-align:middle">{_info}'
-                                f'</td></tr></table>')
-                    else:
-                        _tip = _info
+                    _tip = _tooltip_html(it.thumbnail, it.name, _info)
                     child.setToolTip(2, _tip)
                 # Stash global index for canvas↔tree sync (col 0 UserRole)
                 # and the resolved screenshot path (col 2 UserRole — used

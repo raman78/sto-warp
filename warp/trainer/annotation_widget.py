@@ -34,7 +34,7 @@ DRAW_BBOX_COLOR = QColor(255, 200, 0)   # yellow — matches Add BBox button sty
 MANIP_COLOR = QColor(100, 200, 255)  # Action blue
 
 
-from warp.gui import _tooltip_icon_html  # noqa: F811,E402
+from warp.gui import _tooltip_html  # noqa: F811,E402
 
 
 class AnnotationWidget(QWidget):
@@ -615,7 +615,12 @@ class AnnotationWidget(QWidget):
         state     = ri.get('state', 'pending')
         orig_name = ri.get('orig_name', '')
         if state == 'confirmed':
-            lines = [f'<b>{slot}</b>', name, '<i>confirmed by user</i>']
+            # Auto-confirmed (detector accepted via threshold — yellow, still
+            # awaiting review) must NOT claim the user confirmed it; mirror the
+            # Recognition Review tree wording.
+            status = ('auto-confirmed by detector'
+                      if ri.get('auto_confirmed') else 'confirmed by user')
+            lines = [f'<b>{slot}</b>', name, f'<i>{status}</i>']
             if conf > 0.0:
                 color = ('#7effc8' if conf >= 0.85 else
                          '#e8c060' if conf >= 0.70 else '#ff9966')
@@ -631,14 +636,12 @@ class AnnotationWidget(QWidget):
             info_html = (f'<b>{slot}</b><br>{name}'
                          f'<br>Confidence: <span style="color:{color}">{pct}</span>')
 
-        icon_html = _tooltip_icon_html(ri.get('thumb'), name)
-        if icon_html:
-            text = (f'<table cellspacing="0" cellpadding="0"><tr>'
-                    f'<td style="vertical-align:middle;padding-right:6px">{icon_html}</td>'
-                    f'<td style="vertical-align:middle">{info_html}</td>'
-                    f'</tr></table>')
-        else:
-            text = info_html
+        # For confirmed items the stored thumb is the ML's ORIGINAL match and
+        # goes stale once the user corrects the name. Resolve the icon from the
+        # confirmed name instead (matching the recognition-review tree tooltip)
+        # so the hover preview reflects what the user actually confirmed.
+        thumb = None if state == 'confirmed' else ri.get('thumb')
+        text = _tooltip_html(thumb, name, info_html)
 
         from PySide6.QtWidgets import QToolTip
         from PySide6.QtGui import QCursor

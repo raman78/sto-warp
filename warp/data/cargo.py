@@ -629,11 +629,49 @@ def vger_url(slot: str) -> str | None:
     return None
 
 
+def _build_trait_icon_aliases() -> dict[str, list[str]]:
+    """Map a trait's display `name` → its `icon_name` variant(s).
+
+    Trait icons on the SETS-Data mirror are filed under `icon_name`
+    (e.g. ``Hive Defenses (space)``), which differs from the display
+    `name` (``Hive Defenses``). Without this, `ref_icon_path` can't
+    resolve a confirmed trait's icon because no ``<name>.png`` exists.
+    """
+    out: dict[str, list[str]] = {}
+    for src in ('traits.json', 'starship_traits.json'):
+        try:
+            raw = _load_raw(src)
+        except Exception:
+            continue
+        for trait in raw:
+            name = trait.get('name')
+            icn = trait.get('icon_name')
+            if name and icn and icn != name:
+                out.setdefault(name, [])
+                if icn not in out[name]:
+                    out[name].append(icn)
+    return out
+
+
+def _trait_icon_aliases() -> dict[str, list[str]]:
+    return _bucketed('trait_icon_aliases', _build_trait_icon_aliases)
+
+
 def ref_icon_path(name: str) -> Path | None:
     """Path to the local reference-icon PNG, or ``None`` if not cached."""
     from urllib.parse import quote_plus
-    p = icons_dir() / f'{quote_plus(name)}.png'
-    return p if p.is_file() else None
+    d = icons_dir()
+    p = d / f'{quote_plus(name)}.png'
+    if p.is_file():
+        return p
+    # Traits are filed under `icon_name` (e.g. 'Hive Defenses (space)'),
+    # not the display name — fall back to those variants so a confirmed
+    # trait's icon still resolves in tooltips.
+    for alias in _trait_icon_aliases().get(name, ()):
+        ap = d / f'{quote_plus(alias)}.png'
+        if ap.is_file():
+            return ap
+    return None
 
 
 # --- introspection helpers (used by `sto-warp check` / diagnostics) -----
