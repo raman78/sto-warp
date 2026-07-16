@@ -31,7 +31,7 @@ WARP CORE lets you review, correct, and confirm what WARP found — and feed tho
 
 ### What to capture
 
-WARP reads the standard STO build screens **from the PC version of the game**. Console screenshots (PlayStation, Xbox) are not supported — if any end up in your folder, mark them as *Discard* (see [Right-click — change screen type](#right-click--change-screen-type) in section 5).
+WARP reads the standard STO build screens **from the PC version of the game**. Console screenshots (PlayStation, Xbox) are not supported — if any end up in your folder, mark them as *Discard* (see [Double-click — change screen type](#double-click--change-screen-type) in section 4).
 
 Open your ship/character loadout in-game and take full-screen screenshots of:
 
@@ -435,16 +435,30 @@ Lists every screenshot file in the folder. Each entry shows the detected screen 
 **How to confirm a screen type:**
 - **Tick the checkbox manually** next to the filename — confirms whatever type is currently shown.
 - **Change the type via the Screen Type dropdown** (top of the center panel) — the correct type is set and the checkbox is ticked automatically.
+- **Double-click the filename** — opens a menu of every screen type; pick one to set it and tick the checkbox in one step.
 
 Auto-detected types start unchecked. If the classifier guesses wrong, change the type in the dropdown and it will be confirmed immediately. Un-ticking a checkbox removes the manual override so the classifier can re-classify that file next time.
 
 Click a filename to load it into the canvas.
 
-#### Right-click — change screen type
+#### Double-click — change screen type
 
-Right-clicking a filename in the list opens a popup menu with every supported screen type (*Space Equipment*, *Ground Equipment*, *Space Traits*, *Ground Traits*, *Bridge Officers*, *Specialisations*, *Skills*, *Space Skills*, *Ground Skills*, *Discard*, *Unknown*). The current type is shown as ticked. Picking a different one immediately reclassifies that screenshot, ticks the confirmation checkbox and clears the cached recognition so the next Auto-Detect runs against the corrected type. Faster than reaching for the Screen Type dropdown above the canvas when several files need re-typing in a row.
+Double-clicking a filename in the list opens a popup menu with every supported screen type (*Space Equipment*, *Ground Equipment*, *Space Traits*, *Ground Traits*, *Bridge Officers*, *Specialisations*, *Skills*, *Space Skills*, *Ground Skills*, *Discard*, *Unknown*). The current type is shown as ticked. Picking a different one immediately reclassifies that screenshot, ticks the confirmation checkbox and clears the cached recognition so the next Auto-Detect runs against the corrected type. Faster than reaching for the Screen Type dropdown above the canvas when several files need re-typing in a row.
+
+Tip: Changing the screen type used to be on the right-click menu. It is now on double-click — right-click copies the file name or path instead (see below).
 
 Picking **Discard** marks the screenshot as "not a build screenshot" — for example, a console screenshot, a random image, or anything else that is not part of a PC build. Discarded screenshots are automatically marked as Done. No recognition is attempted on them, and they are not included in any export. Over time, the ML model learns to recognise and auto-discard such images.
+
+#### Right-click — copy the file name or path
+
+Right-clicking a filename opens a small menu with the file name at the top and two actions:
+
+| Action | What it does |
+|--------|--------------|
+| **Copy filename** | Copies just the file name (e.g. `overview.png`) to the clipboard |
+| **Copy full path** | Copies the complete location of the file on your disk |
+
+This is the same menu you get when you right-click a file on the WARP recognition tabs, so copying a path works the same way throughout the app. Handy when you want to point someone at a specific screenshot or paste its location into another program.
 
 #### Screenshot colour coding
 
@@ -531,7 +545,7 @@ Tier OCR is tolerant of common misreads in the bracket. Variants such as `[T6-Xz
 |--------|-----|
 | Zoom in / out | **Ctrl + scroll wheel** (1× – 6×, anchored to cursor) |
 | Select a box | **Left click** on the box — highlights it in the review list |
-| Hover over a box | Shows a tooltip with the reference icon, slot, item name and confidence — compare the icon with what you see in the bbox to spot mismatches |
+| Hover over a box | Shows a tooltip with the reference icon, slot, item name and confidence — compare the icon with what you see in the bbox to spot mismatches. After you confirm or correct an item, the tooltip updates to the icon and name you confirmed and notes whether it was confirmed by you or auto-accepted by the program |
 | Right-click a box | Opens a menu with **Open on vger.stobuilds.com** and **Open on STO Wiki** links to look up the item in your browser |
 | Draw new box | **Alt + LMB drag** — hold Alt, click and drag over an item icon |
 | Draw mode toggle | **Alt+A** button in the right panel — cursor stays as crosshair until toggled off |
@@ -1027,6 +1041,8 @@ after positioning. Ship names are treated as personal data.
 | **Alt + Down** | Next screenshot |
 | **Alt + LMB drag** | Draw new bounding box directly |
 | **Ctrl + Wheel** | Zoom canvas in/out (1× – 6×, anchored to cursor) |
+| **Double-click a file** | Change that screenshot's screen type |
+| **Right-click a file** | Copy its file name or full path |
 
 ### Bounding box colours (canonical)
 
