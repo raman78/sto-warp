@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.24] — 2026-07-16
+
+### Changed
+- **The way a screenshot's type is set in WARP CORE has moved.** The
+  screen-type menu now opens on a **double-click** of a file in the
+  list. **Right-clicking** a file no longer changes its type — it now
+  copies the file name or full path instead, matching the right-click
+  menu on the WARP recognition tabs.
+
+### Fixed
+- The hover tooltip on a bounding box now shows the icon and name of the
+  item that was confirmed, instead of keeping the originally detected
+  icon after a correction. It also states whether the item was confirmed
+  by the user or auto-accepted by the program.
+- Trait tooltips now show the trait's reference icon instead of no icon
+  (for example, Hive Defenses).
+
 ## [1.0.23] — 2026-07-10
 
 ### Added
