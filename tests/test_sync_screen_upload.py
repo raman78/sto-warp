@@ -82,3 +82,35 @@ def test_oversized_png_cached_so_it_is_not_retried(tmp_path, monkeypatch):
     assert cache.exists()
     cached = set(json.loads(cache.read_text()))
     assert sync.SyncWorker._file_sha256(big) in cached
+
+
+def test_batch_split_by_cumulative_size(tmp_path, monkeypatch):
+    """Screens are split into POSTs bounded by cumulative base64 size, not
+    just item count, so a few large originals never build a request body the
+    backend/ingress would reject."""
+    sync, w = _make_worker(tmp_path, monkeypatch)
+
+    # Tiny budget so size (not the 20-item count cap) drives the split.
+    monkeypatch.setattr(sync, 'MAX_SCREEN_BATCH_B64', 600)
+
+    sdir = tmp_path / 'screen_types' / 'space_build'
+    sdir.mkdir(parents=True)
+    # 5 distinct ~200-byte PNGs → ~272 b64 chars each; 2 fit per 600-char
+    # budget, so 5 items must split across 3 POSTs.
+    for i in range(5):
+        (sdir / f's{i}.png').write_bytes(b'\x89PNG' + bytes([i]) * 200)
+
+    posted: list[dict] = []
+    monkeypatch.setattr(
+        w, '_post',
+        lambda path, payload: posted.append(payload) or {'accepted': len(payload['items'])})
+
+    w._upload_screen_types()
+
+    # More than one POST (count cap alone would have sent all 5 in one).
+    assert len(posted) > 1
+    # Every item delivered exactly once, and no POST exceeds the budget.
+    assert sum(len(p['items']) for p in posted) == 5
+    for p in posted:
+        total = sum(len(it['png_b64']) for it in p['items'])
+        assert len(p['items']) == 1 or total <= sync.MAX_SCREEN_BATCH_B64

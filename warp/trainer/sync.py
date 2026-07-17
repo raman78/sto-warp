@@ -66,9 +66,16 @@ BULK_SCREENS_BATCH  = 20
 BULK_ANCHORS_BATCH  = 20
 
 # Backend caps a screen-type PNG at this many base64 chars (main.py
-# _ScreenTypeItem.png_b64 max_length). One oversized item makes the backend
-# 422 the ENTIRE batch, so the client must drop it before batching.
-MAX_SCREEN_PNG_B64  = 4_000_000
+# _ScreenTypeItem.png_b64 max_length, ≈ MAX_SCREEN_PNG_BYTES × 4/3). One
+# oversized item makes the backend 422 the ENTIRE batch, so the client must
+# drop it before batching. 8M b64 ≈ 6 MB raw — covers full-resolution
+# screenshots so originals upload instead of being skipped.
+MAX_SCREEN_PNG_B64  = 8_000_000
+# Cap the cumulative base64 size of one screen-types POST. A handful of
+# multi-MB originals in a 20-item batch would build a request body large
+# enough for the backend / HF Space ingress to reject; batch by total size
+# so big screens go in small (often solo) POSTs while small ones still pack.
+MAX_SCREEN_BATCH_B64 = 15_000_000
 BACKEND_TIMEOUT_S   = 60
 
 
@@ -648,10 +655,28 @@ class SyncWorker(QThread):
             if not payloads:
                 continue
 
-            # POST in batches of BULK_SCREENS_BATCH per screen_type.
-            for start in range(0, len(payloads), BULK_SCREENS_BATCH):
-                sub      = payloads[start:start + BULK_SCREENS_BATCH]
-                sub_shas = shas[start:start + BULK_SCREENS_BATCH]
+            # Split into POSTs bounded by BOTH item count (BULK_SCREENS_BATCH)
+            # and cumulative base64 size (MAX_SCREEN_BATCH_B64), so a few
+            # multi-MB originals don't build a request body the backend rejects.
+            # A single item always ships even if it alone fills the budget
+            # (it is already ≤ MAX_SCREEN_PNG_B64 ≤ MAX_SCREEN_BATCH_B64).
+            batches: list[tuple[list[dict], list[str]]] = []
+            cur: list[dict] = []
+            cur_shas: list[str] = []
+            cur_b64 = 0
+            for item, sha in zip(payloads, shas):
+                ln = len(item['png_b64'])
+                if cur and (len(cur) >= BULK_SCREENS_BATCH
+                            or cur_b64 + ln > MAX_SCREEN_BATCH_B64):
+                    batches.append((cur, cur_shas))
+                    cur, cur_shas, cur_b64 = [], [], 0
+                cur.append(item)
+                cur_shas.append(sha)
+                cur_b64 += ln
+            if cur:
+                batches.append((cur, cur_shas))
+
+            for sub, sub_shas in batches:
                 try:
                     resp = self._post('/upload/screen-types', {
                         'install_id':  install_id,
