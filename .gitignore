@@ -50,6 +50,10 @@ tests/_*/**
 !tests/_*/**/
 !tests/_*/**/*.py
 
+# Local-only ad-hoc probes / benchmarks — not part of the test suite
+# (see CLAUDE.md "Diagnostic scripts"). Never committed.
+tests/diag_*.py
+
 # Maintainer review tools — superseded by the democratic merger cron,
 # kept locally for emergency one-shot use.
 warp/tools/review_staging.py
