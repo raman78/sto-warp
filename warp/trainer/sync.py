@@ -64,6 +64,11 @@ MIN_TEXT_CROP_W   = 50   # text crops: minimum width
 BULK_CROPS_BATCH    = 50
 BULK_SCREENS_BATCH  = 20
 BULK_ANCHORS_BATCH  = 20
+
+# Backend caps a screen-type PNG at this many base64 chars (main.py
+# _ScreenTypeItem.png_b64 max_length). One oversized item makes the backend
+# 422 the ENTIRE batch, so the client must drop it before batching.
+MAX_SCREEN_PNG_B64  = 4_000_000
 BACKEND_TIMEOUT_S   = 60
 
 
@@ -601,6 +606,7 @@ class SyncWorker(QThread):
             _slog.info(f'HF Sync: bootstrapped {len(existing)} screen hashes from HF listing')
 
         total_sent = 0
+        oversized  = 0
         for type_dir in sorted(type_dirs):
             stype = type_dir.name
             # Build list of {png_b64} for crops we haven't uploaded yet, in
@@ -616,6 +622,18 @@ class SyncWorker(QThread):
                     b64 = base64.b64encode(png.read_bytes()).decode('ascii')
                 except Exception as e:
                     _slog.warning(f'HF Sync: screen-type read failed for {png.name}: {e}')
+                    continue
+                if len(b64) > MAX_SCREEN_PNG_B64:
+                    _slog.warning(
+                        f'HF Sync: screen-type {png.name} too large '
+                        f'({len(b64)} b64 chars > {MAX_SCREEN_PNG_B64}) — skipping; '
+                        f'backend would 422 the whole batch')
+                    # Never sendable at this size: cache the sha so we neither
+                    # re-read the multi-MB file nor re-warn every sync tick. A
+                    # re-captured / smaller screenshot hashes differently and
+                    # will be retried.
+                    existing.add(sha)
+                    oversized += 1
                     continue
                 payloads.append({'png_b64': b64})
                 shas.append(sha)
@@ -643,15 +661,20 @@ class SyncWorker(QThread):
                 total_sent += int(resp.get('accepted', 0))
                 existing.update(sub_shas)
 
-        if not total_sent:
+        if not total_sent and not oversized:
             _slog.debug('HF Sync: no new screen type screenshots to upload')
             return
 
+        # Persist the cache when we either sent something or permanently
+        # skipped an oversized file (so the skip sticks across restarts).
         try:
             screen_cache_file.write_text(json.dumps(sorted(existing)))
         except Exception:
             pass
-        _slog.info(f'HF Sync: uploaded {total_sent} screen type screenshot(s)')
+        if total_sent:
+            _slog.info(f'HF Sync: uploaded {total_sent} screen type screenshot(s)')
+        if oversized:
+            _slog.info(f'HF Sync: skipped {oversized} oversized screen screenshot(s)')
 
     @staticmethod
     def _load_screen_hashes_cache(cache_file: Path) -> set[str]:
