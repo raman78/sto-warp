@@ -327,6 +327,60 @@ def all_caches() -> dict[str, Any]:
     }
 
 
+# Captain specializations — not in cargo (hardcoded in WARP CORE), but valid
+# recognisable labels, so they belong in the canonical name set.
+SPECIALIZATION_NAMES: frozenset[str] = frozenset({
+    'Command Officer', 'Intelligence Officer', 'Miracle Worker', 'Pilot',
+    'Temporal Operative', 'Constable', 'Commando', 'Strategist',
+})
+
+
+def canonical_names() -> set[str]:
+    """Flat set of every valid item / ability / trait / specialization name.
+
+    Single source of truth for anything that needs to validate a label
+    against "the things WARP can recognise" — e.g. a maintainer tool that
+    relabels a mislabeled crop and must reject typos. Built from the same
+    cargo accessors the client uses, so it tracks upstream data over time
+    with no duplicated parsing. Each source is guarded independently: a
+    shape drift in one file degrades that source's contribution rather than
+    raising (mirrors the try/except reads elsewhere in this module)."""
+    names: set[str] = set()
+
+    try:  # equipment(): {build_key: {name: item_dict}}
+        for bucket in equipment().values():
+            if isinstance(bucket, dict):
+                names.update(k for k in bucket if isinstance(k, str) and k)
+    except Exception as exc:
+        log.warning(f'cargo.canonical_names: equipment failed: {exc!r}')
+
+    try:  # boff_abilities(): {..., 'all': {name: dict}}
+        all_ab = boff_abilities().get('all', {})
+        if isinstance(all_ab, dict):
+            names.update(k for k in all_ab if isinstance(k, str) and k)
+    except Exception as exc:
+        log.warning(f'cargo.canonical_names: boff_abilities failed: {exc!r}')
+
+    try:  # traits(): {env: {trait_type: {name: trait_dict}}}
+        for env in traits().values():
+            if not isinstance(env, dict):
+                continue
+            for tt in env.values():
+                if isinstance(tt, dict):
+                    names.update(k for k in tt if isinstance(k, str) and k)
+    except Exception as exc:
+        log.warning(f'cargo.canonical_names: traits failed: {exc!r}')
+
+    try:  # starship_traits(): {name: trait_dict}
+        names.update(k for k in starship_traits() if isinstance(k, str) and k)
+    except Exception as exc:
+        log.warning(f'cargo.canonical_names: starship_traits failed: {exc!r}')
+
+    names.update(SPECIALIZATION_NAMES)
+    names.discard('')
+    return names
+
+
 # --- shape validation ---------------------------------------------------
 
 def _shape_problems() -> list[str]:

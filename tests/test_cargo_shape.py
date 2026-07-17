@@ -122,3 +122,26 @@ def test_starship_traits_flat():
     assert st, 'starship_traits empty'
     sample_name = next(iter(st))
     assert isinstance(sample_name, str)
+
+
+def test_canonical_names_unions_every_source():
+    """`canonical_names()` is the flat validation set consumed by external
+    maintainer tooling (crop relabeling). It must union every source and
+    never contain empties, so a real item/ability/trait/specialization
+    validates and a typo does not."""
+    from warp.data import cargo
+
+    names = cargo.canonical_names()
+    assert names, 'canonical_names empty'
+    assert all(isinstance(n, str) and n for n in names), 'empty / non-str name'
+
+    # Captain specializations are folded in (not present in cargo JSON).
+    assert cargo.SPECIALIZATION_NAMES <= names
+
+    # A sample from each cargo source resolves through the union.
+    eq_sample = next(iter(next(iter(cargo.equipment().values()))))
+    assert eq_sample in names, 'equipment name missing from canonical set'
+    boff_sample = next(iter(cargo.boff_abilities()['all']))
+    assert boff_sample in names, 'boff ability missing from canonical set'
+    st_sample = next(iter(cargo.starship_traits()))
+    assert st_sample in names, 'starship trait missing from canonical set'
