@@ -63,7 +63,7 @@ Logika **„anti-virtual-bias"** w combine stage (linie 313-410) — to jest
 |---|---|---|
 | 321-323 | `ml_real = ml_name not startswith('__') and ml_conf ≥ 0.40` → ML wins | ML mówi real icon — virtual session/template są tłumione |
 | 348-350 | `sess_virtual_perfect = virtual + sess_score ≥ 0.95` + ML mówi real z conf ≥ 0.15 → poison guard | Self-match z poisoned training data — kill virtual |
-| 336-356 | `query_looks_real = bright > 0.07 AND rich > 0.07` + sess/template wirtualne → kill virtual | Query crop bright + colourful, virtual logicznie niemożliwy |
+| 336-356 | `query_looks_real = bright > 0.15 AND rich > 0.15` + sess/template wirtualne → kill virtual | Query crop bright + colourful, virtual logicznie niemożliwy |
 
 Output ostateczny: jeśli żadna z trzech reguł nie zadziała, virtual może
 wygrać i wrócić jako recognition result do `warp_importer`. Wtedy filter
@@ -195,7 +195,7 @@ Te tools są **maintainer-only**, nie wpływają na user view runtime.
 | Z5-C.1 | **Wielowarstwowa obrona Z5 od strony wyjścia istnieje i jest wystarczająca.** 8 punktów filtra wymienionych w §3 zapewnia że żaden `__*` nie dotrze do build plannera (build_writer.py:231), thumbnail UI (icon_matcher.py:404), BOFF sheet (boff_keys.py:190) ani recognition result na real-looking icon (icon_matcher.py:321-356 anti-virtual-bias). | Z5 zamknięte od wyjścia. |
 | Z5-C.2 | **`sync_client.py:434-436` może być bezpiecznie zakomentowany (D-B.3).** Defense-in-depth Stage 0 (`icon_matcher.py:244`) złapie `__*` z `knowledge.json` jako hard-override suppression — nawet jeśli backend wpisze tam virtual. Redundancja jest zamierzona (D-A.1 spec). | Odblokowanie D-B.3. |
 | Z5-C.3 | **Komentowanie filtra w `sync_client.py` musi być symetryczne z komentowaniem w backendzie (D-A.1 + D-G.1).** Nie wolno wyłączyć tylko jednego — albo oba (klient + backend), albo żaden. Rollback jednoczesny. | Spójność rollback. |
-| Z5-C.4 | **Anti-virtual-bias thresholds nie powinny być modyfikowane bez evidence z combat testów.** VIRTUAL_OVERRIDE_CONF=0.40, POISON_GUARD_ML_MIN=0.15, SESSION_PIXEL_PERFECT=0.95, VIRTUAL_SEED_BRIGHT_RATIO=0.07, VIRTUAL_SEED_RICH_RATIO=0.07 — wszystkie kalibrowane na tactical-console / Kentari-launcher (icon_matcher.py:55). Wszelka zmiana wymaga re-kalibracji. | Frozen calibration. |
+| Z5-C.4 | **Anti-virtual-bias thresholds nie powinny być modyfikowane bez evidence z combat testów.** VIRTUAL_OVERRIDE_CONF=0.40, POISON_GUARD_ML_MIN=0.15, SESSION_PIXEL_PERFECT=0.95, VIRTUAL_SEED_BRIGHT_RATIO=0.15, VIRTUAL_SEED_RICH_RATIO=0.15 — kalibrowane na tactical-console / Kentari-launcher (icon_matcher.py:55). VIRTUAL_SEED_* podniesione z 0.07 → 0.15 dnia 2026-07-17 po wizualnym przeglądzie 20 community-mirror crops (`tests/diag_view_community_poison.py`): genuine empty/inactive BOFF slots sięgają ~12% bright/rich, realne mislabeled icons ≥ 19%. Wszelka zmiana wymaga re-kalibracji. | Frozen calibration. |
 | Z5-C.5 | **Trainer UI '[empty slot]' / '[inactive slot]' render zostaje.** To jest UX, nie filter. User MUSI widzieć i móc oznaczać empty/inactive — bez tego brak labeling-do-treningu klasy `__empty__`/`__inactive__`. | Nie ruszać. |
 | Z5-C.6 | **Layout detector `__boff_*` generation zostaje.** To są internal slot type hints dla Stage 1+, nigdy nie docierają do user view (filter w boff_keys.py:190 i build_writer.py:231 przechwytują). | Nie ruszać. |
 

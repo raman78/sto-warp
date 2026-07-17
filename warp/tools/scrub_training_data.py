@@ -54,8 +54,8 @@ VIRTUAL_LABELS = frozenset({'__empty__', '__inactive__'})
 # Real STO virtuals are uniformly dim — even an __inactive__ padlock
 # fits in a few % of bright pixels. A virtual-labeled crop with both
 # >7% bright AND >7% colour-rich pixels is a colourful real icon.
-DEFAULT_BRIGHT_RATIO = 0.07   # fraction of pixels with V > 150
-DEFAULT_RICH_RATIO   = 0.07   # fraction of pixels with S > 100 AND V > 100
+DEFAULT_BRIGHT_RATIO = 0.15   # fraction of pixels with V > 150
+DEFAULT_RICH_RATIO   = 0.15   # fraction of pixels with S > 100 AND V > 100
 
 
 def _sha_of_file(p: Path) -> str:

@@ -57,10 +57,15 @@ SESSION_PIXEL_PERFECT       = 0.95
 POISON_GUARD_ML_MIN         = 0.15
 # Visual sanity for virtual-labeled session crops: a real __empty__ /
 # __inactive__ is uniformly dim, so a crop that is both bright AND colour-
-# rich cannot be a real virtual. Thresholds match warp.tools.scrub_training_data
-# (real-virtual p90 = 2.7% bright / 6.8% rich → 0.07 leaves wide margin).
-VIRTUAL_SEED_BRIGHT_RATIO   = 0.07
-VIRTUAL_SEED_RICH_RATIO     = 0.07
+# rich cannot be a real virtual. Thresholds match warp.tools.scrub_training_data.
+# Recalibrated 2026-07-17 from a visual review of the 20 community-mirror
+# crops the seed logged as POISON skip: genuine empty/inactive BOFF slots
+# carry a navy portrait tint reaching ~12% bright / ~12% rich, while real
+# mislabeled icons sit >= 19%. The old 0.07 gate false-flagged the BOFF
+# slots as poison and dropped them from training; 0.15 clears them while
+# still catching the real icons.
+VIRTUAL_SEED_BRIGHT_RATIO   = 0.15
+VIRTUAL_SEED_RICH_RATIO     = 0.15
 VIRTUAL_LABELS              = frozenset({'__empty__', '__inactive__'})
 # Embedder-based virtual suppression: when the top real-icon gallery entry
 # beats the top virtual gallery entry by at least this cosine margin, treat
