@@ -373,8 +373,15 @@ class SyncWorker(QThread):
                     f'HF Sync: backend rejected {len(sub_items) - accepted}/'
                     f'{len(sub_items)} items in batch; response: {resp!r:.500}'
                 )
-            # Mark sent items in caches (only for accepted ones — backend may
-            # have rejected some on poison-label / dim checks).
+            # Cache EVERY item in the batch, not just the `accepted` count:
+            # the backend reports counts only, never which items it rejected.
+            # Bulk-crops rejections are permanent content properties (bad dims,
+            # non-PNG, too-uniform, oversized), so a rejected crop would only be
+            # rejected again — caching its sha correctly prevents pointless
+            # re-uploads. Transient failures raise above and `break` before this
+            # loop, so they stay uncached and retry next tick. (Trade-off: a crop
+            # rejected under an old backend policy is not retried if that policy
+            # later loosens, until its label changes.)
             for meta, payload_item in zip(sub_meta, sub_items):
                 existing_hashes.add(meta['sha'])
                 uploaded_labels[meta['sha']] = f'{payload_item["slot"]}|{payload_item["name"]}'
