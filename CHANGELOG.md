@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [Unreleased]
+
+### Fixed
+- Tooltips for traits that share a name across space and ground (for
+  example, **Adaptive Offense** or **Adaptive Defense**) now show the icon
+  for the correct environment, instead of sometimes showing the other
+  environment's icon.
+
 ## [1.0.24] — 2026-07-16
 
 ### Changed

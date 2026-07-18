@@ -55,3 +55,43 @@ def test_ref_icon_path_unknown_returns_none(monkeypatch, tmp_path):
     monkeypatch.setattr(cargo, '_BUCKET_MEMO', {})
 
     assert cargo.ref_icon_path('No Such Item') is None
+
+
+def _stub_dual_env_trait(monkeypatch):
+    """'Adaptive Offense' filed under both env icon_names (ground first)."""
+    monkeypatch.setattr(cargo, '_load_raw', lambda src: (
+        [{'name': 'Adaptive Offense', 'icon_name': 'Adaptive Offense (ground)'},
+         {'name': 'Adaptive Offense', 'icon_name': 'Adaptive Offense (space)'}]
+        if src == 'traits.json' else []
+    ))
+    monkeypatch.setattr(cargo, '_BUCKET_MEMO', {})
+
+
+def test_ref_icon_path_env_picks_matching_variant(monkeypatch, tmp_path):
+    icons = tmp_path / 'icons'
+    icons.mkdir()
+    _write_icon(icons, 'Adaptive Offense (ground)')
+    _write_icon(icons, 'Adaptive Offense (space)')
+    monkeypatch.setenv('WARP_ICONS_DIR', str(icons))
+    _stub_dual_env_trait(monkeypatch)
+
+    # env='space' must win even though the ground variant is listed first.
+    p = cargo.ref_icon_path('Adaptive Offense', env='space')
+    assert p is not None
+    assert p.name == f'{quote_plus("Adaptive Offense (space)")}.png'
+
+    p = cargo.ref_icon_path('Adaptive Offense', env='ground')
+    assert p.name == f'{quote_plus("Adaptive Offense (ground)")}.png'
+
+
+def test_ref_icon_path_env_falls_back_when_variant_missing(monkeypatch, tmp_path):
+    icons = tmp_path / 'icons'
+    icons.mkdir()
+    _write_icon(icons, 'Adaptive Offense (ground)')  # only ground on disk
+    monkeypatch.setenv('WARP_ICONS_DIR', str(icons))
+    _stub_dual_env_trait(monkeypatch)
+
+    # Requested space icon isn't cached — fall back to the available variant.
+    p = cargo.ref_icon_path('Adaptive Offense', env='space')
+    assert p is not None
+    assert p.name == f'{quote_plus("Adaptive Offense (ground)")}.png'

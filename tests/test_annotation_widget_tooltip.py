@@ -31,10 +31,11 @@ def widget(monkeypatch, tmp_path):
     # instead of actually resolving/rendering an <img> tag.
     captured = {}
 
-    def _fake_tooltip_html(thumb, name, info_html):
+    def _fake_tooltip_html(thumb, name, info_html, env=None):
         captured["thumb"] = thumb
         captured["name"] = name
         captured["info_html"] = info_html
+        captured["env"] = env
         return info_html
 
     monkeypatch.setattr(aw, "_tooltip_html", _fake_tooltip_html)
@@ -105,7 +106,8 @@ def test_auto_confirmed_item_labelled_by_detector(widget):
 def test_tooltip_html_wraps_icon_when_present(monkeypatch):
     """_tooltip_html wraps info beside the icon in a 2-col table."""
     import warp.gui as gui
-    monkeypatch.setattr(gui, "_tooltip_icon_html", lambda thumb, name, size=48: "<img/>")
+    monkeypatch.setattr(gui, "_tooltip_icon_html",
+                        lambda thumb, name, size=48, env=None: "<img/>")
     out = gui._tooltip_html(None, "X", "<b>info</b>")
     assert "<table" in out and "<img/>" in out and "<b>info</b>" in out
 
@@ -113,6 +115,37 @@ def test_tooltip_html_wraps_icon_when_present(monkeypatch):
 def test_tooltip_html_falls_back_without_icon(monkeypatch):
     """No resolvable icon → plain info_html returned unwrapped."""
     import warp.gui as gui
-    monkeypatch.setattr(gui, "_tooltip_icon_html", lambda thumb, name, size=48: "")
+    monkeypatch.setattr(gui, "_tooltip_icon_html",
+                        lambda thumb, name, size=48, env=None: "")
     out = gui._tooltip_html(None, "", "<b>info</b>")
     assert out == "<b>info</b>"
+
+
+def test_env_for_slot_from_trait_slot_name():
+    """Trait slot names self-describe their environment."""
+    from warp.gui import env_for_slot
+    assert env_for_slot("Personal Space Traits") == "space"
+    assert env_for_slot("Personal Ground Traits") == "ground"
+    assert env_for_slot("Space Reputation") == "space"
+    assert env_for_slot("Ground Reputation") == "ground"
+    assert env_for_slot("Starship Traits") == "space"
+
+
+def test_env_for_slot_falls_back_to_build_type():
+    """Ambiguous slot → derive env from the build_type prefix."""
+    from warp.gui import env_for_slot
+    assert env_for_slot("Fore Weapons", "SPACE_EQ") == "space"
+    assert env_for_slot("Kit Modules", "GROUND_MIXED") == "ground"
+    assert env_for_slot("", "") is None
+
+
+def test_confirmed_trait_passes_env_to_tooltip(widget):
+    """A space trait row resolves its icon with env='space'."""
+    widget.set_review_items([
+        {"bbox": (0, 0, 10, 10), "state": "confirmed",
+         "name": "Adaptive Offense", "slot": "Personal Space Traits"},
+    ])
+
+    widget._show_hover_tooltip(0)
+
+    assert widget._captured["env"] == "space"

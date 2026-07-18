@@ -283,7 +283,9 @@ class _InteractiveCanvas(QWidget):
         info_html = (f'<b>{slot}</b><br>{it.name}'
                      f'<br>Confidence: <span style="color:{color}">{conf:.0%}</span>')
 
-        text = _tooltip_html(it.thumbnail, it.name, info_html)
+        from warp.gui import env_for_slot
+        text = _tooltip_html(it.thumbnail, it.name, info_html,
+                             env=env_for_slot(it.slot or ''))
 
         from PySide6.QtWidgets import QToolTip
         from PySide6.QtGui import QCursor
@@ -898,7 +900,9 @@ class ResultsView(QWidget):
                     _info = (f'<b>{_slot_disp}</b><br>{it.name}'
                              f'<br>Confidence: <span style="color:{_col}">'
                              f'{_conf:.0%}</span>{origin_badge}')
-                    _tip = _tooltip_html(it.thumbnail, it.name, _info)
+                    from warp.gui import env_for_slot
+                    _tip = _tooltip_html(it.thumbnail, it.name, _info,
+                                         env=env_for_slot(it.slot or ''))
                     child.setToolTip(2, _tip)
                 # Stash global index for canvas↔tree sync (col 0 UserRole)
                 # and the resolved screenshot path (col 2 UserRole — used

@@ -2217,8 +2217,8 @@ class WarpCoreWindow(QMainWindow):
         else:
             info_html = f'<b>{slot_disp}</b><br>No item recognised'
 
-        from warp.gui import _tooltip_html
-        tooltip = _tooltip_html(None, name, info_html)
+        from warp.gui import _tooltip_html, env_for_slot
+        tooltip = _tooltip_html(None, name, info_html, env=env_for_slot(slot))
         item.setToolTip(0, slot_disp)
         item.setToolTip(2, tooltip)
 

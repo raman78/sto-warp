@@ -641,7 +641,9 @@ class AnnotationWidget(QWidget):
         # confirmed name instead (matching the recognition-review tree tooltip)
         # so the hover preview reflects what the user actually confirmed.
         thumb = None if state == 'confirmed' else ri.get('thumb')
-        text = _tooltip_html(thumb, name, info_html)
+        from warp.gui import env_for_slot
+        env = env_for_slot(ri.get('slot', ''), getattr(self, '_build_type', ''))
+        text = _tooltip_html(thumb, name, info_html, env=env)
 
         from PySide6.QtWidgets import QToolTip
         from PySide6.QtGui import QCursor

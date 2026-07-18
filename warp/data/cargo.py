@@ -711,8 +711,15 @@ def _trait_icon_aliases() -> dict[str, list[str]]:
     return _bucketed('trait_icon_aliases', _build_trait_icon_aliases)
 
 
-def ref_icon_path(name: str) -> Path | None:
-    """Path to the local reference-icon PNG, or ``None`` if not cached."""
+def ref_icon_path(name: str, env: str | None = None) -> Path | None:
+    """Path to the local reference-icon PNG, or ``None`` if not cached.
+
+    A handful of traits share one display `name` across both environments
+    with *different* icons (e.g. 'Adaptive Offense' has 'Adaptive Offense
+    (space)' and 'Adaptive Offense (ground)'). When *env* ('space'/'ground')
+    is known, prefer the alias whose ``(env)`` suffix matches so a space
+    trait doesn't show the ground icon (and vice-versa).
+    """
     from urllib.parse import quote_plus
     d = icons_dir()
     p = d / f'{quote_plus(name)}.png'
@@ -721,7 +728,12 @@ def ref_icon_path(name: str) -> Path | None:
     # Traits are filed under `icon_name` (e.g. 'Hive Defenses (space)'),
     # not the display name — fall back to those variants so a confirmed
     # trait's icon still resolves in tooltips.
-    for alias in _trait_icon_aliases().get(name, ()):
+    aliases = list(_trait_icon_aliases().get(name, ()))
+    if env in ('space', 'ground'):
+        tag = f'({env})'
+        # env-matching aliases first, preserving relative order otherwise.
+        aliases.sort(key=lambda a: 0 if tag in a.lower() else 1)
+    for alias in aliases:
         ap = d / f'{quote_plus(alias)}.png'
         if ap.is_file():
             return ap
