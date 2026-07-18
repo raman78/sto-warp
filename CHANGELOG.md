@@ -10,6 +10,15 @@ details live in the git history.
 
 ## [Unreleased]
 
+### Added
+- **Skill-tree recognition (Space & Ground).** WARP now reads a Space or
+  Ground **Skill** screenshot and marks every skill node on the preview —
+  a **green** box for a trained node, **red** for an untrained or locked
+  one. The recognised skills are folded into **Export to SETS JSON**
+  (loadable in SETS via *File → Load Build*), so your skill tree carries
+  over alongside the rest of the build. Set a screenshot's type to *Space
+  Skills* / *Ground Skills* and press **Rerun Recognition** to see it.
+
 ### Fixed
 - Tooltips for traits that share a name across space and ground (for
   example, **Adaptive Offense** or **Adaptive Defense**) now show the icon

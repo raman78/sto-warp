@@ -493,6 +493,9 @@ class WarpWindow(QMainWindow):
         self._progress.finish()
         self._set_ship_banner(result)
         msg = f'{len(result.items)} items recognised'
+        skill_msg = self._skill_summary(result)
+        if skill_msg:
+            msg += '  ·  ' + skill_msg
         if result.errors:
             msg += f'  ·  {len(result.errors)} error(s)'
         self._summary_lbl.setText(msg)
@@ -648,6 +651,23 @@ class WarpWindow(QMainWindow):
             pass
         return f'detection_{date}'
 
+    @staticmethod
+    def _skill_summary(result: ImportResult) -> str:
+        """One-line recap of recognised skill trees (skills carry no items, so
+        the Results tree stays empty for skill screens — this is the only
+        on-screen confirmation before export)."""
+        from warp.recognition.skill_grid import skills_from_files
+        sk = skills_from_files(getattr(result, 'per_file_screen_type', {}) or {})
+        parts = []
+        if 'space_skills' in sk:
+            s = sk['space_skills']
+            parts.append('Space skills eng %d/sci %d/tac %d ON'
+                         % tuple(sum(s[c]) for c in ('eng', 'sci', 'tac')))
+        if 'ground_skills' in sk:
+            parts.append('Ground skills ON/tree %s'
+                         % [sum(t) for t in sk['ground_skills']])
+        return '  ·  '.join(parts)
+
     # ── Export ──────────────────────────────────────────────────────
 
     def _on_export_sets_json(self):
@@ -664,8 +684,14 @@ class WarpWindow(QMainWindow):
             from warp.build_writer import build_from_result
             from warp.sets_export import write_sets_build
             from warp.data.cargo import cache_view
+            from warp.recognition.skill_grid import skills_from_files
             cache = cache_view()
             build, report = build_from_result(self._result, cache=cache)
+            # Skill screens carry no items, so the pipeline skips them — fold
+            # any recognised skill trees into the build here (space_skills /
+            # ground_skills), keyed off the classifier's per-file screen type.
+            build.update(skills_from_files(
+                getattr(self._result, 'per_file_screen_type', {}) or {}))
             write_sets_build(build, path, cache=cache)
         except Exception as e:
             log.exception('SETS export failed')

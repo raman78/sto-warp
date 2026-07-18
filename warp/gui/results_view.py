@@ -126,6 +126,10 @@ class _InteractiveCanvas(QWidget):
         self._highlight_set: set[int] = set()
         self._hover_gidx:     int = -1
         self._hover_timer: object = None
+        # Skill-tree overlay: [(x, y, w, h, on), ...] in image coords. Drawn
+        # green (ON) / red (OFF) on top of the screenshot for skill screens,
+        # which carry no RecognisedItems.
+        self._skill_boxes: list = []
         self.setMinimumSize(200, 200)
         self.setMouseTracking(True)
         self.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
@@ -142,6 +146,7 @@ class _InteractiveCanvas(QWidget):
         self._items = list(items)
         self._gidx  = list(gidx)
         self._build_type = build_type or ''
+        self._skill_boxes = []
         self._scaled = None
         self._highlight_set = set()
         self._hover_gidx = -1
@@ -155,9 +160,15 @@ class _InteractiveCanvas(QWidget):
         self._items = []
         self._gidx  = []
         self._build_type = ''
+        self._skill_boxes = []
         self._highlight_set = set()
         self._hover_gidx = -1
         self._cancel_hover_timer()
+        self.update()
+
+    def set_skill_boxes(self, boxes: list) -> None:
+        """Set the skill-tree overlay ([(x, y, w, h, on)]) and repaint."""
+        self._skill_boxes = list(boxes)
         self.update()
 
     def set_highlight(self, gidx: int) -> None:
@@ -367,6 +378,16 @@ class _InteractiveCanvas(QWidget):
                 p.drawText(rx + 2, max(ry - 2, 10), conf_txt)
                 p.setPen(color)
                 p.drawText(rx + 2, max(ry - 2, 10), conf_txt)
+
+        # Skill-tree overlay — green (ON) / red (OFF) boxes for skill screens.
+        for (sx, sy, sw, sh, on) in self._skill_boxes:
+            rx = x0 + int(sx * self._scale)
+            ry = y0 + int(sy * self._scale)
+            rw = max(1, int(sw * self._scale))
+            rh = max(1, int(sh * self._scale))
+            p.setPen(QPen(QColor(0, 220, 0) if on else QColor(220, 40, 40), 2))
+            p.setBrush(Qt.BrushStyle.NoBrush)
+            p.drawRect(rx, ry, rw, rh)
 
         # Pass 2 — group labels (seat-aware).
         groups: list[dict] = []
@@ -787,7 +808,35 @@ class ResultsView(QWidget):
                 gidx.append(-1)
         self._canvas.set_image(Path(src), items, gidx,
                                self._overrides.get(src) or detected)
+        self._set_skill_overlay(src)
         self._apply_file_tint()
+
+    def _set_skill_overlay(self, src: str) -> None:
+        """Draw the skill grid (green ON / red OFF) for skill screens, which
+        carry no RecognisedItems.
+
+        Keyed off the *last recognition run's* screen type (`_stype_by_file`),
+        not the pending override — so, like every other screen, a type change
+        only takes effect after Rerun Recognition. Generic SKILLS is
+        disambiguated by grid aspect."""
+        stype = self._stype_by_file.get(src, '')
+        if stype not in ('SKILLS', 'SPACE_SKILLS', 'GROUND_SKILLS'):
+            self._canvas.set_skill_boxes([])
+            return
+        try:
+            import numpy as np
+            from PIL import Image
+            from warp.recognition import skill_grid
+            rgb = np.asarray(Image.open(src).convert('RGB'))
+            env = ('space' if stype == 'SPACE_SKILLS' else
+                   'ground' if stype == 'GROUND_SKILLS' else
+                   skill_grid.env_of(rgb))
+            boxes = skill_grid.detect_boxes(rgb, env) if env else []
+            self._canvas.set_skill_boxes(boxes)
+        except Exception as e:  # noqa: BLE001
+            from warp.debug import log
+            log.warning(f'ResultsView: skill overlay failed for {src}: {e}')
+            self._canvas.set_skill_boxes([])
 
     def _gidx_to_file_index(self, item: RecognisedItem) -> int:
         """Return the global ImportResult.items index for `item`.
