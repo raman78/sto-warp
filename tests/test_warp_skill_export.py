@@ -32,3 +32,16 @@ def test_skill_summary_reports_space_and_ground(tmp_path):
 def test_skill_summary_empty_without_skill_screens():
     result = SimpleNamespace(per_file_screen_type={'/x.png': 'SPACE_EQ'})
     assert WarpWindow._skill_summary(result) == ''
+
+
+def test_dup_warning_fires_on_two_same_env_skill_screens():
+    result = SimpleNamespace(per_file_screen_type={
+        '/a.png': 'SPACE_SKILLS', '/b.png': 'SPACE_SKILLS'})
+    msg = WarpWindow._skill_dup_warning(result)
+    assert '⚠' in msg and '2 space' in msg
+
+
+def test_dup_warning_silent_on_one_each():
+    result = SimpleNamespace(per_file_screen_type={
+        '/s.png': 'SPACE_SKILLS', '/g.png': 'GROUND_SKILLS'})
+    assert WarpWindow._skill_dup_warning(result) == ''

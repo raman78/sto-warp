@@ -57,11 +57,28 @@ configuration is needed — the translation happens behind the scenes.
 
 ### How many screenshots per folder
 
-**One build per folder.** Each folder is one import session. You can mix screen types freely:
+**One build per folder — and nothing else.** In WARP the folder you open *is*
+the build. You are pointing WARP at the place where that single build's
+screenshots live, and it treats **every** image it finds there as part of the
+same build. Keep unrelated captures out of that folder — a second build, random
+screenshots, or skill trees from another character will all be folded into the
+one result.
+
+As long as they all belong to that one build, you can mix screen types freely:
 
 - **Separate screens** — one screenshot per game tab. WARP identifies each screen type automatically.
 - **Mixed screen** — a single screenshot that combines multiple tabs (assembled view). WARP detects the layout automatically.
 - **Partial** — only some screens (e.g. equipment only, or traits only). Slots for missing screens are left empty.
+
+Tip: You can include a skill-tree screenshot too. WARP uses **one space tree and
+one ground tree** per build — if the folder holds more than one of either, only
+the first is used and the summary line shows a ⚠ warning so you know the extras
+were skipped.
+
+Warning: **WARP CORE is different — do not apply this rule there.** In WARP CORE
+the folder is a review library: a pile of screenshots you page through to check
+and correct recognition, and it may hold many unrelated captures from different
+builds and characters at once. "One build per folder" is a WARP rule only.
 
 ### Recommended folder structure
 
@@ -424,6 +441,11 @@ tab (run automatically when a folder is opened).
 ---
 
 ### Left panel — Screenshots list
+
+Note: Unlike WARP, this folder is **not** tied to a single build. It is a review
+library — it can hold as many screenshots as you like, from different builds and
+characters, and you page through them to check and correct recognition. The
+"one build per folder" rule from the WARP tab does not apply here.
 
 Above the list, a **Filter by filename…** field narrows the list in real time. Typing a few letters of a filename hides everything that does not match — useful when an import folder holds dozens of screenshots and only one needs revisiting. The little ✕ inside the field clears the filter.
 

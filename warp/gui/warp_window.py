@@ -496,6 +496,9 @@ class WarpWindow(QMainWindow):
         skill_msg = self._skill_summary(result)
         if skill_msg:
             msg += '  ·  ' + skill_msg
+        warn_msg = self._skill_dup_warning(result)
+        if warn_msg:
+            msg += '  ·  ' + warn_msg
         if result.errors:
             msg += f'  ·  {len(result.errors)} error(s)'
         self._summary_lbl.setText(msg)
@@ -667,6 +670,21 @@ class WarpWindow(QMainWindow):
             parts.append('Ground skills ON/tree %s'
                          % [sum(t) for t in sk['ground_skills']])
         return '  ·  '.join(parts)
+
+    @staticmethod
+    def _skill_dup_warning(result: ImportResult) -> str:
+        """Warn when the folder holds more than one skill screen for the same
+        environment. `skills_from_files` keeps only the first space and first
+        ground tree (filename order) and silently drops the rest, so surface
+        that the extra captures were ignored — otherwise the wrong tree can end
+        up in the export with no on-screen hint."""
+        from warp.recognition.skill_grid import skill_env_counts
+        counts = skill_env_counts(getattr(result, 'per_file_screen_type', {}) or {})
+        dupes = [f'{counts[env]} {env}' for env in ('space', 'ground')
+                 if counts.get(env, 0) > 1]
+        if not dupes:
+            return ''
+        return '⚠ ' + ', '.join(dupes) + ' skill screens — only the first used'
 
     # ── Export ──────────────────────────────────────────────────────
 

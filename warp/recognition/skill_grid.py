@@ -301,12 +301,36 @@ def env_of(rgb: np.ndarray) -> str | None:
 _SKILL_STYPES = ('SKILLS', 'SPACE_SKILLS', 'GROUND_SKILLS')
 
 
+def _resolve_env(path: str, stype: str) -> str | None:
+    """Environment ('space' / 'ground' / None) of a skill screen.
+
+    Cheap for the typed SPACE_SKILLS / GROUND_SKILLS screens; only a generic
+    SKILLS screen is opened (via :func:`env_of`) to guess from the node-grid
+    aspect. Shared by :func:`skills_from_files` and :func:`skill_env_counts`
+    so both agree on how a screen is classified.
+    """
+    if stype == 'SPACE_SKILLS':
+        return 'space'
+    if stype == 'GROUND_SKILLS':
+        return 'ground'
+    import numpy as _np
+    from PIL import Image
+    try:
+        rgb = _np.asarray(Image.open(path).convert('RGB'))
+    except Exception as e:  # noqa: BLE001
+        log.warning(f'SkillGrid: cannot read {path}: {e}')
+        return None
+    return env_of(rgb)
+
+
 def skills_from_files(typed_files: dict[str, str]) -> dict:
     """Recognise skill screens among *typed_files* ({path: screen_type}).
 
     Returns the SETS build fragments actually found — ``{'space_skills': ...}``
     and/or ``{'ground_skills': ...}``. Env comes from the screen type when it
-    is SPACE_SKILLS / GROUND_SKILLS, else from :func:`env_of`. Lets WARP fold
+    is SPACE_SKILLS / GROUND_SKILLS, else from :func:`env_of`. Only the first
+    space and first ground screen (dict/filename order) is used; extras are
+    dropped — see :func:`skill_env_counts` for the warning path. Lets WARP fold
     skills into its normal SETS-build export (the pipeline skips skill screens
     because they carry no items).
     """
@@ -317,15 +341,35 @@ def skills_from_files(typed_files: dict[str, str]) -> dict:
     for path, stype in typed_files.items():
         if stype not in _SKILL_STYPES:
             continue
+        env = _resolve_env(path, stype)
+        if not ((env == 'space' and 'space_skills' not in out)
+                or (env == 'ground' and 'ground_skills' not in out)):
+            continue
         try:
             rgb = _np.asarray(Image.open(path).convert('RGB'))
         except Exception as e:  # noqa: BLE001
             log.warning(f'SkillGrid: cannot read {path}: {e}')
             continue
-        env = ('space' if stype == 'SPACE_SKILLS' else
-               'ground' if stype == 'GROUND_SKILLS' else env_of(rgb))
-        if env == 'space' and 'space_skills' not in out:
+        if env == 'space':
             out['space_skills'] = detect_space(rgb)
-        elif env == 'ground' and 'ground_skills' not in out:
+        else:
             out['ground_skills'] = detect_ground(rgb)
     return out
+
+
+def skill_env_counts(typed_files: dict[str, str]) -> dict[str, int]:
+    """Count skill screens per environment: ``{'space': n, 'ground': n}``.
+
+    Mirrors :func:`skills_from_files`' env resolution. Lets the UI warn when a
+    folder holds more than one space (or ground) skill screen, since
+    :func:`skills_from_files` keeps only the first of each and silently drops
+    the rest.
+    """
+    counts = {'space': 0, 'ground': 0}
+    for path, stype in typed_files.items():
+        if stype not in _SKILL_STYPES:
+            continue
+        env = _resolve_env(path, stype)
+        if env in counts:
+            counts[env] += 1
+    return counts
