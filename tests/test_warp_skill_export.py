@@ -45,3 +45,14 @@ def test_dup_warning_silent_on_one_each():
     result = SimpleNamespace(per_file_screen_type={
         '/s.png': 'SPACE_SKILLS', '/g.png': 'GROUND_SKILLS'})
     assert WarpWindow._skill_dup_warning(result) == ''
+
+
+def test_summary_wraps_warning_in_gold_badge():
+    out = WarpWindow._compose_summary('5 items recognised', '⚠ 2 space', '')
+    assert '<span' in out and 'background:' in out and '2 space' in out
+
+
+def test_summary_plain_without_warning():
+    out = WarpWindow._compose_summary('5 items recognised', '', '1 error(s)')
+    assert out == '5 items recognised  ·  1 error(s)'
+    assert '<span' not in out

@@ -30,8 +30,9 @@ from warp.trainer.training_data      import (
     TEXT_LEARNING_SLOTS, VIRTUAL_ITEM_NAMES,
 )
 from warp.style import (
-    apply_dark_style, primary_btn_style, secondary_btn_style,
-    warning_btn_style, danger_btn_style, toggle_yellow_btn_style,
+    apply_dark_style, primary_btn_style, primary_toolbtn_style,
+    secondary_btn_style, warning_btn_style, danger_btn_style,
+    toggle_yellow_btn_style,
     accent_qss,
     ACCENT, FG, MFG, BG, MBG, LBG, BC, C_WARNING, C_SUCCESS, C_FAILURE,
 )
@@ -495,6 +496,13 @@ class WarpCoreWindow(QMainWindow):
             'Detect Screen Types', 'Re-classify screen types', self._on_detect_screen_types)
         self._action_auto_detect = act(
             'Auto-Detect Slots', 'Auto-detect icons', self._on_auto_detect)
+
+        # Heavy actions: gold background when enabled, gray when disabled —
+        # same read as the Export to SETS JSON button.
+        for a in (self._action_detect_screen_types, self._action_auto_detect):
+            w = tb.widgetForAction(a)
+            if w is not None:
+                w.setStyleSheet(primary_toolbtn_style())
 
     def _set_toolbar_actions_enabled(self, enabled: bool) -> None:
         """Toggle the four detect-relevant toolbar actions together.

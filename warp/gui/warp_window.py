@@ -29,7 +29,7 @@ from PySide6.QtWidgets import (
 from warp.gui.log_view import LogViewWidget
 from warp.gui.progress_bar import StatusProgressBar
 from warp.gui.results_view import ResultsView
-from warp.style import secondary_btn_style
+from warp.style import ACCENT, primary_btn_style, secondary_btn_style
 
 from warp.debug import log
 from warp.warp_importer import (
@@ -195,7 +195,7 @@ class WarpWindow(QMainWindow):
         # Re-runs the last detection without re-opening the file picker.
         # Disabled until the user opens at least one screenshot/folder.
         self._rerun_btn = QPushButton('Auto-Detect Slots', self)
-        self._rerun_btn.setStyleSheet(secondary_btn_style())
+        self._rerun_btn.setStyleSheet(primary_btn_style())
         self._rerun_btn.setToolTip(
             'Re-run detection on the most recently opened screenshot(s).')
         self._rerun_btn.setEnabled(False)
@@ -497,11 +497,9 @@ class WarpWindow(QMainWindow):
         if skill_msg:
             msg += '  ·  ' + skill_msg
         warn_msg = self._skill_dup_warning(result)
-        if warn_msg:
-            msg += '  ·  ' + warn_msg
-        if result.errors:
-            msg += f'  ·  {len(result.errors)} error(s)'
-        self._summary_lbl.setText(msg)
+        err_msg = f'{len(result.errors)} error(s)' if result.errors else ''
+        self._summary_lbl.setText(
+            self._compose_summary(msg, warn_msg, err_msg))
         self.statusBar().showMessage('Done.')
         self._results.set_export_enabled(True)
         self._set_controls_enabled(True)
@@ -685,6 +683,25 @@ class WarpWindow(QMainWindow):
         if not dupes:
             return ''
         return '⚠ ' + ', '.join(dupes) + ' skill screens — only the first used'
+
+    @staticmethod
+    def _compose_summary(base: str, warn: str, err: str) -> str:
+        """Build the summary-line text. When there is a duplicate-skill warning
+        it is rendered as a gold badge (rich text) so it stands out from the
+        neutral recap — matching the heavy-action buttons. With no warning the
+        line stays plain text."""
+        if not warn:
+            return base + (f'  ·  {err}' if err else '')
+        import html
+        badge = (
+            f'<span style="background:{ACCENT};color:#1a1a1a;'
+            f'padding:1px 6px;border-radius:3px;font-weight:bold;">'
+            f'{html.escape(warn)}</span>'
+        )
+        parts = [html.escape(base), badge]
+        if err:
+            parts.append(html.escape(err))
+        return '  ·  '.join(parts)
 
     # ── Export ──────────────────────────────────────────────────────
 

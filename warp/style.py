@@ -45,6 +45,19 @@ def primary_btn_style() -> str:
         f'QPushButton:disabled{{background:{LBG};color:{BC};border-color:{LBG};}}'
     )
 
+def primary_toolbtn_style() -> str:
+    """QToolButton variant of :func:`primary_btn_style` — gold when enabled,
+    gray when disabled. For toolbar QActions that should read as heavy actions
+    (matches the Export to SETS JSON button)."""
+    return (
+        f'QToolButton {{'
+        f'background:{ACCENT};color:#1a1a1a;'
+        f'border:1px solid {ACCENT};border-radius:3px;'
+        f'padding:5px 14px;font-weight:bold;}}'
+        f'QToolButton:hover{{background:#d4a030;}}'
+        f'QToolButton:disabled{{background:{LBG};color:{BC};border-color:{LBG};}}'
+    )
+
 def secondary_btn_style(checked_border: bool = False) -> str:
     """Regular button — transparent background, neutral gray border.
     Hover lifts to the accent color so the button still feels interactive
