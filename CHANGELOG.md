@@ -8,22 +8,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [Unreleased]
+## [1.0.25] — 2026-07-19
 
 ### Added
 - **Skill-tree recognition (Space & Ground).** WARP now reads a Space or
   Ground **Skill** screenshot and marks every skill node on the preview —
   a **green** box for a trained node, **red** for an untrained or locked
   one. The recognised skills are folded into **Export to SETS JSON**
-  (loadable in SETS via *File → Load Build*), so your skill tree carries
+  (loadable in SETS via *File → Load Build*), so the skill tree carries
   over alongside the rest of the build. Set a screenshot's type to *Space
   Skills* / *Ground Skills* and press **Rerun Recognition** to see it.
+  A folder is treated as one build, so only one Space and one Ground Skill
+  screenshot are used; if a folder holds more than one of either, only the
+  first is used and a gold warning in the summary line points out the
+  skipped screenshots.
+
+### Changed
+- The **Auto-Detect Slots** and **Detect Screen Types** buttons now use the
+  same gold highlight as **Export to SETS JSON** while they are available,
+  so the main actions stand out.
 
 ### Fixed
 - Tooltips for traits that share a name across space and ground (for
   example, **Adaptive Offense** or **Adaptive Defense**) now show the icon
   for the correct environment, instead of sometimes showing the other
   environment's icon.
+- Sharing screenshots with the community no longer fails when a screenshot
+  is unusually large — oversized images are skipped instead of aborting the
+  upload.
 
 ## [1.0.24] — 2026-07-16
 
