@@ -105,3 +105,47 @@ def test_raises_only_when_every_source_fails(bases, monkeypatch):
     monkeypatch.setattr(cargo.urllib.request, 'urlopen', fake_urlopen)
     with pytest.raises(RuntimeError, match='no source served'):
         cargo._fetch('traits.json')
+
+
+# --- content validation --------------------------------------------------
+
+def test_corrupt_body_falls_through_to_the_next_source(bases, monkeypatch):
+    """A 200 carrying an error page must not be cached as if it were data."""
+    primary, fallback = bases
+
+    def fake_urlopen(req, timeout=0):
+        if req.full_url.startswith(primary):
+            return _Resp(b'<html>504 Gateway Timeout</html>', '"e"')
+        return _Resp(b'[{"name": "real"}]', '"e2"')
+
+    monkeypatch.setattr(cargo.urllib.request, 'urlopen', fake_urlopen)
+    payload, _etag, base = cargo._fetch('traits.json')
+
+    assert base == fallback
+    assert b'real' in payload
+
+
+def test_empty_document_is_rejected(bases, monkeypatch):
+    primary, fallback = bases
+
+    def fake_urlopen(req, timeout=0):
+        if req.full_url.startswith(primary):
+            return _Resp(b'[]', '"e"')
+        return _Resp(b'[{"name": "real"}]', '"e2"')
+
+    monkeypatch.setattr(cargo.urllib.request, 'urlopen', fake_urlopen)
+    _payload, _etag, base = cargo._fetch('traits.json')
+    assert base == fallback
+
+
+def test_poisoned_cache_is_discarded_and_refetched(tmp_path, monkeypatch):
+    """A bad cache file must not wedge the app permanently."""
+    monkeypatch.setenv('WARP_CACHE_DIR', str(tmp_path))
+    monkeypatch.setattr(cargo, '_MEMO', {})
+    cached = tmp_path / 'traits.json'
+    cached.write_text('{ truncated', encoding='utf-8')
+
+    monkeypatch.setattr(cargo, '_fetch',
+                        lambda name, **kw: (b'[{"name": "fresh"}]', '"e"', 'src'))
+    assert cargo._load_raw('traits.json') == [{'name': 'fresh'}]
+    assert not cached.exists() or cached.read_text(encoding='utf-8') != '{ truncated'

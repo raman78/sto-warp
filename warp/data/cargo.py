@@ -160,6 +160,22 @@ def _write_meta(name: str, meta: dict) -> None:
         log.warning(f'cargo: cannot write meta for {name}: {exc}')
 
 
+def _assert_usable(name: str, payload: bytes) -> None:
+    """Raise unless `payload` is a non-empty JSON document.
+
+    A mirror can answer 200 with a truncated body or an error page. Without
+    this the bytes would be cached, and the failure would only surface later
+    as a parse error — with the cache already poisoned and the fallback source
+    never consulted.
+    """
+    try:
+        parsed = json.loads(payload.decode('utf-8'))
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError(f'{name} is not valid JSON ({exc})') from exc
+    if not isinstance(parsed, (list, dict)) or not parsed:
+        raise ValueError(f'{name} decoded to an empty or unexpected structure')
+
+
 def _fetch(name: str, *, etag: str | None = None,
            source: str | None = None) -> tuple[bytes | None, str | None, str]:
     """Download `name`, falling back through `UPSTREAM_BASES`.
@@ -179,12 +195,14 @@ def _fetch(name: str, *, etag: str | None = None,
             req.add_header('If-None-Match', etag)
         try:
             with urllib.request.urlopen(req, timeout=20) as resp:
-                return resp.read(), resp.headers.get('ETag'), base
+                payload = resp.read()
+            _assert_usable(name, payload)
+            return payload, resp.headers.get('ETag'), base
         except urllib.error.HTTPError as e:
             if e.code == 304:
                 return None, etag, base
             errors.append(f'{base}: HTTP {e.code}')
-        except Exception as exc:                      # transport-level failure
+        except Exception as exc:                      # transport or content
             errors.append(f'{base}: {exc}')
         log.warning(f'cargo: {name} unavailable from {base} — trying next source')
     raise RuntimeError(f'cargo: no source served {name} ({"; ".join(errors)})')
@@ -230,7 +248,19 @@ def _load_raw(name: str) -> Any:
         if name in _MEMO:
             return _MEMO[name]
         raw = _resolve_raw(name)
-        parsed = json.loads(raw.decode('utf-8'))
+        try:
+            parsed = json.loads(raw.decode('utf-8'))
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            # A cache file written before this was validated — or damaged on
+            # disk — would otherwise fail here on every run forever. Drop it
+            # and resolve once more, which re-fetches and revalidates.
+            log.warning(f'cargo: cached {name} is unreadable ({exc}); '
+                        f'discarding and refetching')
+            try:
+                (_cache_dir() / name).unlink(missing_ok=True)
+            except OSError:
+                pass
+            parsed = json.loads(_resolve_raw(name).decode('utf-8'))
         _MEMO[name] = parsed
         return parsed
 
