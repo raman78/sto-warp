@@ -170,9 +170,12 @@ wheel under `warp/data/baseline/`. Loader precedence:
 > (`meta['source']`), since replaying one server's ETag at another risks a
 > 304 that strands the cache on the wrong mirror's bytes.
 
-Snapshot is updated by maintainer via a make-snapshot script that
-pulls current STOCD/SETS-Data and copies the four files into the
-package source. Refresh cadence: per minor release.
+Snapshot is updated by the maintainer via `warp/tools/make_baseline.py`,
+which walks the same `UPSTREAM_BASES` chain as the runtime loader. Refresh
+cadence: per minor release — but **not** while upstream is known to be
+missing data. A snapshot is the one copy a user without network ever sees,
+so it refuses to write a file that came back materially smaller than the
+committed one (`--allow-shrink` overrides).
 
 ## Open questions
 
