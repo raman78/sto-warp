@@ -8,25 +8,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [Unreleased]
+## [1.0.26] — 2026-08-11
 
 ### Changed
-- **Item data now comes from a mirror we refresh ourselves.** WARP reads its
-  equipment, trait, ship and bridge-officer lists from a copy of the STO Wiki
-  that is rebuilt every 8 hours, instead of waiting for the community data
-  repository to be updated by hand. In practice this means an item that
-  appears on the wiki shows up in WARP the same day rather than whenever the
-  next manual refresh happens — and when something goes missing, it can be
-  put right without waiting on anyone else. The community repository is still
-  used automatically if the new one is ever unreachable, so nothing breaks
-  either way.
+- **Item data now comes from a mirror that refreshes itself every 8 hours.**
+  WARP reads its equipment, trait, ship and bridge-officer lists from a copy
+  of the STO Wiki that is rebuilt automatically, instead of waiting for the
+  community data repository to be updated by hand. An item that appears on
+  the wiki now shows up in WARP the same day rather than whenever the next
+  manual refresh happens, and a missing item can be put right without waiting
+  on anyone else. The community repository is still used automatically if the
+  new one is ever unreachable, so nothing breaks either way.
 
 ### Fixed
 - **A broken download can no longer leave WARP stuck.** If a reference-data
   file arrived damaged or incomplete, WARP used to save it anyway and then
   fail to read it — on that run and on every run afterwards, until the file
   was deleted by hand. Downloads are now checked before they are saved, and a
-  damaged one is simply skipped in favour of the backup source.
+  damaged one is skipped in favour of the backup source.
 
 ## [1.0.25] — 2026-07-19
 
