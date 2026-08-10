@@ -135,7 +135,8 @@ sto-warp/
 Runtime artefacts (downloaded at first run, never committed):
 
 - `warp/models/` — `icon_classifier.pt`, `screen_classifier.pt`, label maps
-- `warp/data/` — cargo / icon DB (fetched from `STOCD/SETS-Data` GitHub raw)
+- `warp/data/` — cargo DB (from `raman78/warp-cargo-data`, `STOCD/SETS-Data`
+  as fallback) and the icon DB (still `STOCD/SETS-Data`)
 - `~/.config/warp/` — user-local cache (knowledge.json, install_id, logs)
 
 ---

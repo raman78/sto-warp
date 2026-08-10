@@ -1,7 +1,8 @@
 # Cargo data loader — design note
 
 **Status:** **implemented** since sto-warp 1.0.0. Live as `warp/data/cargo.py`
-fetching from `STOCD/SETS-Data` GitHub raw URLs into `~/.config/warp/cache/`,
+fetching into `~/.config/warp/cache/` — originally from `STOCD/SETS-Data`,
+since August 2026 from `raman78/warp-cargo-data` with SETS-Data as fallback,
 driven by the splash + 60 min refresh cycle described in
 [`SYNC_ARCHITECTURE.md`](SYNC_ARCHITECTURE.md). This document records the
 *why* of that choice; the runtime details live in the sync doc.
@@ -74,7 +75,8 @@ needs its own loader that:
 
 ## Source
 
-Public mirror maintained by the SETS community:
+Public mirror maintained by the SETS community (as of August 2026 the
+fallback rather than the primary — see the update under *Offline fallback*):
 
 ```
 https://raw.githubusercontent.com/STOCD/SETS-Data/main/<file>.json

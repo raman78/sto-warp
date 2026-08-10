@@ -21,6 +21,13 @@ details live in the git history.
   used automatically if the new one is ever unreachable, so nothing breaks
   either way.
 
+### Fixed
+- **A broken download can no longer leave WARP stuck.** If a reference-data
+  file arrived damaged or incomplete, WARP used to save it anyway and then
+  fail to read it — on that run and on every run afterwards, until the file
+  was deleted by hand. Downloads are now checked before they are saved, and a
+  damaged one is simply skipped in favour of the backup source.
+
 ## [1.0.25] — 2026-07-19
 
 ### Added
