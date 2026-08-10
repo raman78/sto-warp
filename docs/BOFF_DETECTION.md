@@ -1,6 +1,6 @@
 # BOFF panel detection
 
-Prototype: `tests/diag_boff_markers.py`. The detector localises the BOFF
+Prototype: `dev/diag_boff_markers.py`. The detector localises the BOFF
 panel on STO screenshots by finding the small profession-coloured bars
 that sit on the LEFT of every seat's name strip (just below the row of
 ability icons). It does NOT depend on the icons themselves, so it is
@@ -17,7 +17,7 @@ production `SETSIconMatcher.classify_patch()` (EfficientNet-B0):
 **99.8% bucket accuracy on real abilities, 94.9% exact-name**, but
 `__inactive__` is misclassified as `__empty__` ~96% of the time
 (see "Slot content classification" below). Diagnostic:
-`tests/diag_boff_classify.py`.
+`dev/diag_boff_classify.py`.
 
 ## Why colour markers (not OCR / icon templates)
 
@@ -168,7 +168,7 @@ slot_h      = round(med_marker_h / 0.63)           # empirical Y
 slot_y      = marker.y - slot_h - round(0.20 * med_marker_h)
 ```
 
-**Empirical scale validation** (36 GT screens, `tests/diag_marker_scale.py`):
+**Empirical scale validation** (36 GT screens, `dev/diag_marker_scale.py`):
 detected `marker_w` clusters in 11 discrete buckets between 24 and
 43 px while `marker_w / image_w` varies 5×. STO renders UI at a
 **user-configurable discrete scale** (set in-game), independent of

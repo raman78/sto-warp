@@ -32,7 +32,7 @@ Algorithm prototype + 2026-04-30 baseline (36 GT screens):
   - Slot IoU≥.70:  96.0%
 
 Algorithm reference: docs/BOFF_DETECTION.md.
-Diagnostic prototype:  tests/diag_boff_markers.py.
+Diagnostic prototype:  dev/diag_boff_markers.py.
 """
 from __future__ import annotations
 

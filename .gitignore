@@ -44,15 +44,11 @@ warp/knowledge/rate_limit.json
 warp/hub_token.txt
 warp/training_data/
 
-# Local-only developer diagnostics — keep .py scripts under tests/_*/
-# tracked, but ignore everything they generate (PNG/JPG/TXT/LOG/etc).
-tests/_*/**
-!tests/_*/**/
-!tests/_*/**/*.py
-
-# Local-only ad-hoc probes / benchmarks — not part of the test suite
-# (see CLAUDE.md "Diagnostic scripts"). Never committed.
-tests/diag_*.py
+# Local-only developer work: ad-hoc probes, benchmarks, proofs of concept and
+# whatever they generate. `tests/` is reserved for validation tests that assert
+# the program behaves correctly; exploratory code lives here and never ships.
+# See CLAUDE.md "Diagnostic scripts".
+dev/
 
 # Maintainer review tools — superseded by the democratic merger cron,
 # kept locally for emergency one-shot use.

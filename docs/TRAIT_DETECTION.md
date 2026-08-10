@@ -1,7 +1,7 @@
 # Trait panel detection
 
 Production module: `warp/recognition/trait_grid.py`. Prototype kept for
-measurement: `tests/diag_trait_detector_v1.py`. The detector localises
+measurement: `dev/diag_trait_detector_v1.py`. The detector localises
 trait icon panels (Personal/Starship/Reputation/Active Reputation) on
 STO screenshots by finding consistent-spacing icon grids in the image,
 then asking the icon classifier which section each row-group belongs to.
@@ -156,7 +156,7 @@ without prior assumptions about section position.
 
 ## Diagnostics
 
-`tests/diag_trait_detector_v1.py` is the prototype kept for
+`dev/diag_trait_detector_v1.py` is the prototype kept for
 end-to-end measurement against the GT corpus. It mirrors the
 production algorithm 1:1; on the same 59-screen corpus it returns the
 same 91.5% IoU≥30 / 91.0% slot OK as the production module.

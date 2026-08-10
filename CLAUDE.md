@@ -85,12 +85,19 @@ Run the suite: `python -m pytest tests/ -v`
 
 ---
 
-## Diagnostic scripts (`tests/diag_*.py`)
+## Diagnostic scripts (`dev/`)
 
-These are **local-only developer benchmarks / ad-hoc probes** — ignored by
-git (`tests/diag_*.py` in `.gitignore`) and not part of the test suite.
-References to specific `diag_*.py` paths in docs/memory are for on-disk
-reproduction by the maintainer, not a guarantee the file is in the repo.
+`tests/` holds **validation tests only** — code that asserts the program
+behaves correctly, and that is expected to pass. Nothing else belongs there.
+
+Benchmarks, ad-hoc probes, proofs of concept and one-off calibration scripts
+live in **`dev/`**, which is ignored by git in its entirety. They are the
+maintainer's local working set: never committed, never run by CI, free to be
+messy or broken.
+
+References to specific `dev/*.py` paths in docs, code comments or memory are
+for on-disk reproduction by the maintainer, not a guarantee the file exists in
+any checkout.
 
 ---
 
