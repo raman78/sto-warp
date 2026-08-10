@@ -149,9 +149,18 @@ Ship a small frozen snapshot of the four required files inside the
 wheel under `warp/data/baseline/`. Loader precedence:
 
 1. `~/.config/warp/cache/<file>.json` if present.
-2. Else: fetch from STOCD/SETS-Data raw, write to cache, use.
+2. Else: fetch from the first upstream that answers, write to cache, use.
 3. Else (no network on first run): copy `warp/data/baseline/<file>.json`
    to cache, log a warning that data is stale.
+
+> **Update (August 2026).** Step 2 now walks `UPSTREAM_BASES`:
+> `raman78/warp-cargo-data` first, `STOCD/SETS-Data` as fallback. The move
+> followed a regression where valid items silently disappeared from the
+> community mirror and there was no way to fix it on our own schedule. The
+> two were verified interchangeable by building every cache from each source
+> and diffing all 47 buckets. Each source's ETag is tracked separately
+> (`meta['source']`), since replaying one server's ETag at another risks a
+> 304 that strands the cache on the wrong mirror's bytes.
 
 Snapshot is updated by maintainer via a make-snapshot script that
 pulls current STOCD/SETS-Data and copies the four files into the

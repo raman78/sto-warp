@@ -35,7 +35,18 @@ from warp.debug import syslog as log
 
 # --- constants ----------------------------------------------------------
 
-UPSTREAM_BASE = 'https://raw.githubusercontent.com/STOCD/SETS-Data/main/cargo'
+# Data sources, tried in order. The first is our own mirror, refreshed from
+# the wiki every 8 hours; the second is the community mirror, kept as a
+# fallback for the day ours is broken or unreachable. Both are byte-compatible
+# supersets of what the builders below need — verified by building every cache
+# from each source and diffing all 47 buckets.
+UPSTREAM_BASES: tuple[str, ...] = (
+    'https://raw.githubusercontent.com/raman78/warp-cargo-data/main/cargo',
+    'https://raw.githubusercontent.com/STOCD/SETS-Data/main/cargo',
+)
+
+# Kept for callers that only care about the primary source.
+UPSTREAM_BASE = UPSTREAM_BASES[0]
 
 # Raw filename → bucketed cache key handled by this module.
 RAW_FILES: tuple[str, ...] = (
@@ -149,22 +160,34 @@ def _write_meta(name: str, meta: dict) -> None:
         log.warning(f'cargo: cannot write meta for {name}: {exc}')
 
 
-def _fetch(name: str, *, etag: str | None = None) -> tuple[bytes | None, str | None]:
-    """Download `name`. Returns (bytes_or_None, etag_or_None).
+def _fetch(name: str, *, etag: str | None = None,
+           source: str | None = None) -> tuple[bytes | None, str | None, str]:
+    """Download `name`, falling back through `UPSTREAM_BASES`.
 
-    Returns (None, etag) on HTTP 304. Raises on transport errors.
+    Returns (bytes_or_None, etag_or_None, base_it_came_from); the payload is
+    None on HTTP 304. Raises only if every source failed.
+
+    `source` is the base the caller's `etag` was issued by. An ETag is
+    meaningless to a different server, so it is only replayed against its own
+    source — otherwise a fallback could answer 304 and leave us with the
+    other mirror's stale bytes.
     """
-    url = f'{UPSTREAM_BASE}/{name}'
-    req = urllib.request.Request(url)
-    if etag:
-        req.add_header('If-None-Match', etag)
-    try:
-        with urllib.request.urlopen(req, timeout=20) as resp:
-            return resp.read(), resp.headers.get('ETag')
-    except urllib.error.HTTPError as e:
-        if e.code == 304:
-            return None, etag
-        raise
+    errors: list[str] = []
+    for base in UPSTREAM_BASES:
+        req = urllib.request.Request(f'{base}/{name}')
+        if etag and source == base:
+            req.add_header('If-None-Match', etag)
+        try:
+            with urllib.request.urlopen(req, timeout=20) as resp:
+                return resp.read(), resp.headers.get('ETag'), base
+        except urllib.error.HTTPError as e:
+            if e.code == 304:
+                return None, etag, base
+            errors.append(f'{base}: HTTP {e.code}')
+        except Exception as exc:                      # transport-level failure
+            errors.append(f'{base}: {exc}')
+        log.warning(f'cargo: {name} unavailable from {base} — trying next source')
+    raise RuntimeError(f'cargo: no source served {name} ({"; ".join(errors)})')
 
 
 def _resolve_raw(name: str) -> bytes:
@@ -181,12 +204,13 @@ def _resolve_raw(name: str) -> bytes:
 
     # No cache yet — try live fetch.
     try:
-        payload, etag = _fetch(name)
+        payload, etag, base = _fetch(name)
         if payload is not None:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_bytes(payload)
-            _write_meta(name, {'etag': etag, 'fetched_at': int(time.time())})
-            log.info(f'cargo: fetched {name} ({len(payload)} B) from STOCD/SETS-Data')
+            _write_meta(name, {'etag': etag, 'fetched_at': int(time.time()),
+                               'source': base})
+            log.info(f'cargo: fetched {name} ({len(payload)} B) from {base}')
             return payload
     except Exception as exc:
         log.warning(f'cargo: live fetch of {name} failed ({exc}); falling back to baseline')
@@ -244,7 +268,8 @@ def _refresh_loop(names: Iterable[str], force: bool) -> None:
                 continue
         etag = None if force else meta.get('etag')
         try:
-            payload, new_etag = _fetch(name, etag=etag)
+            payload, new_etag, base = _fetch(name, etag=etag,
+                                             source=meta.get('source'))
         except Exception as exc:
             log.warning(f'cargo.refresh: {name} failed: {exc}')
             continue
@@ -255,8 +280,9 @@ def _refresh_loop(names: Iterable[str], force: bool) -> None:
         try:
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_bytes(payload)
-            _write_meta(name, {'etag': new_etag, 'fetched_at': now})
-            log.info(f'cargo.refresh: {name} updated ({len(payload)} B)')
+            _write_meta(name, {'etag': new_etag, 'fetched_at': now,
+                               'source': base})
+            log.info(f'cargo.refresh: {name} updated ({len(payload)} B) from {base}')
         except Exception as exc:
             log.warning(f'cargo.refresh: cannot write {name}: {exc}')
             continue

@@ -50,8 +50,11 @@ On first run sto-warp downloads:
 
 - ML models (`icon_classifier.pt`, `screen_classifier.pt`) from the
   Hugging Face hub.
-- Cargo / ship / trait JSON from the community
-  [`STOCD/SETS-Data`](https://github.com/STOCD/SETS-Data) repository.
+- Cargo / ship / trait JSON from
+  [`raman78/warp-cargo-data`](https://github.com/raman78/warp-cargo-data),
+  a mirror of the STO Wiki refreshed every 8 hours, falling back to the
+  community [`STOCD/SETS-Data`](https://github.com/STOCD/SETS-Data)
+  repository if it is unavailable.
 - Community knowledge (`knowledge.json`), admin icon equivalence map,
   and a seed tarball of confirmed crops.
 

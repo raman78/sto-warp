@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [Unreleased]
+
+### Changed
+- **Item data now comes from a mirror we refresh ourselves.** WARP reads its
+  equipment, trait, ship and bridge-officer lists from a copy of the STO Wiki
+  that is rebuilt every 8 hours, instead of waiting for the community data
+  repository to be updated by hand. In practice this means an item that
+  appears on the wiki shows up in WARP the same day rather than whenever the
+  next manual refresh happens — and when something goes missing, it can be
+  put right without waiting on anyone else. The community repository is still
+  used automatically if the new one is ever unreachable, so nothing breaks
+  either way.
+
 ## [1.0.25] — 2026-07-19
 
 ### Added

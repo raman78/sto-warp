@@ -167,9 +167,14 @@ modes intended for the planner are:
 
 Data origins consumed by sto-warp itself:
 
-- **`STOCD/SETS-Data`** (GitHub raw) — `equipment.json`, `traits.json`,
-  `ships.json`, `boff_abilities.json`, item icon mirror, ship images.
-  No live stowiki dependency.
+- **`raman78/warp-cargo-data`** (GitHub raw, primary) — `equipment.json`,
+  `traits.json`, `ship_list.json`, `starship_traits.json`,
+  `boff_abilities.json`. Mirrors the stowiki cargo tables every 8 h and
+  carries every field each table defines, so it is a superset of the
+  community mirror.
+- **`STOCD/SETS-Data`** (GitHub raw, fallback) — same files, plus the item
+  icon mirror and ship images, which are still sourced from here.
+  No live stowiki dependency in either case.
 - **sto-warp Space backend** (HF Spaces) — `/knowledge`,
   `/model/version`, contribution endpoints. Holds the only HF write
   token; the client is read-only against HF.

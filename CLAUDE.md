@@ -154,8 +154,17 @@ All WARP CORE logs are prefixed with context (e.g. `WarpImporter:`,
 
 ## Data sources (no SETS dependency)
 
-Cargo and reference data are fetched from the community SETS-Data GitHub
-mirror (`STOCD/SETS-Data`) on first run and cached locally:
+Cargo and reference data are fetched on first run and cached locally. Two
+sources are tried in order (`UPSTREAM_BASES` in `warp/data/cargo.py`):
+
+1. **`raman78/warp-cargo-data`** — our own mirror of the stowiki cargo
+   tables, refreshed every 8 h. A superset of the fields SETS-Data carries.
+2. **`STOCD/SETS-Data`** — the community mirror, kept as a fallback.
+
+Both were verified byte-compatible for every builder in this module by
+building all caches from each source and diffing all 47 buckets. An ETag is
+only replayed against the source that issued it, so a fallback cannot answer
+304 with the other mirror's bytes.
 
 | File | Purpose |
 |---|---|
