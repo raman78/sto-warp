@@ -75,7 +75,7 @@ sto-warp/
     ├── data/               # cargo + asset sync — see docs/SYNC_ARCHITECTURE.md, docs/CARGO_DATA_PLAN.md
     ├── sync/               # (reserved for future sync utilities)
     ├── gui/                # launcher, cold-start splash, sync coordinator, log view
-    ├── tools/              # developer utilities (scrapers, validators)
+    ├── tools/              # maintainer utilities (baseline snapshot, validators)
     ├── models/             # downloaded at runtime — icon/screen classifiers (.pt + labels)
     ├── resources/          # bundled icons / themes
     ├── training_data/      # local training crops & annotations (user-local)
@@ -114,18 +114,20 @@ internals of each area, the canonical references are:
 | [`docs/BOFF_DETECTION.md`](docs/BOFF_DETECTION.md)                        | BOFF panel detection — colour markers + classifier                              |
 | [`docs/TRAIT_DETECTION.md`](docs/TRAIT_DETECTION.md)                      | Trait grid detection — structure-first, ML probe per section                    |
 | [`docs/sto_slots_rules.md`](docs/sto_slots_rules.md)                      | STO slot rules + how WARP enforces (or doesn't) each constraint                 |
-| [`docs/CARGO_DATA_PLAN.md`](docs/CARGO_DATA_PLAN.md)                      | Cargo-data sourcing rationale (STOCD/SETS-Data over local scraper)              |
+| [`docs/CARGO_DATA_PLAN.md`](docs/CARGO_DATA_PLAN.md)                      | Cargo-data sourcing: why upstream mirrors over a local scraper, source order, baseline snapshot |
 | [`docs/REMOTE_SYNC_AUDIT.md`](docs/REMOTE_SYNC_AUDIT.md)                  | Backend/HF capacity audit, channels in use, scaling headroom                    |
 | [`docs/data_source_audit.md`](docs/data_source_audit.md)                  | Full data-flow audit (HF dataset structure, virtual classes, governance Zs)     |
 | [`docs/client_user_view_filter.md`](docs/client_user_view_filter.md)      | Client-side filter map for virtual classes (`__empty__`, `__inactive__`, …)     |
 | [`docs/FAST_CORRECTION_MODE.md`](docs/FAST_CORRECTION_MODE.md)            | Fast Correction Mode internals: staging, ephemeral annotations, send-back loop  |
 | [`docs/gpu_setup.md`](docs/gpu_setup.md)                                  | Optional CUDA setup (embedder retraining only — most users don't need this)     |
+| [`docs/DATA_LIFECYCLE.md`](docs/DATA_LIFECYCLE.md)                        | A confirmed crop's path from WARP CORE to a delivered model: upload channels, staging split, mergers, drain |
 
 ### Repository rules
 
 | Document                                                                  | Purpose                                                                         |
 |---------------------------------------------------------------------------|---------------------------------------------------------------------------------|
 | [`CLAUDE.md`](CLAUDE.md)                                                  | Core architectural rule, language rules, logging conventions, repo discipline   |
+| [`docs/RELEASE_HOWTO.md`](docs/RELEASE_HOWTO.md)                          | Cutting a release: baseline-snapshot decision, changelog rules, merge/tag/publish, verification |
 
 ---
 
