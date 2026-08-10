@@ -12,7 +12,12 @@ scraper.py`.
 
 ## Why not the existing `item_db.json` scraper
 
-`warp/tools/scraper.py` builds a single consolidated `item_db.json` from
+> The scraper described below was **deleted in August 2026**, once it was
+> clear nothing had ever read its output and its wiki endpoints had gone
+> behind Cloudflare. It is preserved in git history; this section stays as
+> the record of why the decision went the other way.
+
+`warp/tools/scraper.py` built a single consolidated `item_db.json` from
 SETS cargo + vger.stobuilds.com + optional GitHub mirror. It works and
 the file is already on disk in sets-warp — but recognition has never
 read it (audit 2026-05-17: zero callers in `warp/recognition/`,
@@ -30,8 +35,9 @@ Rejected because:
   metadata) is not consumed by recognition. Maintenance cost for data
   nobody reads.
 
-The scraper stays in `warp/tools/` as a power-user tool for offline
-enriched DB builds — secondary path, not the default.
+The scraper was kept in `warp/tools/` for a while as a power-user tool for
+offline enriched DB builds, then removed: it shipped to every user in the
+wheel, nothing called it, and its wiki endpoints stopped answering.
 
 ## What we get from cargo vs HF
 

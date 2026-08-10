@@ -348,7 +348,7 @@ SLOT_SPECS = {
 EXPERIMENTAL_TYPES = frozenset({'Experimental Weapon'})
 
 # Maps slot name → set of valid item 'type' values from cache
-# Exact type strings come from scraper.py EQUIPMENT_TYPES keys
+# Exact type strings come from `warp.data.cargo.EQUIPMENT_TYPES` keys
 SLOT_VALID_TYPES: dict[str, frozenset] = {
     'Fore Weapons':          frozenset({'Ship Fore Weapon', 'Ship Weapon', 'Experimental Weapon'}),
     'Aft Weapons':           frozenset({'Ship Aft Weapon', 'Ship Weapon', 'Experimental Weapon'}),
