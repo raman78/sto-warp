@@ -10,16 +10,6 @@ details live in the git history.
 
 ## [1.0.26] — 2026-08-11
 
-### Changed
-- **Item data now comes from a mirror that refreshes itself every 8 hours.**
-  WARP reads its equipment, trait, ship and bridge-officer lists from a copy
-  of the STO Wiki that is rebuilt automatically, instead of waiting for the
-  community data repository to be updated by hand. An item that appears on
-  the wiki now shows up in WARP the same day rather than whenever the next
-  manual refresh happens, and a missing item can be put right without waiting
-  on anyone else. The community repository is still used automatically if the
-  new one is ever unreachable, so nothing breaks either way.
-
 ### Fixed
 - **A broken download can no longer leave WARP stuck.** If a reference-data
   file arrived damaged or incomplete, WARP used to save it anyway and then

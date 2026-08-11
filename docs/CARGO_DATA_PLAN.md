@@ -169,6 +169,17 @@ wheel under `warp/data/baseline/`. Loader precedence:
 > and diffing all 47 buckets. Each source's ETag is tracked separately
 > (`meta['source']`), since replaying one server's ETag at another risks a
 > 304 that strands the cache on the wrong mirror's bytes.
+>
+> **What this does not buy (recorded 2026-08-11).** The mirror is refreshed
+> by a browser-backed fetcher the maintainer runs manually — it needs a
+> desktop session, steals focus while it works, and does not run when the
+> machine is off. So it is a stop-gap for stowiki being unreachable behind
+> Cloudflare, *not* the always-available cargo endpoint the availability
+> problem actually calls for. It was announced to users in the 1.0.26
+> release notes as a mirror "that refreshes itself every 8 hours"; that
+> claim was unsupported and has been withdrawn from CHANGELOG, README and
+> the published release. Do not re-announce the mirror as a user-facing
+> feature until its refresh runs without the maintainer's workstation.
 
 Snapshot is updated by the maintainer via `warp/tools/make_baseline.py`,
 which walks the same `UPSTREAM_BASES` chain as the runtime loader. Refresh

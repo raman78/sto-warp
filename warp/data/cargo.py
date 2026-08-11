@@ -35,9 +35,10 @@ from warp.debug import syslog as log
 
 # --- constants ----------------------------------------------------------
 
-# Data sources, tried in order. The first is our own mirror, refreshed from
-# the wiki every 8 hours; the second is the community mirror, kept as a
-# fallback for the day ours is broken or unreachable. Both are byte-compatible
+# Data sources, tried in order. The first is our own mirror of the wiki,
+# rebuilt by hand and on no fixed schedule; the second is the community
+# mirror, kept as a fallback for the day ours is broken, stale or
+# unreachable. Neither is guaranteed fresh. Both are byte-compatible
 # supersets of what the builders below need — verified by building every cache
 # from each source and diffing all 47 buckets.
 UPSTREAM_BASES: tuple[str, ...] = (

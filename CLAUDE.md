@@ -166,8 +166,13 @@ Cargo and reference data are fetched on first run and cached locally. Two
 sources are tried in order (`UPSTREAM_BASES` in `warp/data/cargo.py`):
 
 1. **`raman78/warp-cargo-data`** — our own mirror of the stowiki cargo
-   tables, refreshed every 8 h. A superset of the fields SETS-Data carries.
+   tables. A superset of the fields SETS-Data carries.
 2. **`STOCD/SETS-Data`** — the community mirror, kept as a fallback.
+
+The mirror is **not** on an automatic schedule: it is rebuilt best-effort by
+the maintainer, by hand, on a machine that has to be switched on. Treat its
+freshness as "usually no worse than the fallback", never as a guarantee, and
+do not describe it to users as self-refreshing.
 
 Both were verified byte-compatible for every builder in this module by
 building all caches from each source and diffing all 47 buckets. An ETag is
