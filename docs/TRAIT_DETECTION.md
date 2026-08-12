@@ -7,6 +7,12 @@ STO screenshots by finding consistent-spacing icon grids in the image,
 then asking the icon classifier which section each row-group belongs to.
 It does NOT rely on canonical section ordering or OCR headers.
 
+> **`dev/` is the maintainer's local working set** — gitignored in its
+> entirety and absent from a checkout. Every `dev/*.py` path in this
+> document is a reproduction pointer for whoever has the corpus on disk,
+> not a script you can run from the repo. The measurements themselves are
+> quoted inline, so nothing here depends on having those files.
+
 Measured baseline (59 GT screens, 1129 trait bboxes):
 **IoU≥.30 91.5%, slot OK 91.0%**, with PGT 100%, PST 95.9%, ST 88.4%,
 ASR 93.3%, AGR 73.3%, GR 88.6%, SR 79.0%.

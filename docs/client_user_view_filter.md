@@ -9,6 +9,11 @@
 > (komentowanie filtra na *wejściu* w `sync_client.py:434-436`).
 >
 > Status: closure dla Z5 — pokrycie input (D-A.1) + output (ten dokument).
+>
+> **`dev/`** to lokalny warsztat maintainera — katalog jest w całości
+> w `.gitignore` i nie ma go w checkoutcie. Ścieżki `dev/*.py` w tym
+> dokumencie są wskaźnikami do odtworzenia pomiaru, nie skryptami do
+> uruchomienia z repo.
 
 ---
 

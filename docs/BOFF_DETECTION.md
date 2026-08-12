@@ -6,6 +6,11 @@ that sit on the LEFT of every seat's name strip (just below the row of
 ability icons). It does NOT depend on the icons themselves, so it is
 robust to empty/inactive slots and to text-rendering changes.
 
+> **`dev/` is the maintainer's local working set** — gitignored in its
+> entirety and absent from a checkout. Every `dev/*.py` path in this
+> document is a reproduction pointer for whoever has the corpus on disk,
+> not a script you can run from the repo.
+
 Latest baseline (36 GT screens, 185 seats): **98.9% seat hit, 100%
 panel anchor**, 60/167 markers also enriched with a specialization
 code via the post-hoc stripe classifier.
