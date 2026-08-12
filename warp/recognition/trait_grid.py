@@ -244,7 +244,40 @@ def _lock_grids_multi(row_groups, max_panels=4):
             'y_top': int(y_top),
             'y_bot': int(y_bot),
         })
-    return panels
+    return _drop_text_scale_panels(panels)
+
+
+# Evenly-spaced text passes every structural test a trait row does: capital
+# letters have icon-like aspect ratio, sit on one baseline and repeat at a
+# regular pitch. The ship-name divider between the two Starship-Traits rows
+# locks as a full 5-column panel of 9x11 "icons", which the ML probe then
+# labels as a real section — five junk bboxes in the middle of the
+# screenshot. Scale is what separates the two: measured over the
+# 105-screenshot corpus, every text/UI-glyph cluster sits at ≤0.37 of the
+# largest panel's icon height and every real panel at ≥0.63, with nothing in
+# between. Cut at the midpoint of that gap.
+#
+# The reference is the LARGEST panel, not the strongest — composed screenshots
+# legitimately mix panel scales (users paste crops together), and the biggest
+# panel is not always the one that scores highest. There is deliberately no
+# upper bound.
+TEXT_SCALE_MAX = 0.50
+
+
+def _drop_text_scale_panels(panels):
+    if len(panels) < 2:
+        return panels
+    ref_h = max(p['icon_h'] for p in panels)
+    kept = []
+    for p in panels:
+        if p['icon_h'] < ref_h * TEXT_SCALE_MAX:
+            _slog.debug(
+                f'trait_grid: panel dropped — icon {p["icon_w"]:.0f}x'
+                f'{p["icon_h"]:.0f} is {p["icon_h"] / ref_h:.2f}× the largest '
+                f'panel ({ref_h:.0f}px) at y={p["y_top"]} — text, not icons')
+            continue
+        kept.append(p)
+    return kept
 
 
 # ── Step 6: per-panel resweep + group clustering ───────────────────────────
@@ -471,6 +504,9 @@ def detect_traits(img, icon_matcher, app_cache, build_type: str | None = None):
 
     sections: dict[str, list[tuple[int, int, int, int]]] = defaultdict(list)
     panel_summaries = []
+    # slot → (score, row-group, owning panel), best across every panel
+    winner: dict[str, tuple[float, list, dict]] = {}
+    panel_classified: list[tuple[int, dict, list, list]] = []
 
     for pi, p in enumerate(panels):
         cols = p['cols']
@@ -484,13 +520,8 @@ def detect_traits(img, icon_matcher, app_cache, build_type: str | None = None):
         rs_groups = _cluster_resweep_groups(rs_rows, icon_h)
         merged = _merge_starship_overflow(rs_groups, icon_h)
 
-        # Classify each row-group, then deduplicate per panel: a trait
-        # section can only appear ONCE per panel (the game UI never stacks
-        # two "Starship Traits" sections on the same grid). When ML votes
-        # accidentally classify a noise row-group as the same section as a
-        # real one, the duplicate must be dropped — keep the higher-scored
-        # group. The structural 5+2 shortcut scores +inf so it always wins
-        # against an ML-only match.
+        # Classify each row-group. Deduplication happens once, ACROSS all
+        # panels, after the loop — see the winner selection below.
         classified: list[tuple[str | None, float, list]] = []
         for g in merged:
             is_starship_struct = (
@@ -511,30 +542,48 @@ def detect_traits(img, icon_matcher, app_cache, build_type: str | None = None):
                 score = 0.0
             classified.append((slot, score, g))
 
-        best_by_slot: dict[str, tuple[float, list]] = {}
         for slot, score, g in classified:
             if slot is None:
                 continue
-            if slot not in best_by_slot or score > best_by_slot[slot][0]:
-                best_by_slot[slot] = (score, g)
+            if slot not in winner or score > winner[slot][0]:
+                winner[slot] = (score, g, p)
 
+        panel_classified.append((pi, p, merged, classified))
+
+    # A trait section exists exactly ONCE on a screen: the game UI never
+    # stacks two "Starship Traits" grids, and a user composing a collage
+    # pastes each section once. So the winner is picked across ALL panels,
+    # not per panel — appending both would double the section (measured:
+    # 11 of 55 trait screens, up to 19 "Starship Traits" where the game
+    # allows 7).
+    #
+    # The criterion is recognition quality: the summed confidence of icons
+    # that actually classify into that section. Measured against
+    # annotations.json GT on 26 screens (dev/diag_panel_dedup.py), it beats
+    # both a structural panel-overlap guard (22 false positives) and a trim
+    # to the game's slot maximum (3 — the maximum is a ceiling, not the
+    # per-build count, so overflow survives it). Cross-panel selection
+    # leaves 0 false positives and, decisively, costs no recall: the losing
+    # groups contain no GT icon. The structural 5+2 shortcut scores +inf so
+    # it always wins against an ML-only match.
+    for slot, (_score, g, wp) in winner.items():
+        sections[slot] = _emit_bboxes(g, wp['cols'], wp['icon_w'],
+                                      wp['icon_h'])
+
+    for pi, p, merged, classified in panel_classified:
         labels = []
-        for slot, score, g in classified:
+        for slot, _score, g in classified:
             if slot is None:
                 labels.append(None)
-            elif best_by_slot[slot][1] is g:
+            elif winner[slot][1] is g:
                 labels.append(slot)
             else:
                 labels.append(f'{slot} (dup-dropped)')
-
-        for slot, (_score, g) in best_by_slot.items():
-            sections[slot].extend(_emit_bboxes(g, cols, icon_w, icon_h))
-
         panel_summaries.append({
             'pi': pi,
-            'cols': [round(c, 1) for c in cols],
-            'iw': round(icon_w, 1),
-            'ih': round(icon_h, 1),
+            'cols': [round(c, 1) for c in p['cols']],
+            'iw': round(p['icon_w'], 1),
+            'ih': round(p['icon_h'], 1),
             'rows': [[len(r) for r in g] for g in merged],
             'labels': labels,
         })

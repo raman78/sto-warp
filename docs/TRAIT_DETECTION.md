@@ -79,6 +79,26 @@ to ±15% / ±0.5×icon_w tolerance. Each cluster becomes a panel with its
 own grid (`cols`, `col_dx`, `icon_w`, `icon_h`, `y_top`, `y_bot`).
 Returns up to 4 panels per screen, sorted by row count.
 
+#### Text-scale rejection
+
+A line of text satisfies every structural test above: capital letters
+have icon-like aspect ratio, share one baseline and repeat at a regular
+pitch. The ship-name divider inside the Starship section locked as a
+full 5-column panel of 9×11 "icons", which step 7 then labelled as a
+real section — five junk bboxes in the middle of the screenshot.
+
+Scale separates the two cleanly. Across the 105-screenshot corpus every
+text / UI-glyph cluster measures ≤ 0.37 of the largest panel's
+`icon_h`, every real panel ≥ 0.63, with nothing in between;
+`_drop_text_scale_panels()` cuts at the 0.50 midpoint
+(`TEXT_SCALE_MAX`).
+
+The reference is the **largest** panel, not the highest-scoring one,
+and there is no upper bound: composed screenshots legitimately mix
+panel scales (users paste crops of different captures together), so a
+smaller-but-real panel must survive. A lone panel is never dropped —
+there is nothing to compare it against.
+
 ### 5. Per-panel resweep
 
 For each locked panel, `_resweep_rows_in_band()` re-extracts CC chains
@@ -107,6 +127,42 @@ each icon in the group. Names are mapped to a section via:
 The group's section is the majority vote over its members. Groups
 that fail to vote (all `__empty__`) are dropped — a section assigned
 "none" would not help the user anyway.
+
+#### Cross-panel winner
+
+A trait section exists exactly **once** on a screen: the game never
+stacks two "Starship Traits" grids, and a user composing a collage
+pastes each section once. So when two panels are both labelled with
+the same section, only one may be emitted.
+
+Selection is by **recognition quality** — the summed confidence of the
+icons that actually classify into that section (`+inf` for the
+structural 5+2 Starship shortcut, so it always beats an ML-only
+match). The losing group is logged as `<slot> (dup-dropped)` in the
+panel summary.
+
+The alternatives were measured against `annotations.json` ground truth
+on 26 screens (`dev/diag_panel_dedup.py`), all applied to one
+classification pass:
+
+| policy | false positives | recall |
+|---|---|---|
+| concatenate across panels (old) | 43 | 0.990 |
+| trim to the game's slot maximum | 3 | 0.990 |
+| reject panels whose bands overlap | 22 | 0.990 |
+| **cross-panel score winner** | **0** | 0.990 |
+
+Two results drove the choice. Recall is identical under every policy —
+the losing groups contain no ground-truth icon, so dropping them costs
+nothing. And the game's slot maximum is a *ceiling, not a count*: on a
+build with 10 of 12 personal traits filled, trimming to 12 lets two
+false positives through, while the score winner reproduces 10 exactly.
+
+Before this rule, 11 of 55 trait-bearing corpus screens emitted a
+doubled section (up to 19 "Starship Traits" against a maximum of 7);
+after it, none do. Every one of those 11 was a `*_MIXED` screen, where
+BOFF-ability and equipment grids share the trait icons' size and pitch
+and therefore lock as extra panels.
 
 ### 8. Emission
 

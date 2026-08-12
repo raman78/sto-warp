@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [Unreleased]
+
+### Fixed
+- **No more phantom trait slots on the ship-name line.** On a Traits
+  screenshot, the ship name printed between the two Starship Traits rows
+  was mistaken for a row of five extra traits — WARP added five tiny,
+  misplaced boxes and guessed a name for each. Text is now told apart from
+  real trait icons by its size, and only the actual icons are read.
+- **Traits are no longer counted twice on combined screenshots.** On a
+  screenshot that shows equipment and traits together, another block of
+  icons — boff abilities or gear — could be mistaken for a second copy of a
+  trait section, so WARP listed it twice: up to 19 Starship Traits where the
+  game allows 7. WARP now keeps only the block it actually recognised as
+  that section. No correctly detected trait was lost in testing.
+
 ## [1.0.26] — 2026-08-11
 
 ### Fixed
