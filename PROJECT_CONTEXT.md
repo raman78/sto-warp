@@ -113,6 +113,7 @@ internals of each area, the canonical references are:
 | [`docs/warp_ml_roadmap.md`](docs/warp_ml_roadmap.md)                      | Layout-detector strategies, full-scan pipeline, current status                  |
 | [`docs/BOFF_DETECTION.md`](docs/BOFF_DETECTION.md)                        | BOFF panel detection — colour markers + classifier                              |
 | [`docs/TRAIT_DETECTION.md`](docs/TRAIT_DETECTION.md)                      | Trait grid detection — structure-first, ML probe per section                    |
+| [`docs/EQ_DETECTION.md`](docs/EQ_DETECTION.md)                            | Equipment panel detection — geometry vs slot profile, row labelling, tier recovery |
 | [`docs/sto_slots_rules.md`](docs/sto_slots_rules.md)                      | STO slot rules + how WARP enforces (or doesn't) each constraint                 |
 | [`docs/CARGO_DATA_PLAN.md`](docs/CARGO_DATA_PLAN.md)                      | Cargo-data sourcing: why upstream mirrors over a local scraper, source order, baseline snapshot |
 | [`docs/REMOTE_SYNC_AUDIT.md`](docs/REMOTE_SYNC_AUDIT.md)                  | Backend/HF capacity audit, channels in use, scaling headroom                    |

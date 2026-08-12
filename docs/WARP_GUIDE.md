@@ -563,6 +563,21 @@ If both bboxes are confirmed correctly, WARP will extract the ship class from Sh
 
 Tier OCR is tolerant of common misreads in the bracket. Variants such as `[T6-Xz]` (the `2` misread as `z`) or `[TB-X2]` (the `6` misread as `B`) are snapped to the closest real tier. When two tiers are equally plausible, the higher one is preferred — a single missing character in the OCR will not silently demote a `T6-X2` ship to plain `T6`. Clean readings are left untouched.
 
+##### When the tier is not on the screenshot at all
+
+Plenty of screenshots simply do not include the tier badge — it sits outside the captured area, or the header is cropped. WARP then works the tier out instead of leaving it blank.
+
+An upgraded ship (`T6-X`, `T6-X2`) carries extra slots: one or two more Universal Consoles, Devices and Starship Traits than the same ship without the upgrade. WARP counts what is actually on the picture, compares it with what that ship normally has, and fills in the upgrade level from the difference. The ship's base tier comes from the ship database, so only the upgrade part is worked out from the image.
+
+The result appears as a normal Ship Tier row marked **Inferred**, drawn over the ship-class line — the place the badge would occupy if it were in frame. From there it behaves like any tier WARP reads directly: it is used for slot counts and it goes into the build you export.
+
+Tip: if the value is wrong, correct it like any other row. Your correction wins.
+
+Two things worth knowing:
+
+- WARP only does this when the badge is genuinely absent. A tier it can read is always used as-is.
+- It can only ever add an upgrade, never rule one out. A build with empty slots looks the same as a ship without the upgrade, so when WARP sees no extra slots it claims nothing rather than guessing "no upgrade".
+
 | Action | How |
 |--------|-----|
 | Zoom in / out | **Ctrl + scroll wheel** (1× – 6×, anchored to cursor) |
@@ -591,6 +606,22 @@ Lists all items detected in the current screenshot, one row per slot. Each row s
   - **Green** ≥ 75% — confident match
   - **Yellow** 40–74% — uncertain, review recommended
   - **Red** < 40% — poor match, manual correction needed
+- Status — where the row stands, and where its value came from:
+
+| Status | What it means |
+|---|---|
+| **Match** | Recognised, waiting for you to accept it. |
+| **Low** | Recognised, but the confidence is poor — check this one before accepting. |
+| **Unmatched** | Nothing was recognised inside this box. |
+| **Auto** | Accepted for you, because the confidence was above the auto-accept threshold. |
+| **Confirmed** | You accepted this row yourself. |
+| **Empty** | The slot is empty in the game. |
+| **Inactive** | The slot exists but is locked or switched off in the game. |
+| **Inferred** | Not read off the screenshot — worked out from what the rest of the picture shows. See [When the tier is not on the screenshot at all](#when-the-tier-is-not-on-the-screenshot-at-all). |
+| **Type ✕** | The item was recognised, but it does not belong in this kind of slot. |
+| **Conflict** | Your saved answer and the community's answer disagree. See [Community conflicts](#community-conflicts). |
+
+Every status can be changed. Pick the row, correct the name, and accept it — an **Inferred** or **Auto** row is no more final than any other.
 
 **Hover** over any item row to see a tooltip with the matched reference icon, slot, item name and confidence. The reference icon is the picture from the icon library that the detector decided was the best match — if it does not look like the icon in the bounding box, the match is wrong and you should correct it.
 
