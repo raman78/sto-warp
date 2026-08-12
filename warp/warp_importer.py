@@ -599,6 +599,78 @@ _MEDIUM_TYPE_TOKENS: frozenset[str] = frozenset({
 })
 
 
+_BASE_STARSHIP_TRAITS = 5
+
+
+def _infer_x_bonus(profile: dict[str, int],
+                   row_pixel_counts: dict[str, int],
+                   layout: dict) -> int:
+    """Recover the T6-X / T6-X2 bonus when the tier badge is not on screen.
+
+    Many screenshots simply do not show `[T6-X2]` — the header is cropped or
+    the player captured a view without it. `ship_tier` is then empty, so
+    `_apply_ship_and_tier_bonuses` adds nothing and three slots come out too
+    small: Universal Consoles falls to 0 (which makes the layout detector
+    skip the whole row), Devices loses up to 2, Starship Traits loses up to 2.
+
+    Three detectors in the same run already measure the truth:
+
+        pixel_count(Devices)            - profile['Devices']
+        pixel_count(Universal Consoles) - profile['Universal Consoles']
+        detected(Starship Traits)       - 5
+
+    Each is a LOWER bound — a pixel count only sees slots the player has
+    filled, so an empty slot makes the evidence too small but never too
+    large. The bonus is therefore the MAX of the available evidence, not a
+    majority: on the corpus, majority voting picked +1 where two filled
+    device slots were empty, while max was right on all 9 screens with a
+    known tier (dev/diag_tier_inference.py).
+
+    Evidence outside 0..2 is discarded rather than clamped: the game grants
+    at most +2, so a larger value means the measurement is wrong (a
+    decoration counted as an icon) and should not be trusted to size a row.
+
+    Returns 0 when nothing usable was measured — the caller then leaves the
+    profile exactly as ShipDB built it.
+    """
+    evidence: list[int] = []
+    for slot in ('Devices', 'Universal Consoles'):
+        counted = row_pixel_counts.get(slot)
+        if counted:
+            evidence.append(counted - profile.get(slot, 0))
+    n_traits = len(layout.get('Starship Traits') or ())
+    if n_traits:
+        evidence.append(n_traits - _BASE_STARSHIP_TRAITS)
+    usable = [v for v in evidence if 0 <= v <= 2]
+    return max(usable) if usable else 0
+
+
+def _compose_inferred_tier(ship_entry: dict | None, x_bonus: int) -> str:
+    """Build a tier string from the DB's base tier + a measured X level.
+
+    The slot evidence measures the **upgrade**, not the tier: `T5-X2` and
+    `T6-X2` both grant +2, so pixels alone cannot tell them apart. The base
+    number is not guesswork though — cargo carries it for every ship
+    (`ship_list.json` field `tier`), so each half comes from a source that
+    knows it.
+
+    Returns '' when nothing can be claimed: x_bonus 0 is "no evidence of an
+    upgrade" (an unfilled build looks identical to an un-upgraded one), never
+    "definitely not upgraded". Only T5/T6 hulls take X upgrades.
+    """
+    if x_bonus not in (1, 2) or not ship_entry:
+        return ''
+    try:
+        base = int(ship_entry.get('tier'))
+    except (TypeError, ValueError):
+        return ''
+    if base not in (5, 6):
+        return ''
+    tier = f'T{base}' + ('-X2' if x_bonus == 2 else '-X')
+    from warp.recognition.text_extractor import SHIP_TIER_VALUES
+    return tier if tier in SHIP_TIER_VALUES else ''
+
+
 def _apply_ship_and_tier_bonuses(
     profile: dict[str, int],
     ship_entry: dict | None,
@@ -1072,12 +1144,17 @@ class ShipDB:
         profile = {
             'Fore Weapons':         _int(e.get('fore'),         4),
             'Deflector':            1,
-            'Sec-Def':              1 if e.get('secdeflector')  else 0,
+            # cargo stores these as strings, so bare truthiness is wrong:
+            # bool('0') is True. That gave 652 of 797 ships a phantom
+            # Secondary Deflector and 568 a phantom Experimental Weapon,
+            # which shifts the positional row order in the EQ layout
+            # detector and mislabels every row below the Deflector.
+            'Sec-Def':              1 if _int(e.get('secdeflector')) else 0,
             'Engines':              1,
             'Warp Core':            1,
             'Shield':               1,
             'Aft Weapons':          _int(e.get('aft'),          3),
-            'Experimental':         1 if e.get('experimental')  else 0,
+            'Experimental':         1 if _int(e.get('experimental')) else 0,
             'Devices':              _int(e.get('devices'),      4),
             'Universal Consoles':   0,
             'Engineering Consoles': _int(e.get('consoleseng'),  3),
@@ -1825,6 +1902,43 @@ class WarpImporter:
             app_cache=self._cache if _needs_matcher else None,
             ocr_tokens=ocr_tokens,
         )
+        # Tier badge absent from the screenshot → no X-bonus was applied and
+        # Universal Consoles / Devices / Starship Traits are short. Recover
+        # the bonus from what the first pass actually measured, then re-run
+        # so the recovered rows get bboxes. Only when OCR found no tier at
+        # all: a tier it did read is authoritative.
+        _inferred_tier = ''
+        if (not ship_tier and not _is_ground and profile
+                and build_type in ('SPACE', 'SPACE_MIXED')):
+            _x = _infer_x_bonus(
+                profile, self._get_layout().last_row_pixel_counts, layout)
+            if _x:
+                _apply_ship_and_tier_bonuses(
+                    profile, None, 'T6-X2' if _x == 2 else 'T6-X')
+                _inferred_tier = _compose_inferred_tier(
+                    self._cache.ships.get(ship_type), _x)
+                if _inferred_tier:
+                    # Downstream (build writer, SETS export, FC mode) reads
+                    # these two, and must treat the tier like any other:
+                    # the only difference is `src='inferred'` on the emitted
+                    # item, so the trainer can label it for the user.
+                    ship_tier = _inferred_tier
+                    result.ship_tier = _inferred_tier
+                _slog.info(
+                    f'WarpImporter: no tier on screen — inferred '
+                    f'{_inferred_tier or f"+{_x}"} from measured slots '
+                    f'(Universal Consoles='
+                    f'{profile.get("Universal Consoles", 0)}, '
+                    f'Devices={profile.get("Devices", 0)}, '
+                    f'Starship Traits={profile.get("Starship Traits", 0)})')
+                if not confirmed_layout:
+                    layout = self._get_layout().detect(
+                        img, build_type, profile,
+                        icon_matcher=self._get_matcher() if _needs_matcher else None,
+                        app_cache=self._cache if _needs_matcher else None,
+                        ocr_tokens=ocr_tokens,
+                    )
+
         # Inject Ship Name/Type/Tier bboxes captured by the OCR pass so WARP
         # CORE can render them as reviewable slots on the canvas. Pure pass-
         # through — they are NON_ICON slots, never go through icon_matcher.
@@ -1839,6 +1953,15 @@ class WarpImporter:
                 ('Ship Tier', 'ship_tier_bbox', 'ship_tier'),
             ):
                 _bb = text_info.get(_bbkey)
+                _is_inferred = False
+                if not _bb and _slot == 'Ship Tier' and _inferred_tier:
+                    # The badge is not on screen, so there is nothing to draw
+                    # a box around. Anchor it to the ship-class line, which
+                    # is where the game prints the tier when it does show it
+                    # — the user can then see and correct it like any other
+                    # slot instead of it being silently absent.
+                    _bb = text_info.get('ship_type_bbox')
+                    _is_inferred = bool(_bb)
                 if not _bb:
                     continue
                 _bb_t = tuple(_bb)
@@ -1846,7 +1969,7 @@ class WarpImporter:
                 if _slot == 'Ship Type':
                     _val = ship_type
                 else:
-                    _val = text_info.get(_valkey, '')
+                    _val = text_info.get(_valkey, '') or _inferred_tier
                 result.items.append(RecognisedItem(
                     slot        = _slot,
                     slot_index  = 0,
@@ -1855,6 +1978,7 @@ class WarpImporter:
                     thumbnail   = None,
                     source_file = source,
                     bbox        = _bb_t,
+                    src         = 'inferred' if _is_inferred else '',
                 ))
         _slog.info(
             f'WarpImporter: layout → {len(layout)} slot groups, '

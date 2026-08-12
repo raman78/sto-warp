@@ -370,6 +370,13 @@ class LayoutDetector:
         # reused for batch processing.
         self._eq_geom_cache: dict[int, EQGeometry | None] = {}
         self._ground_eq_geom_cache: dict[int, GroundEQGeometry | None] = {}
+        # slot → icons actually counted in that row by pixel analysis, for
+        # the last detect() call. A row's bboxes come from the ship profile,
+        # not from this count, so it is otherwise discarded — but it is the
+        # only measurement of what the screenshot really contains, and
+        # warp_importer uses it to recover the T6-X/X2 bonus when the tier
+        # badge is not on screen. Reset per detect() call.
+        self.last_row_pixel_counts: dict[str, int] = {}
 
     def _get_eq_geometry(self, img: np.ndarray) -> EQGeometry | None:
         """Cached wrapper around detect_eq_geometry. Returns None when OCR
@@ -457,6 +464,7 @@ class LayoutDetector:
         # different image and corrupt downstream detection.
         self._eq_geom_cache.clear()
         self._ground_eq_geom_cache.clear()
+        self.last_row_pixel_counts = {}
         if build_type in ('TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS'):
             # Strategy 0: structure-driven trait grid detector with ML probe.
             # Multi-panel grid lock + multi-chain row extraction + per-group
@@ -2263,11 +2271,30 @@ class LayoutDetector:
                 if i >= len(extended_order):
                     continue
                 slot_name = extended_order[i]
+                # The positional guess must never evict a row that OCR
+                # actually anchored: one EQ row = one slot, and an
+                # OCR-read label outranks a count-derived guess. Without
+                # this, a row whose label was missed took the name of the
+                # row above it and `result[slot_name] = bboxes` below
+                # silently replaced the real row's bboxes — the anchored
+                # row then had no bboxes at all and the user had to draw
+                # the slot by hand.
+                if slot_name in cy_to_slot.values():
+                    _slog.info(
+                        f'LayoutDetector: row {i} (cy={cy}) positional guess '
+                        f'{slot_name!r} already anchored by OCR on another '
+                        f'row — leaving this row unlabelled')
+                    continue
             y_top = max(0, cy - icon_h // 2)
             y_bot = min(h, cy + icon_h // 2)
             pixel_count, _ = self._count_icons_in_row(
                 img, y_top, y_bot, panel_right, cell_w, slot_name,
                 panel_x_start=panel_x_start)
+            # Record before the profile decides what to emit: a row the
+            # profile counts as 0 is skipped below, and its measurement is
+            # exactly the evidence that the profile is missing a bonus.
+            self.last_row_pixel_counts[slot_name] = max(
+                self.last_row_pixel_counts.get(slot_name, 0), pixel_count)
             profile_count = profile.get(slot_name, SLOT_DEFAULT_COUNTS.get(slot_name, 1))
             # ShipDB profile already includes tier bonuses (T6-X +1 Universal,
             # T6-X2 +1 Device, etc.) via warp_importer. Trust profile_count;

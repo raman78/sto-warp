@@ -13,9 +13,14 @@ Produces a single source of truth for the 6-cell × N-row EQ matrix:
 Pipeline:
   1. EasyOCR on full image → label tokens.
   2. Classify tokens against EQ-row keyword tables, cluster 2-line labels.
+     Every keyword hit is kept here, including duplicates of the same row
+     name — which hit is the real label is a question of geometry, and step 3
+     is what answers it. Picking one per row name before step 3 (by OCR
+     confidence) let a stray word anywhere on screen evict the genuine label
+     and then be discarded itself, leaving that row with no anchor.
   3. X-cluster canonical-named hits by x1; keep the LARGEST cluster as the real
      EQ label column. Discards off-panel hits (HUD "Shields", specialization
-     "Miracle Worker" / "Temporal Operative", etc.).
+     "Miracle Worker" / "Temporal Operative", tooltip prose, etc.).
   4. detect_stripe_start (HSV gradient) per label → panel_x_start (median).
   5. row_pitch = median of cy-gaps / canonical-step-count between EQ-column hits.
   6. est_dx = row_pitch × DX_RATIO  (0.725 — see comment below)
@@ -357,21 +362,29 @@ def _cluster_2line_labels(tokens: list[dict]) -> list[dict]:
 
 
 def _collect_single_hits(tokens: list[dict]) -> list[dict]:
-    """Single-line keyword hits → composite-form dict per row (best conf)."""
-    by_row: dict = {}
-    for t in tokens:
-        if t['kw_role'] != 'single':
-            continue
-        row = t['kw_name']
-        if row not in by_row or t['conf'] > by_row[row]['conf']:
-            by_row[row] = {
-                'row': row,
-                'cx': t['cx'], 'cy': t['cy'],
-                'x0': t['x0'], 'y0': t['y0'],
-                'x1': t['x1'], 'y1': t['y1'],
-                'conf': t['conf'],
-            }
-    return list(by_row.values())
+    """Single-line keyword hits → composite-form dict, ALL of them.
+
+    Deliberately does NOT collapse to one hit per row name. Which hit is the
+    real label is decided by geometry, not by OCR confidence: the caller
+    x-clusters every canonical hit and keeps the EQ label column. Collapsing
+    here happened before that filter ran and destroyed the information it
+    needs — a word anywhere on screen could evict the genuine in-column
+    label and then be thrown away itself, leaving the row with no anchor at
+    all. Observed on a SPACE_EQ screen where the tooltip word "Field"
+    fuzzy-matched the "Shields" keyword (0.73 > _FUZZY_CUTOFF) at equal OCR
+    confidence, cost the Shields row its anchor, and shifted a Warp Core
+    bbox onto the Shield row.
+    """
+    return [
+        {
+            'row': t['kw_name'],
+            'cx': t['cx'], 'cy': t['cy'],
+            'x0': t['x0'], 'y0': t['y0'],
+            'x1': t['x1'], 'y1': t['y1'],
+            'conf': t['conf'],
+        }
+        for t in tokens if t['kw_role'] == 'single'
+    ]
 
 
 def _warp_core_fallback(all_hits: list[dict], classified: list[dict]) -> list[dict]:
@@ -541,11 +554,21 @@ def detect_eq_geometry(img: np.ndarray) -> Optional[EQGeometry]:
         idx = _canonical_idx(h['row'])
         if idx is None:
             continue
-        if idx in eq_by_idx:
+        prev = eq_by_idx.get(idx)
+        if prev is None:
+            eq_by_idx[idx] = h
+            continue
+        # Two hits for one canonical row. Averaging their cy is only right
+        # when they are the same label seen twice (OCR jitter, split box):
+        # co-located, i.e. no further apart than the label is tall. Two hits
+        # a whole row apart are different rows, and averaging would place the
+        # row where no row exists — keep the more confident one instead.
+        span = max(prev['y1'] - prev['y0'], h['y1'] - h['y0'], 1)
+        if abs(prev['cy'] - h['cy']) <= span:
             merged = dict(h)
-            merged['cy'] = int((eq_by_idx[idx]['cy'] + h['cy']) / 2)
+            merged['cy'] = int((prev['cy'] + h['cy']) / 2)
             eq_by_idx[idx] = merged
-        else:
+        elif h['conf'] > prev['conf']:
             eq_by_idx[idx] = h
     if not eq_by_idx:
         return None

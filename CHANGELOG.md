@@ -11,6 +11,32 @@ details live in the git history.
 ## [Unreleased]
 
 ### Fixed
+- **Equipment rows are no longer mislabelled or skipped.** On a ship screen,
+  a word from an item tooltip could be mistaken for a row label — the row it
+  stole the name from was then left out completely, so a slot such as Warp
+  Core had no box at all and had to be drawn by hand, while another slot sat
+  on the wrong row. WARP now decides row labels by their position in the
+  equipment panel, and a guessed label can no longer displace one that was
+  actually read from the screen.
+- **Extra slots from a T6-X / T6-X2 ship are no longer missed.** When the
+  screenshot does not show the `[T6-X2]` badge — it is often outside the
+  captured area — WARP could not know about the extra slots that upgrade
+  grants, so Universal Consoles were skipped entirely and up to two Devices
+  and two Starship Traits were left out. WARP now works the upgrade out from
+  the slots it can actually see on the screenshot.
+
+### Added
+- **The ship tier is filled in even when the badge is not on the
+  screenshot.** WARP combines the ship's tier from its database with the
+  upgrade level it measured from the slots, and shows the result on the
+  ship-class line marked **Inferred** so you can see where it came from and
+  correct it like any other row. The value is then used everywhere a read
+  tier is used, including the build sent to SETS — which previously said
+  plain `T6` for an upgraded ship.
+- **Ships no longer show slots they do not have.** Almost every ship was
+  given a Secondary Deflector and an Experimental Weapon slot it does not
+  own, which also pushed the equipment rows below it out of step. Slot
+  presence is now read correctly from the ship database.
 - **No more phantom trait slots on the ship-name line.** On a Traits
   screenshot, the ship name printed between the two Starship Traits rows
   was mistaken for a row of five extra traits — WARP added five tiny,

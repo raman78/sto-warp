@@ -2042,7 +2042,7 @@ class WarpCoreWindow(QMainWindow):
         self._set_review_buttons_enabled(False)
         for ri in self._recognition_items:
             _conflict = ri.get('disk_name', '') if ri.get('state') == 'community_conflict' else ''
-            self._add_review_row(ri['name'], ri['slot'], ri.get('conf', 0.0), confirmed=(ri.get('state') == 'confirmed'), cross_check_failed=ri.get('cross_check_failed', False), auto_confirmed=ri.get('auto_confirmed', False), conflict_disk_name=_conflict, group_label=ri.get('_group_label'))
+            self._add_review_row(ri['name'], ri['slot'], ri.get('conf', 0.0), confirmed=(ri.get('state') == 'confirmed'), cross_check_failed=ri.get('cross_check_failed', False), auto_confirmed=ri.get('auto_confirmed', False), conflict_disk_name=_conflict, group_label=ri.get('_group_label'), inferred=(ri.get('src') == 'inferred'))
         # Diagnostic: log actual tree parent order vs expected
         rl = self._review_list
         _actual_parents = [
@@ -2091,7 +2091,8 @@ class WarpCoreWindow(QMainWindow):
     def _review_row_visuals(self, name: str, conf: float, *,
                             confirmed: bool, cross_check_failed: bool,
                             auto_confirmed: bool,
-                            conflict_disk_name: str) -> tuple[str, str, str]:
+                            conflict_disk_name: str,
+                            inferred: bool = False) -> tuple[str, str, str]:
         """Return (item_text, conf_text, status_text, color_hex) for the row.
 
         Centralised so `_add_review_row` and the inline refresh sites
@@ -2100,6 +2101,14 @@ class WarpCoreWindow(QMainWindow):
         """
         is_virtual  = name in VIRTUAL_ITEM_NAMES
         is_conflict = bool(conflict_disk_name)
+
+        if inferred and not is_conflict:
+            # Not read off the screenshot — worked out from the slots the
+            # ship actually shows (ship tier when the [T6-X2] badge is not
+            # in frame). Downstream treats it as a normal value; the user
+            # sees where it came from and can correct it like any other row.
+            return (name or '—', f'{conf:.2f}' if conf else '—',
+                    'Inferred', self._AUTO_COLOR)
 
         if is_conflict:
             item_text   = f'[CONFLICT] disk: {conflict_disk_name or "—"} | community: {name or "—"}'
@@ -2171,7 +2180,8 @@ class WarpCoreWindow(QMainWindow):
                               confirmed: bool, cross_check_failed: bool,
                               auto_confirmed: bool, conflict_disk_name: str,
                               idx: int | None = None,
-                              group_label: str | None = None) -> None:
+                              group_label: str | None = None,
+                              inferred: bool = False) -> None:
         slot_disp = _pretty_slot(slot)
         # `group_label` (when given) is the seat-aware parent-row label
         # produced by `order_items_for_display` — e.g. 'Boff Tactical #2'
@@ -2184,6 +2194,7 @@ class WarpCoreWindow(QMainWindow):
             name, conf,
             confirmed=confirmed, cross_check_failed=cross_check_failed,
             auto_confirmed=auto_confirmed, conflict_disk_name=conflict_disk_name,
+            inferred=inferred,
         )
         # Col 0 carries the group label only on standalone items (those
         # not yet added to the tree). Once `addItem` places the item under
@@ -2250,7 +2261,7 @@ class WarpCoreWindow(QMainWindow):
         if item.parent() is not None:
             self._review_list.refresh_parent_of(item)
 
-    def _add_review_row(self, name: str, slot: str, conf: float, confirmed: bool = False, cross_check_failed: bool = False, auto_confirmed: bool = False, conflict_disk_name: str = '', group_label: str | None = None):
+    def _add_review_row(self, name: str, slot: str, conf: float, confirmed: bool = False, cross_check_failed: bool = False, auto_confirmed: bool = False, conflict_disk_name: str = '', group_label: str | None = None, inferred: bool = False):
         item = QTreeWidgetItem()
         # `_slot_ordinal` counts existing rows sharing the same col-0
         # UserRole. When seat-grouping is active the UserRole is the
@@ -2262,7 +2273,7 @@ class WarpCoreWindow(QMainWindow):
             item, name, slot, conf,
             confirmed=confirmed, cross_check_failed=cross_check_failed,
             auto_confirmed=auto_confirmed, conflict_disk_name=conflict_disk_name,
-            idx=idx, group_label=group_label,
+            idx=idx, group_label=group_label, inferred=inferred,
         )
         self._review_list.addItem(item)
 
@@ -3532,6 +3543,7 @@ class WarpCoreWindow(QMainWindow):
                     confirmed=False, cross_check_failed=_cross_check,
                     auto_confirmed=False, conflict_disk_name='',
                     group_label=ri.get('_group_label'),
+                    inferred=(ri.get('src') == 'inferred'),
                 )
             # Auto-accept if conf >= threshold and checkbox enabled
             if (name and conf > 0
@@ -4267,6 +4279,7 @@ class WarpCoreWindow(QMainWindow):
                     confirmed=True, cross_check_failed=False,
                     auto_confirmed=False, conflict_disk_name='',
                     group_label=ri.get('_group_label'),
+                    inferred=(ri.get('src') == 'inferred'),
                 )
             if name and ri.get('crop_bgr') is not None and slot not in NON_ICON_SLOTS:
                 from warp.recognition.icon_matcher import SETSIconMatcher
