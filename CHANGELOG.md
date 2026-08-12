@@ -8,46 +8,41 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [Unreleased]
+## [1.0.27] — 2026-08-12
 
 ### Fixed
-- **Equipment rows are no longer mislabelled or skipped.** On a ship screen,
-  a word from an item tooltip could be mistaken for a row label — the row it
-  stole the name from was then left out completely, so a slot such as Warp
-  Core had no box at all and had to be drawn by hand, while another slot sat
-  on the wrong row. WARP now decides row labels by their position in the
-  equipment panel, and a guessed label can no longer displace one that was
-  actually read from the screen.
-- **Extra slots from a T6-X / T6-X2 ship are no longer missed.** When the
-  screenshot does not show the `[T6-X2]` badge — it is often outside the
-  captured area — WARP could not know about the extra slots that upgrade
-  grants, so Universal Consoles were skipped entirely and up to two Devices
-  and two Starship Traits were left out. WARP now works the upgrade out from
-  the slots it can actually see on the screenshot.
-
-### Added
-- **The ship tier is filled in even when the badge is not on the
-  screenshot.** WARP combines the ship's tier from its database with the
-  upgrade level it measured from the slots, and shows the result on the
-  ship-class line marked **Inferred** so you can see where it came from and
-  correct it like any other row. The value is then used everywhere a read
-  tier is used, including the build sent to SETS — which previously said
-  plain `T6` for an upgraded ship.
+- **Equipment rows are no longer mislabelled or skipped.** A word from an
+  item tooltip could be mistaken for a row label. The row whose name was
+  taken then dropped out completely — a slot such as Warp Core had no box
+  at all and had to be drawn by hand — while another slot sat on the wrong
+  row. Row labels are now decided by their position in the equipment panel,
+  and a guessed label can no longer displace one read from the screen.
 - **Ships no longer show slots they do not have.** Almost every ship was
-  given a Secondary Deflector and an Experimental Weapon slot it does not
-  own, which also pushed the equipment rows below it out of step. Slot
-  presence is now read correctly from the ship database.
+  given a Secondary Deflector and an Experimental Weapon it does not own,
+  which also pushed the equipment rows below it out of step. Slot presence
+  now comes from the ship database correctly.
+- **Extra slots on an upgraded ship are no longer missed.** When the
+  `[T6-X2]` badge is outside the captured area, the extra slots that
+  upgrade grants were unknown: Universal Consoles were skipped entirely,
+  and up to two Devices and two Starship Traits were left out. The upgrade
+  is now worked out from the slots visible on the screenshot.
 - **No more phantom trait slots on the ship-name line.** On a Traits
   screenshot, the ship name printed between the two Starship Traits rows
-  was mistaken for a row of five extra traits — WARP added five tiny,
-  misplaced boxes and guessed a name for each. Text is now told apart from
-  real trait icons by its size, and only the actual icons are read.
+  was mistaken for a row of five extra traits, each given a guessed name.
+  Text is now told apart from real trait icons by its size.
 - **Traits are no longer counted twice on combined screenshots.** On a
-  screenshot that shows equipment and traits together, another block of
-  icons — boff abilities or gear — could be mistaken for a second copy of a
-  trait section, so WARP listed it twice: up to 19 Starship Traits where the
-  game allows 7. WARP now keeps only the block it actually recognised as
-  that section. No correctly detected trait was lost in testing.
+  screenshot showing equipment and traits together, another block of icons
+  — Bridge Officer abilities or gear — could be taken for a second copy of
+  a trait section, and that section was listed twice. Only the block
+  actually recognised as that section is kept.
+
+### Added
+- **The ship tier is filled in when the badge is not on the screenshot.**
+  The ship's tier from the database is combined with the upgrade level
+  measured from the slots, and the result appears on the ship-class line
+  marked **Inferred**. It can be corrected like any other row, and is used
+  everywhere a tier read from the screen is used — including the build
+  exported to SETS, which previously said plain `T6` for an upgraded ship.
 
 ## [1.0.26] — 2026-08-11
 
