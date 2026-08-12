@@ -265,7 +265,7 @@ def _name_text_from_row_tokens(tokens: list) -> tuple[str, list]:
     where a far-away label (e.g. 'Fore Weapons') leaks into the name:
 
       (a) EasyOCR fused name + distant label into ONE wide token with many
-          internal spaces ('U.S.S. ILLINOIS                Fore').
+          internal spaces ('U.S.S. <SHIPNAME>                Fore').
       (b) Adjacent tokens in the same row are visually far apart in x.
 
     Returns (text, kept_tokens). kept_tokens is the filtered list (for bbox
@@ -346,7 +346,7 @@ class TextExtractor:
     Extracts structured info from an STO screenshot.
 
     Returns dict:
-        ship_name  : str   — e.g. "U.S.S. Genius"
+        ship_name  : str   — e.g. "U.S.S. <name>"
         ship_type  : str   — e.g. "Typhoon Temporal Battlecruiser"
         ship_tier  : str   — e.g. "T6-X2"
         build_type : str   — SPACE | GROUND | SPACE_TRAITS | GROUND_TRAITS
@@ -611,8 +611,9 @@ class TextExtractor:
                 """
                 Detect a token that belongs to the ship NAME (not type).
                 Catches both: (a) explicit prefix `U.S.S. SHIP`, and
-                (b) bare proper-name continuation `SIMONZ`, `LAZURITE`,
-                where OCR split the name into multiple tokens.
+                (b) bare proper-name continuation — a lone ALL-CAPS or
+                Capitalised word — where OCR split the name into
+                multiple tokens.
                 Bare names are: short (1-2 words), all-caps or capitalized,
                 no spaces or with a single dot/apostrophe.
                 """
@@ -776,13 +777,13 @@ class TextExtractor:
                 # Strategy:
                 #   - tier anchor: prefer SAME row as tier (left of tier), then
                 #     the row immediately above. Reject rows that are mostly
-                #     name tokens (U.S.S. SIMONZ).
+                #     name tokens ('U.S.S. …' prefix plus the name itself).
                 #   - name anchor: row immediately below name.
                 anchor_row_idx = rows.index(tier_row) if tier_row in rows else -1
 
                 def _row_is_name_row(row) -> bool:
                     """A row that contains a name-prefix OR is dominated by
-                    short bare-name tokens (SIMONZ, LAZURITE)."""
+                    short bare-name tokens (lone ALL-CAPS words)."""
                     if any(_is_name_prefix_token(t['text']) for t in row['tokens']):
                         return True
                     if any(_is_name_prefix_alone(t['text']) for t in row['tokens']):
@@ -852,13 +853,13 @@ class TextExtractor:
 
                     # Extend up by 1 row when it contains the ship class name
                     # (Constitution, Chronos, Yamaguchi, Augur, Negh'Var, …).
-                    # Guard: if any token is ALL-CAPS proper noun (SIMONZ,
-                    # MORTIS, LAZURITE, FERASIA), the row is the ship NAME,
-                    # not the type — skip.
+                    # Guard: if any token is an ALL-CAPS proper noun that is
+                    # not a known class name, the row is the ship NAME, not
+                    # the type — skip.
                     def _has_allcaps_proper(row) -> bool:
                         # Split each OCR token by whitespace — OCR sometimes
-                        # lumps a name and a HUD word into one token
-                        # ('susurrus MORTIS'). We want MORTIS to flag the row.
+                        # lumps the name and a HUD word into one token, and
+                        # the ALL-CAPS part must still flag the row.
                         for t in row['tokens']:
                             for word in t['text'].split():
                                 s = word.strip()

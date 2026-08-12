@@ -72,7 +72,7 @@ For each main band in `MAIN_BANDS`:
 
    The raw mask preserves clean markers that CLOSE would merge with
    adjacent same-hue UI strips (e.g. dark-red name bars sitting 3-5 px
-   to the right of the marker on Pumwl1). The CLOSE-d mask glues
+   to the right of the marker on some GT screens). The CLOSE-d mask glues
    genuinely fragmented bars. Each mask is processed independently;
    `_merge_close_bboxes` runs per mask to coalesce any fragments
    *within* that mask only.
