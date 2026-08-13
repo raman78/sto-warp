@@ -130,8 +130,8 @@ class _InteractiveCanvas(QWidget):
         # until the selection moves. Hover is unaffected.
         self._pin_enabled: bool = False
         self._pinned_gidx: int  = -1
-        self._pin = None        # PinnedTooltip, created on first use
-        self._tip_probe = None  # hidden PinnedTooltip — hover geometry only
+        self._pin = None         # PinnedTooltip for the selected item
+        self._hover_card = None  # PinnedTooltip for the hovered item
         # Skill-tree overlay: [(x, y, w, h, on), ...] in image coords. Drawn
         # green (ON) / red (OFF) on top of the screenshot for skill screens,
         # which carry no RecognisedItems.
@@ -278,8 +278,7 @@ class _InteractiveCanvas(QWidget):
             if g >= 0:
                 self._start_hover_timer(g)
             else:
-                from PySide6.QtWidgets import QToolTip
-                QToolTip.hideText()
+                self._hide_hover_card()
             self.update()
         super().mouseMoveEvent(e)
 
@@ -296,33 +295,31 @@ class _InteractiveCanvas(QWidget):
         self._hover_timer.start(500)
 
     def _show_hover_tooltip(self, gidx: int):
+        """Show the hovered item's card.
+
+        Draws the same PinnedTooltip widget the pin uses instead of handing the
+        text to QToolTip: QTipLabel derives its offset from the cursor size
+        ((2, 16) offscreen, (2, 24) on xcb/wayland) and clamps to the screen
+        rather than to the canvas, so the two could never be made to coincide.
+        """
         # This item is already pinned beside its bbox — a hover copy would just
-        # repeat it. Every other item tooltips as before.
+        # repeat it, in the same place. Every other item tooltips as before.
         if self._pin_enabled and gidx == self._pinned_gidx:
             return
         text = self._tooltip_html_for_gidx(gidx)
-        if not text:
+        rect = self._screen_rect_for_gidx(gidx)
+        if not text or rect is None:
+            self._hide_hover_card()
             return
 
-        from PySide6.QtWidgets import QToolTip
-        QToolTip.showText(self._tooltip_anchor(gidx, text), text, self)
+        if self._hover_card is None:
+            from warp.gui.pinned_tooltip import PinnedTooltip
+            self._hover_card = PinnedTooltip(self)
+        self._hover_card.show_for(text, rect)
 
-    def _tooltip_anchor(self, gidx: int, html: str) -> QPoint:
-        """Global point a tooltip for *gidx* is shown from.
-
-        Runs the pinned card's own placement on a hidden measuring card and
-        back-solves the anchor, so hover and pin land on the same pixel —
-        including the flip above a bbox with no room below it.
-        """
-        from PySide6.QtGui import QCursor
-        from warp.gui.pinned_tooltip import PinnedTooltip
-        rect = self._screen_rect_for_gidx(gidx)
-        if rect is None:
-            return QCursor.pos()
-        if self._tip_probe is None:
-            self._tip_probe = PinnedTooltip(self)
-        self._tip_probe.prepare(html)
-        return self.mapToGlobal(self._tip_probe.hover_anchor(rect))
+    def _hide_hover_card(self) -> None:
+        if self._hover_card is not None:
+            self._hover_card.hide()
 
     def _item_for_gidx(self, gidx: int) -> RecognisedItem | None:
         for item, g in zip(self._items, self._gidx):
@@ -331,21 +328,25 @@ class _InteractiveCanvas(QWidget):
         return None
 
     def _tooltip_html_for_gidx(self, gidx: int) -> str:
-        """Compose an item's tooltip card — shared by hover and pin."""
+        """Compose an item's tooltip card — shared by hover and pin.
+
+        Goes through the same composer as WARP CORE's canvas, so an item does
+        not read differently depending on which window it is looked at in. A
+        result carrying `match_origin == 'user'` came back from a WARP CORE
+        confirmation, which is this view's equivalent of a confirmed row.
+        """
         it = self._item_for_gidx(gidx)
         if it is None or not it.name:
             return ''
-        from warp.recognition.boff_keys import pretty_slot
-        slot = pretty_slot(it.slot or '?')
-        conf = it.confidence or 0.0
-        color = ('#7effc8' if conf >= 0.85 else
-                 '#e8c060' if conf >= 0.70 else '#ff9966')
-        info_html = (f'<b>{slot}</b><br>{it.name}'
-                     f'<br>Confidence: <span style="color:{color}">{conf:.0%}</span>')
-
-        from warp.gui import env_for_slot
-        return _tooltip_html(it.thumbnail, it.name, info_html,
-                             env=env_for_slot(it.slot or ''))
+        from warp.gui import env_for_slot, slot_tooltip_html
+        return slot_tooltip_html(
+            it.slot or '?',
+            it.name,
+            it.confidence or 0.0,
+            confirmed=getattr(it, 'match_origin', '') == 'user',
+            thumb=it.thumbnail,
+            env=env_for_slot(it.slot or ''),
+        )
 
     # ── pinned tooltip ──────────────────────────────────────────────
 

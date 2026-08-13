@@ -10,7 +10,7 @@ import pytest
 
 pytest.importorskip("PySide6")
 
-from PySide6.QtCore import QRect
+from PySide6.QtCore import QPoint, QRect
 from PySide6.QtWidgets import QApplication, QWidget
 
 import warp.trainer.annotation_widget as aw
@@ -63,16 +63,16 @@ def _live_tip(app):
                         'name': 'Quantum Torpedo Launcher', 'conf': 0.71}),
     ((200, 150, 48, 48), {'state': 'pending', 'slot': 'Fore Weapons',
                           'name': 'Phaser Beam Array Mk XII', 'conf': 0.92}),
+    ((40, 260, 48, 48), {'state': 'pending', 'slot': 'Aft Weapons',
+                         'name': 'Dark Matter Quantum Torpedo', 'conf': 0.63}),
 ])
-def test_card_is_pixel_identical_to_the_hover_tooltip(app, tmp_path, bbox, row):
-    """Same text ⇒ same box, same spot.
+def test_hover_and_pin_are_the_same_card_in_the_same_place(app, tmp_path, bbox, row):
+    """Same row ⇒ same box, same spot, whether hovered or pinned.
 
-    Drives the real hover path (`_show_hover_tooltip`) and diffs the resulting
-    QTipLabel against the pinned card, so this catches drift in either — font,
-    margin, indent, wrap, Qt's 1 px of slack, or the anchor rule.
+    Third case sits low enough to flip above its bbox, so this covers the
+    placement branch that used to disagree between the two.
     """
     from PySide6.QtGui import QPixmap
-    from PySide6.QtWidgets import QToolTip
     from warp.style import apply_dark_style
 
     apply_dark_style(app)                     # the QSS font rule matters here
@@ -93,12 +93,8 @@ def test_card_is_pixel_identical_to_the_hover_tooltip(app, tmp_path, bbox, row):
     # 1. hover the row with the pin off — this is the production hover path
     w._show_hover_tooltip(0)
     app.processEvents()
-    tip = _live_tip(app)
-    if tip is None:                            # no tooltip machinery here
-        pytest.skip('platform did not materialise a QTipLabel')
-    hover_size, hover_pos = tip.size(), w.mapFromGlobal(tip.pos())
-    QToolTip.hideText()
-    app.processEvents()
+    hover_size, hover_pos = w._hover_card.size(), w._hover_card.pos()
+    w._hide_hover_card()
 
     # 2. pin the same row
     w.set_pin_enabled(True)
@@ -108,6 +104,38 @@ def test_card_is_pixel_identical_to_the_hover_tooltip(app, tmp_path, bbox, row):
     try:
         assert w._pin.size() == hover_size
         assert w._pin.pos() == hover_pos
+    finally:
+        w.close()
+
+
+def test_canvas_hover_does_not_use_qtooltip(app, tmp_path):
+    """The canvas draws its own card — QTipLabel's offset is platform-derived
+    ((2, 16) offscreen, (2, 24) on xcb/wayland) and could never be matched."""
+    from PySide6.QtGui import QPixmap
+
+    shot = tmp_path / 'shot.png'
+    QPixmap(600, 320).save(str(shot))
+
+    class _StubDataMgr:
+        def get_annotations(self, path):
+            return []
+
+    w = aw.AnnotationWidget(_StubDataMgr())
+    w.resize(600, 320)
+    w.load_image(shot)
+    w.show()
+    app.processEvents()
+    w.set_review_items([{'bbox': (40, 40, 64, 64), 'state': 'pending',
+                         'slot': 'Fore Weapons', 'name': 'X', 'conf': 0.5}])
+
+    before = _live_tip(app)
+    w._show_hover_tooltip(0)
+    app.processEvents()
+
+    try:
+        assert not w._hover_card.isHidden()
+        tip = _live_tip(app)
+        assert tip is before or tip is None or tip.isHidden()
     finally:
         w.close()
 
@@ -130,14 +158,14 @@ def test_card_flips_above_when_there_is_no_room_below(pin):
     assert pos.y() >= 0
 
 
-def test_hover_anchor_back_solves_the_cards_position(pin):
-    """QToolTip adds _OFFSET to what it is handed, so the hover tooltip must be
-    anchored that much before the card's own top-left to land on it."""
+def test_placement_does_not_depend_on_the_cursor(pin, monkeypatch):
+    """The card is anchored on the bbox, full stop. QTipLabel's cursor-derived
+    offset is what made hover and pin disagree across platforms."""
+    from PySide6.QtGui import QCursor
     anchor = QRect(50, 60, 30, 30)
-    dx, dy = PinnedTooltip._OFFSET
-    pos   = pin.place_for(anchor)
-    hover = pin.hover_anchor(anchor)
-    assert (hover.x() + dx, hover.y() + dy) == (pos.x(), pos.y())
+    first = pin.place_for(anchor)
+    monkeypatch.setattr(QCursor, 'pos', staticmethod(lambda: QPoint(999, 999)))
+    assert pin.place_for(anchor) == first
 
 
 # ── AnnotationWidget integration ───────────────────────────────────────────

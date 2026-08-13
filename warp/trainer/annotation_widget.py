@@ -100,8 +100,8 @@ class AnnotationWidget(QWidget):
         # selection moves. Independent of hover, which keeps working as before.
         self._pin_enabled: bool = False
         self._pinned_row:  int  = -1
-        self._pin = None        # PinnedTooltip, created on first use
-        self._tip_probe = None  # hidden PinnedTooltip — hover geometry only
+        self._pin = None         # PinnedTooltip for the selected row
+        self._hover_card = None  # PinnedTooltip for the hovered row
 
         # Drag/resize state — _annotations (legacy draw mode)
         self._drag_mode:  str | None = None   # 'move' | 'resize_NW' | etc.
@@ -489,8 +489,7 @@ class AnnotationWidget(QWidget):
             if not self._locked:
                 self.setCursor(self._make_draw_cursor())
                 self._cancel_hover_timer()
-                from PySide6.QtWidgets import QToolTip
-                QToolTip.hideText()
+                self._hide_hover_card()
                 return
 
         if mods & Qt.KeyboardModifier.ControlModifier:
@@ -505,16 +504,14 @@ class AnnotationWidget(QWidget):
                 if handle:
                     self._set_mod_cursor(self._cursor_for_handle(handle))
                     self._cancel_hover_timer()
-                    from PySide6.QtWidgets import QToolTip
-                    QToolTip.hideText()
+                    self._hide_hover_card()
                     return
 
                 hit_row = self._hit_test_review(pos)
                 if hit_row >= 0:
                     self._set_mod_cursor(self._make_edit_cursor())
                     self._cancel_hover_timer()
-                    from PySide6.QtWidgets import QToolTip
-                    QToolTip.hideText()
+                    self._hide_hover_card()
                     return
 
         # 3. Regular hover tooltip logic (no special cursor)
@@ -525,8 +522,7 @@ class AnnotationWidget(QWidget):
             if hovered >= 0:
                 self._start_hover_timer(hovered)
             else:
-                from PySide6.QtWidgets import QToolTip
-                QToolTip.hideText()
+                self._hide_hover_card()
 
         # Restore appropriate cursor if not over anything special
         if hovered < 0:
@@ -618,83 +614,57 @@ class AnnotationWidget(QWidget):
         self._hover_timer.start(700)
 
     def _show_hover_tooltip(self, row: int):
+        """Show the hovered row's card.
+
+        Draws the same PinnedTooltip widget the pin uses, rather than handing
+        the text to QToolTip: QTipLabel derives its offset from the cursor
+        size (2,16 offscreen but 2,24 on xcb/wayland) and clamps to the screen
+        rather than to the canvas, so a hover tooltip could never be made to
+        land exactly where the pinned card sits. One widget, one placement,
+        nothing to match.
+        """
         from PySide6.QtWidgets import QApplication as _QApp
         if row < 0 or row >= len(self._review_items) or (_QApp.queryKeyboardModifiers() & Qt.KeyboardModifier.ShiftModifier):
-            from PySide6.QtWidgets import QToolTip
-            QToolTip.hideText()
+            self._hide_hover_card()
             return
         # This row is already pinned — a hover copy would say the same thing
-        # twice. Every other row still tooltips normally.
+        # twice, in the same place. Every other row still tooltips normally.
         if self._pin_enabled and row == self._pinned_row:
             return
-
-        text = self._tooltip_html_for_row(row)
-
-        from PySide6.QtWidgets import QToolTip
-        QToolTip.showText(self._tooltip_anchor(row, text), text, self)
-
-    def _tooltip_anchor(self, row: int, html: str):
-        """Global point a tooltip for *row* is shown from.
-
-        Runs the pinned card's own placement (on a hidden card kept purely as
-        a measuring device, so a visible pin on another row is never
-        disturbed) and back-solves the anchor from it. That is what makes
-        hover and pin the same card in the same place, flip included. Falls
-        back to the cursor for rows without a bbox, which cannot be hovered on
-        the canvas anyway.
-        """
-        from PySide6.QtGui import QCursor
-        from warp.gui.pinned_tooltip import PinnedTooltip
-        bbox = self._review_items[row].get('bbox') if 0 <= row < len(self._review_items) else None
+        bbox = self._review_items[row].get('bbox')
         if not bbox:
-            return QCursor.pos()
-        if self._tip_probe is None:
-            self._tip_probe = PinnedTooltip(self)
-        self._tip_probe.prepare(html)
-        return self.mapToGlobal(
-            self._tip_probe.hover_anchor(self._img_to_screen_rect(bbox)))
+            self._hide_hover_card()
+            return
+
+        if self._hover_card is None:
+            from warp.gui.pinned_tooltip import PinnedTooltip
+            self._hover_card = PinnedTooltip(self)
+        self._hover_card.show_for(self._tooltip_html_for_row(row),
+                                  self._img_to_screen_rect(bbox))
+
+    def _hide_hover_card(self):
+        if self._hover_card is not None:
+            self._hover_card.hide()
 
     def _tooltip_html_for_row(self, row: int) -> str:
         """Compose a review row's tooltip card — shared by hover and pin."""
         if row < 0 or row >= len(self._review_items):
             return ''
-        from warp.recognition.boff_keys import pretty_slot
-        ri        = self._review_items[row]
-        name      = ri.get('name') or '— unmatched —'
-        slot      = pretty_slot(ri.get('slot', '?'))
-        conf      = ri.get('conf', 0.0)
-        state     = ri.get('state', 'pending')
-        orig_name = ri.get('orig_name', '')
-        if state == 'confirmed':
+        from warp.gui import env_for_slot, slot_tooltip_html
+        ri = self._review_items[row]
+        return slot_tooltip_html(
+            ri.get('slot', '?'),
+            ri.get('name', '') or '',
+            ri.get('conf', 0.0),
             # Auto-confirmed (detector accepted via threshold — yellow, still
-            # awaiting review) must NOT claim the user confirmed it; mirror the
-            # Recognition Review tree wording.
-            status = ('auto-confirmed by detector'
-                      if ri.get('auto_confirmed') else 'confirmed by user')
-            lines = [f'<b>{slot}</b>', name, f'<i>{status}</i>']
-            if conf > 0.0:
-                color = ('#7effc8' if conf >= 0.85 else
-                         '#e8c060' if conf >= 0.70 else '#ff9966')
-                ml_text = orig_name if orig_name and orig_name != name else name
-                lines.append(f'ML: <span style="color:{color}">{ml_text} ({conf:.1%})</span>')
-            else:
-                lines.append('<span style="color:#888">ML: unknown (previous session)</span>')
-            info_html = '<br>'.join(lines)
-        else:
-            pct   = f'{conf:.1%}'
-            color = ('#7effc8' if conf >= 0.85 else
-                     '#e8c060' if conf >= 0.70 else '#ff9966')
-            info_html = (f'<b>{slot}</b><br>{name}'
-                         f'<br>Confidence: <span style="color:{color}">{pct}</span>')
-
-        # For confirmed items the stored thumb is the ML's ORIGINAL match and
-        # goes stale once the user corrects the name. Resolve the icon from the
-        # confirmed name instead (matching the recognition-review tree tooltip)
-        # so the hover preview reflects what the user actually confirmed.
-        thumb = None if state == 'confirmed' else ri.get('thumb')
-        from warp.gui import env_for_slot
-        env = env_for_slot(ri.get('slot', ''), getattr(self, '_build_type', ''))
-        return _tooltip_html(thumb, name, info_html, env=env)
+            # awaiting review) must NOT claim the user confirmed it; the shared
+            # composer mirrors the Recognition Review tree wording.
+            confirmed=ri.get('state', 'pending') == 'confirmed',
+            auto_confirmed=bool(ri.get('auto_confirmed')),
+            orig_name=ri.get('orig_name', ''),
+            thumb=ri.get('thumb'),
+            env=env_for_slot(ri.get('slot', ''), getattr(self, '_build_type', '')),
+        )
 
     # ── pinned tooltip ────────────────────────────────────────────────────
 
@@ -980,8 +950,7 @@ class AnnotationWidget(QWidget):
                     self._clear_mod_cursor()
             elif key == Qt.Key.Key_Shift and not event.isAutoRepeat():
                 if etype == QEvent.Type.KeyPress:
-                    from PySide6.QtWidgets import QToolTip
-                    QToolTip.hideText()
+                    self._hide_hover_card()
                     if not self._locked:
                         handle, _row = self._handle_hit_test_all_reviews(lpos)
                         self._set_mod_cursor(self._cursor_for_handle(handle) if handle else self._make_edit_cursor())

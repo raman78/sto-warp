@@ -38,7 +38,10 @@ def widget(monkeypatch, tmp_path):
         captured["env"] = env
         return info_html
 
-    monkeypatch.setattr(aw, "_tooltip_html", _fake_tooltip_html)
+    # The canvas composes through `warp.gui.slot_tooltip_html` (shared with
+    # WARP's results canvas), which is where the icon/thumb decision now lives.
+    import warp.gui as gui
+    monkeypatch.setattr(gui, "_tooltip_html", _fake_tooltip_html)
     w._captured = captured
     yield w
     w.close()

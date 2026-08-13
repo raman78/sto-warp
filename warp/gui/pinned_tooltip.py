@@ -30,10 +30,11 @@ class PinnedTooltip(QLabel):
     for identical text.
     """
 
-    # Qt offsets a hover tooltip from the anchor point by exactly this much
-    # (QTipLabel: pos + (2, 16), measured). Applying the same offset to the
-    # same anchor is what keeps the pinned card and the hover tooltip on the
-    # same pixel.
+    # Gap from the anchor point to the card's top-left. Ours, deliberately:
+    # QTipLabel derives its own offset from the cursor size, so it is (2, 16)
+    # under the offscreen platform but (2, 24) on xcb and wayland — matching a
+    # moving target is how the card ended up 8 px off on a real desktop. Both
+    # hover and pin now draw this same widget, so nothing needs to be matched.
     _OFFSET = (2, 16)
 
     @staticmethod
@@ -114,9 +115,8 @@ class PinnedTooltip(QLabel):
     def place_for(self, anchor: QRect) -> QPoint:
         """Top-left for a card of the current size against bbox *anchor*.
 
-        The one authority on where a tooltip for a bbox goes — the hover path
-        back-solves its QToolTip anchor from this, so both land on the same
-        pixel.
+        The one authority on where a card for a bbox goes; hover and pin are
+        two instances of this widget, both placed through here.
 
         Below the bbox by default. With no room below, it flips *above* rather
         than being squeezed back over the slot, which is the whole point of
@@ -141,13 +141,3 @@ class PinnedTooltip(QLabel):
         y = max(area.top(), min(y, max(area.top(), area.bottom() - h)))
         return QPoint(int(x), int(y))
 
-    def hover_anchor(self, anchor: QRect) -> QPoint:
-        """Point to hand `QToolTip.showText` so its tooltip lands on `place_for`.
-
-        Qt adds `_OFFSET` to whatever it is given, so subtracting it here makes
-        the hover tooltip adopt the card's placement — including the flip.
-        Canvas coordinates; callers map to global.
-        """
-        dx, dy = self._OFFSET
-        pos = self.place_for(anchor)
-        return QPoint(pos.x() - dx, pos.y() - dy)

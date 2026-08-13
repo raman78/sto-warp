@@ -70,6 +70,46 @@ def _tooltip_icon_html(thumb, name: str, size: int = 48,
     return f'<img src="data:image/png;base64,{b64}" width="{img.width()}" height="{img.height()}"/>'
 
 
+def slot_tooltip_html(slot: str, name: str, conf: float, *,
+                      confirmed: bool = False, auto_confirmed: bool = False,
+                      orig_name: str = '', thumb=None,
+                      env: str | None = None) -> str:
+    """Compose the canvas tooltip card for one recognised slot.
+
+    The single composer for both canvases — WARP's results view and WARP CORE's
+    annotation widget — so the two cannot show the same item differently. (The
+    two review *trees* still build their own variants; they carry extra
+    per-view context.)
+
+    *confirmed* rows drop *thumb*: it is the detector's original match and goes
+    stale the moment the user corrects the name, so the icon is resolved from
+    the confirmed name instead. Unconfirmed rows keep it — that is what the
+    detector actually saw.
+    """
+    from warp.recognition.boff_keys import pretty_slot
+
+    slot_disp = pretty_slot(slot or '?')
+    name_disp = name or '— unmatched —'
+    colour = ('#7effc8' if conf >= 0.85 else
+              '#e8c060' if conf >= 0.70 else '#ff9966')
+
+    if confirmed:
+        status = ('auto-confirmed by detector' if auto_confirmed
+                  else 'confirmed by user')
+        lines = [f'<b>{slot_disp}</b>', name_disp, f'<i>{status}</i>']
+        if conf > 0.0:
+            ml_text = orig_name if orig_name and orig_name != name else name_disp
+            lines.append(f'ML: <span style="color:{colour}">{ml_text} ({conf:.1%})</span>')
+        else:
+            lines.append('<span style="color:#888">ML: unknown (previous session)</span>')
+        info_html = '<br>'.join(lines)
+    else:
+        info_html = (f'<b>{slot_disp}</b><br>{name_disp}'
+                     f'<br>Confidence: <span style="color:{colour}">{conf:.1%}</span>')
+
+    return _tooltip_html(None if confirmed else thumb, name, info_html, env=env)
+
+
 def _tooltip_html(thumb, name: str, info_html: str,
                   env: str | None = None) -> str:
     """Compose a hover tooltip: resolved icon (left) beside *info_html* (right).
