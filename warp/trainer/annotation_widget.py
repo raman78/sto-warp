@@ -100,7 +100,8 @@ class AnnotationWidget(QWidget):
         # selection moves. Independent of hover, which keeps working as before.
         self._pin_enabled: bool = False
         self._pinned_row:  int  = -1
-        self._pin = None   # PinnedTooltip, created on first use
+        self._pin = None        # PinnedTooltip, created on first use
+        self._tip_probe = None  # hidden PinnedTooltip — hover geometry only
 
         # Drag/resize state — _annotations (legacy draw mode)
         self._drag_mode:  str | None = None   # 'move' | 'resize_NW' | etc.
@@ -622,16 +623,36 @@ class AnnotationWidget(QWidget):
             from PySide6.QtWidgets import QToolTip
             QToolTip.hideText()
             return
-        # This row is already pinned — a hover copy under the cursor would say
-        # the same thing twice. Every other row still tooltips normally.
+        # This row is already pinned — a hover copy would say the same thing
+        # twice. Every other row still tooltips normally.
         if self._pin_enabled and row == self._pinned_row:
             return
 
         text = self._tooltip_html_for_row(row)
 
         from PySide6.QtWidgets import QToolTip
+        QToolTip.showText(self._tooltip_anchor(row, text), text, self)
+
+    def _tooltip_anchor(self, row: int, html: str):
+        """Global point a tooltip for *row* is shown from.
+
+        Runs the pinned card's own placement (on a hidden card kept purely as
+        a measuring device, so a visible pin on another row is never
+        disturbed) and back-solves the anchor from it. That is what makes
+        hover and pin the same card in the same place, flip included. Falls
+        back to the cursor for rows without a bbox, which cannot be hovered on
+        the canvas anyway.
+        """
         from PySide6.QtGui import QCursor
-        QToolTip.showText(QCursor.pos(), text, self)
+        from warp.gui.pinned_tooltip import PinnedTooltip
+        bbox = self._review_items[row].get('bbox') if 0 <= row < len(self._review_items) else None
+        if not bbox:
+            return QCursor.pos()
+        if self._tip_probe is None:
+            self._tip_probe = PinnedTooltip(self)
+        self._tip_probe.prepare(html)
+        return self.mapToGlobal(
+            self._tip_probe.hover_anchor(self._img_to_screen_rect(bbox)))
 
     def _tooltip_html_for_row(self, row: int) -> str:
         """Compose a review row's tooltip card — shared by hover and pin."""

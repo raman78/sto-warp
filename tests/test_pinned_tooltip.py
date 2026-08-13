@@ -35,14 +35,15 @@ def pin(app):
     parent.close()
 
 
-def test_card_lands_where_a_hover_tooltip_would(pin):
-    """Qt offsets a hover tooltip from the cursor by (2, 16); the pinned card
-    uses the same offset from the bbox centre, so pinning does not move it."""
+def test_card_clears_the_bbox_below_it(pin):
+    """Anchored on the bbox's bottom edge, plus Qt's (2, 16) tooltip offset —
+    so the card sits below the slot with a gap instead of covering it."""
     anchor = QRect(50, 60, 30, 30)
     dx, dy = PinnedTooltip._OFFSET
-    pos = pin._place(anchor)
+    pos = pin.place_for(anchor)
     assert pos.x() == anchor.center().x() + dx
-    assert pos.y() == anchor.center().y() + dy
+    assert pos.y() == anchor.bottom() + dy
+    assert pos.y() > anchor.bottom()      # never over the slot itself
 
 
 # ── identity with the real hover tooltip ───────────────────────────────────
@@ -66,10 +67,9 @@ def _live_tip(app):
 def test_card_is_pixel_identical_to_the_hover_tooltip(app, tmp_path, bbox, row):
     """Same text ⇒ same box, same spot.
 
-    The card stands in for the hover tooltip, so any drift in font, margin,
-    indent, wrap or Qt's 1 px of slack shows up as a differently sized box.
-    Compared against a real QTipLabel, with the cursor point taken as the bbox
-    centre — the anchor the pin uses.
+    Drives the real hover path (`_show_hover_tooltip`) and diffs the resulting
+    QTipLabel against the pinned card, so this catches drift in either — font,
+    margin, indent, wrap, Qt's 1 px of slack, or the anchor rule.
     """
     from PySide6.QtGui import QPixmap
     from PySide6.QtWidgets import QToolTip
@@ -89,37 +89,55 @@ def test_card_is_pixel_identical_to_the_hover_tooltip(app, tmp_path, bbox, row):
     w.show()
     app.processEvents()
     w.set_review_items([{'bbox': bbox, **row}])
-    w.set_pin_enabled(True)
-    w.set_highlighted_row(0)
-    app.processEvents()
 
-    centre = w._img_to_screen_rect(bbox).center()
-    QToolTip.showText(w.mapToGlobal(centre), w._tooltip_html_for_row(0), w)
+    # 1. hover the row with the pin off — this is the production hover path
+    w._show_hover_tooltip(0)
     app.processEvents()
     tip = _live_tip(app)
     if tip is None:                            # no tooltip machinery here
         pytest.skip('platform did not materialise a QTipLabel')
+    hover_size, hover_pos = tip.size(), w.mapFromGlobal(tip.pos())
+    QToolTip.hideText()
+    app.processEvents()
+
+    # 2. pin the same row
+    w.set_pin_enabled(True)
+    w.set_highlighted_row(0)
+    app.processEvents()
 
     try:
-        assert w._pin.size() == tip.size()
-        assert w._pin.pos() == w.mapFromGlobal(tip.pos())
+        assert w._pin.size() == hover_size
+        assert w._pin.pos() == hover_pos
     finally:
-        QToolTip.hideText()
-        app.processEvents()
         w.close()
 
 
 def test_card_is_clamped_at_the_right_edge(pin):
     """A bbox near the right edge cannot push the card off-screen."""
-    pos = pin._place(QRect(350, 60, 30, 30))
+    pos = pin.place_for(QRect(350, 60, 30, 30))
     assert pos.x() == pin.parentWidget().rect().right() - pin.width()
     assert pos.x() + pin.width() <= pin.parentWidget().width()
 
 
-def test_card_is_clamped_at_the_bottom_edge(pin):
-    pos = pin._place(QRect(50, 290, 30, 30))
-    assert pos.y() == pin.parentWidget().rect().bottom() - pin.height()
-    assert pos.y() + pin.height() <= pin.parentWidget().height()
+def test_card_flips_above_when_there_is_no_room_below(pin):
+    """With no room under the bbox the card goes above it — squeezing it back
+    over the slot would defeat the point of anchoring on the bottom edge."""
+    anchor = QRect(50, 250, 30, 30)
+    _, dy = PinnedTooltip._OFFSET
+    pos = pin.place_for(anchor)
+    assert pos.y() + pin.height() < anchor.top()      # clear of the slot
+    assert pos.y() == anchor.top() - dy - pin.height()
+    assert pos.y() >= 0
+
+
+def test_hover_anchor_back_solves_the_cards_position(pin):
+    """QToolTip adds _OFFSET to what it is handed, so the hover tooltip must be
+    anchored that much before the card's own top-left to land on it."""
+    anchor = QRect(50, 60, 30, 30)
+    dx, dy = PinnedTooltip._OFFSET
+    pos   = pin.place_for(anchor)
+    hover = pin.hover_anchor(anchor)
+    assert (hover.x() + dx, hover.y() + dy) == (pos.x(), pos.y())
 
 
 # ── AnnotationWidget integration ───────────────────────────────────────────

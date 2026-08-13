@@ -30,11 +30,23 @@ class PinnedTooltip(QLabel):
     for identical text.
     """
 
-    # Qt offsets a hover tooltip from the cursor by exactly this much
-    # (QTipLabel: pos + (2, 16), measured). The pinned card applies it to the
-    # bbox centre: a selection has no cursor, and the centre is the one point
-    # that does not depend on how the user got there.
+    # Qt offsets a hover tooltip from the anchor point by exactly this much
+    # (QTipLabel: pos + (2, 16), measured). Applying the same offset to the
+    # same anchor is what keeps the pinned card and the hover tooltip on the
+    # same pixel.
     _OFFSET = (2, 16)
+
+    @staticmethod
+    def anchor_point(rect: QRect) -> QPoint:
+        """The point a tooltip for *rect* is shown from.
+
+        Bottom edge, horizontal centre: Qt's own (2, 16) offset then drops the
+        card clear of the slot instead of over it, leaving a visible gap. Both
+        the hover tooltip and the pinned card go through here, so the two
+        cannot end up in different places — and unlike the cursor, this anchor
+        does not drift with every pass of the mouse over the same bbox.
+        """
+        return QPoint(rect.center().x(), rect.bottom())
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -70,15 +82,15 @@ class PinnedTooltip(QLabel):
 
     # ── public API ────────────────────────────────────────────────────────
 
-    def show_for(self, html: str, anchor: QRect) -> None:
-        """Show *html* beside *anchor* (canvas coordinates)."""
-        if not html:
-            self.hide()
-            return
-        # The rest of this mirrors QTipLabel::reuseTip, including its 1 px of
-        # slack (and the extra row Qt adds for fonts with a small descent) —
-        # without it the card comes out a pixel narrower than the hover
-        # tooltip showing the very same text.
+    def prepare(self, html: str) -> None:
+        """Load *html* and take the size Qt's hover tooltip would take.
+
+        Mirrors QTipLabel::reuseTip, including its 1 px of slack (and the
+        extra row Qt adds for fonts with a small descent) — without it the
+        card comes out a pixel narrower than the hover tooltip showing the
+        very same text. Does not show: `place_for` needs a sized widget, and
+        the hover path measures with a hidden one.
+        """
         self.setWordWrap(_GuiQt.mightBeRichText(html))
         self.setText(html)
         fm = QFontMetrics(self.font())
@@ -86,29 +98,56 @@ class PinnedTooltip(QLabel):
         if fm.descent() == 2 and fm.ascent() >= 11:
             extra.setHeight(extra.height() + 1)
         self.resize(self.sizeHint() + extra)
-        self.move(self._place(anchor))
+
+    def show_for(self, html: str, anchor: QRect) -> None:
+        """Show *html* under *anchor* (canvas coordinates)."""
+        if not html:
+            self.hide()
+            return
+        self.prepare(html)
+        self.move(self.place_for(anchor))
         self.show()
         self.raise_()
 
     # ── placement ─────────────────────────────────────────────────────────
 
-    def _place(self, anchor: QRect) -> QPoint:
-        """Sit below-right of the bbox centre, clamped to stay visible.
+    def place_for(self, anchor: QRect) -> QPoint:
+        """Top-left for a card of the current size against bbox *anchor*.
 
-        Same geometry a hover tooltip would get with the cursor in the middle
-        of the bbox. The clamp mirrors what Qt does near a screen edge; the
-        visible region is what the scroll area actually shows, so the card
-        lands on screen even when the canvas dwarfs the viewport.
+        The one authority on where a tooltip for a bbox goes — the hover path
+        back-solves its QToolTip anchor from this, so both land on the same
+        pixel.
+
+        Below the bbox by default. With no room below, it flips *above* rather
+        than being squeezed back over the slot, which is the whole point of
+        anchoring on the bottom edge. Qt does the same for its own tooltips at
+        a screen edge; the difference is the box being fitted into — the
+        visible canvas here, since the card is a child of it and would
+        otherwise just be clipped.
         """
         area = self.parentWidget().visibleRegion().boundingRect()
         if area.isEmpty():
             area = self.parentWidget().rect()
         w, h = self.width(), self.height()
         dx, dy = self._OFFSET
+        point = self.anchor_point(anchor)
 
-        x = anchor.center().x() + dx
+        x = point.x() + dx
         x = max(area.left(), min(x, max(area.left(), area.right() - w)))
 
-        y = anchor.center().y() + dy
+        y = point.y() + dy
+        if y + h > area.bottom():
+            y = anchor.top() - dy - h          # flip above, same visual gap
         y = max(area.top(), min(y, max(area.top(), area.bottom() - h)))
         return QPoint(int(x), int(y))
+
+    def hover_anchor(self, anchor: QRect) -> QPoint:
+        """Point to hand `QToolTip.showText` so its tooltip lands on `place_for`.
+
+        Qt adds `_OFFSET` to whatever it is given, so subtracting it here makes
+        the hover tooltip adopt the card's placement — including the flip.
+        Canvas coordinates; callers map to global.
+        """
+        dx, dy = self._OFFSET
+        pos = self.place_for(anchor)
+        return QPoint(pos.x() - dx, pos.y() - dy)

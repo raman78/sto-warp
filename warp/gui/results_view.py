@@ -130,7 +130,8 @@ class _InteractiveCanvas(QWidget):
         # until the selection moves. Hover is unaffected.
         self._pin_enabled: bool = False
         self._pinned_gidx: int  = -1
-        self._pin = None   # PinnedTooltip, created on first use
+        self._pin = None        # PinnedTooltip, created on first use
+        self._tip_probe = None  # hidden PinnedTooltip — hover geometry only
         # Skill-tree overlay: [(x, y, w, h, on), ...] in image coords. Drawn
         # green (ON) / red (OFF) on top of the screenshot for skill screens,
         # which carry no RecognisedItems.
@@ -295,8 +296,8 @@ class _InteractiveCanvas(QWidget):
         self._hover_timer.start(500)
 
     def _show_hover_tooltip(self, gidx: int):
-        # This item is already pinned beside its bbox — a hover copy under the
-        # cursor would just repeat it. Every other item tooltips as before.
+        # This item is already pinned beside its bbox — a hover copy would just
+        # repeat it. Every other item tooltips as before.
         if self._pin_enabled and gidx == self._pinned_gidx:
             return
         text = self._tooltip_html_for_gidx(gidx)
@@ -304,8 +305,24 @@ class _InteractiveCanvas(QWidget):
             return
 
         from PySide6.QtWidgets import QToolTip
+        QToolTip.showText(self._tooltip_anchor(gidx, text), text, self)
+
+    def _tooltip_anchor(self, gidx: int, html: str) -> QPoint:
+        """Global point a tooltip for *gidx* is shown from.
+
+        Runs the pinned card's own placement on a hidden measuring card and
+        back-solves the anchor, so hover and pin land on the same pixel —
+        including the flip above a bbox with no room below it.
+        """
         from PySide6.QtGui import QCursor
-        QToolTip.showText(QCursor.pos(), text, self)
+        from warp.gui.pinned_tooltip import PinnedTooltip
+        rect = self._screen_rect_for_gidx(gidx)
+        if rect is None:
+            return QCursor.pos()
+        if self._tip_probe is None:
+            self._tip_probe = PinnedTooltip(self)
+        self._tip_probe.prepare(html)
+        return self.mapToGlobal(self._tip_probe.hover_anchor(rect))
 
     def _item_for_gidx(self, gidx: int) -> RecognisedItem | None:
         for item, g in zip(self._items, self._gidx):

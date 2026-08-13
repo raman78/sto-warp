@@ -323,17 +323,20 @@ If the reference icon does not match what is in the bounding box, the recognitio
 
 A hover tooltip disappears the moment you move the mouse away, which is awkward when you want to read it while doing something else — typing a correction, comparing two boxes, or scrolling the list. Tick **Pin tooltip on selection** at the end of the main toolbar, and the tooltip for the **selected** item stays on the canvas until you select something else.
 
-The pinned card is the same card, down to the pixel — same font, same size, same box. It appears exactly where a hover tooltip would if you were pointing at the middle of the bounding box, so nothing jumps or changes shape when you switch between hovering and selecting. (A hover tooltip follows the mouse, so its own position depends on where inside the box you point; the pinned one has no cursor to follow and uses the middle.)
+The pinned card and the hover tooltip are the same card in the same place, down to the pixel. Both appear just below the bounding box, with a small gap so the slot itself stays visible — nothing jumps, resizes or gets covered when you switch between hovering and selecting. On a box near the bottom of the picture the card goes above it instead, again clear of the slot.
 
 ```
    ┌────┐
-   │icon│  bbox
-   └──┬─┴────────────────────────┐
-      │ ┌────┐  Fore Weapons     │   ← card stays put, no hover needed
-      │ │icon│  Phaser Beam Array│
-      │ └────┘  Confidence: 94%  │
-      └──────────────────────────┘
+   │icon│  bbox stays visible
+   └────┘
+     ┌──────────────────────────┐
+     │ ┌────┐  Fore Weapons     │   ← card stays put, no hover needed
+     │ │icon│  Phaser Beam Array│
+     │ └────┘  Confidence: 94%  │
+     └──────────────────────────┘
 ```
+
+Note that this also changes plain hovering: a canvas tooltip is now tied to the bounding box rather than to the mouse pointer, so it no longer shifts by a few pixels depending on where inside the box you happen to point.
 
 Selecting an item **either way** pins it — clicking its bounding box on the canvas or clicking its row in the list. Selecting a group header (a slot row with several children) unpins, because there is no single item to show.
 
@@ -604,7 +607,7 @@ Two things worth knowing:
 |--------|-----|
 | Zoom in / out | **Ctrl + scroll wheel** (1× – 6×, anchored to cursor) |
 | Select a box | **Left click** on the box — highlights it in the review list |
-| Hover over a box | Shows a tooltip with the reference icon, slot, item name and confidence — compare the icon with what you see in the bbox to spot mismatches. After you confirm or correct an item, the tooltip updates to the icon and name you confirmed and notes whether it was confirmed by you or auto-accepted by the program |
+| Hover over a box | Shows a tooltip just below the box (above it near the bottom edge) with the reference icon, slot, item name and confidence — compare the icon with what you see in the bbox to spot mismatches. After you confirm or correct an item, the tooltip updates to the icon and name you confirmed and notes whether it was confirmed by you or auto-accepted by the program |
 | Keep a tooltip on screen | Tick **Pin tooltip on selection** at the end of the toolbar — the selected box keeps its tooltip while you type the correction. See [Pin tooltip on selection](#pin-tooltip-on-selection) |
 | Right-click a box | Opens a menu with **Open on vger.stobuilds.com** and **Open on STO Wiki** links to look up the item in your browser |
 | Draw new box | **Alt + LMB drag** — hold Alt, click and drag over an item icon |
