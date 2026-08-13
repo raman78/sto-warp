@@ -368,12 +368,17 @@ Fired by `SyncCoordinator` as the `model` step of every refresh cycle
 1. Check rate limit: skip if last check was < 15 min ago
    (_CHECK_INTERVAL_HOURS = 0.25 in model_updater.py)
 2. GET https://sets-sto-warp-backend.hf.space/model/version
-   → returns {available, trained_at, n_classes, val_acc, ...}
+   → returns {available, trained_at, n_classes, val_acc,
+              embedder_trained_at, embedder_n_classes, embedder_recall, ...}
 3. Compare remote trained_at vs local model_version.json trained_at:
-     remote > local  → download and install new model
-     remote ≤ local  → skip (local is current)
-4. If update needed: download all _MODEL_FILES from HF via hf_hub_download
-5. Copy files to warp/models/ atomically
+     remote > local  → download and install new model (_MODEL_FILES)
+     remote ≤ local  → compare embedder timestamps (step 3b)
+3b. Compare remote embedder_trained_at vs local icon_embedder_meta.json
+    trained_at (_embedder_is_outdated):
+     remote > local  → download _EMBEDDER_FILES only
+     otherwise       → skip (local is current)
+4. Download the selected file list from HF via hf_hub_download
+5. Copy files to the models dir atomically
 6. Call SETSIconMatcher.reset_ml_session() to reload immediately
 7. Save check timestamp to model_version_remote_cache.json
 ```
@@ -383,6 +388,20 @@ Fired by `SyncCoordinator` as the `model` step of every refresh cycle
 class-count regression that would silently downgrade the model is rejected
 in the same check — see the `1.0.10` Changelog entry on tier corrections
 for the user-visible symptom this prevents.
+
+**Two clocks, not one.** The softmax classifier
+(`train_central_model.yml`, hourly, only retrains once ≥ 10 new crops have
+been merged) and the ArcFace embedder (`train_metric_model.yml`, daily)
+are published by independent workflows, so their `trained_at` stamps drift
+apart. The embedder is the primary matcher (priority 0 in
+`icon_matcher.py`), so gating it on the classifier's timestamp would freeze
+it on every install whenever crop intake stalls. Step 3b is what keeps the
+two independent. Backends that do not yet report `embedder_trained_at`
+simply fall through to the old behaviour.
+
+Independently of both, `_embedder_needs_refresh()` still forces a **full**
+redownload when the embedder files are missing or carry pre-2026-05-16
+snake_case labels.
 
 ### screen_classifier fallback
 

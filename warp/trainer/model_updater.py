@@ -18,6 +18,11 @@
 #     its trained_at will be newer than the remote version → no update.
 #   - The remote update ONLY installs when the remote is strictly newer.
 #
+# The ArcFace embedder is versioned separately ('embedder_trained_at' in the
+# /model/version payload vs local icon_embedder_meta.json). Its trainer runs on
+# its own cadence, so when only the embedder moved we download the four embedder
+# files alone and leave the softmax classifier untouched.
+#
 # All network calls are non-blocking (background thread).
 # Failures are silently logged — the update is skipped, never crashes the app.
 
@@ -61,6 +66,17 @@ _SCREEN_CLASSIFIER_FILES = [
     ('models/screen_classifier.pt',          'screen_classifier.pt'),
     ('models/screen_classifier_labels.json', 'screen_classifier_labels.json'),
 ]
+# The ArcFace embedder is published by its own trainer on its own cadence, so it
+# can be newer than the softmax classifier. Downloaded on its own when only
+# `embedder_trained_at` moved — no need to re-fetch the 31 MB classifier.
+_EMBEDDER_FILES = [
+    ('models/icon_embedder.pt',        'icon_embedder.pt'),
+    ('models/embedder_label_map.json', 'embedder_label_map.json'),
+    ('models/icon_embedder_meta.json', 'icon_embedder_meta.json'),
+    ('models/embedding_index.npz',     'embedding_index.npz'),
+]
+_REQUIRED_FULL     = ('icon_classifier.pt', 'label_map.json')
+_REQUIRED_EMBEDDER = ('icon_embedder.pt', 'embedder_label_map.json', 'embedding_index.npz')
 
 
 class ModelUpdater:
@@ -153,6 +169,9 @@ class ModelUpdater:
             local_ts  = self._read_local_trained_at(models_dir)
             remote_ts = remote.get('trained_at', '')
 
+            files    = _MODEL_FILES
+            required = _REQUIRED_FULL
+
             if local_ts and remote_ts <= local_ts:
                 # One-time self-heal: older client versions did not download the
                 # ArcFace embedder files. If the local embedder_label_map.json
@@ -163,6 +182,17 @@ class ModelUpdater:
                         'ModelUpdater: softmax model is current but embedder '
                         'files are stale/missing — forcing redownload'
                     )
+                elif self._embedder_is_outdated(models_dir, remote):
+                    # The embedder trains on its own cadence and is the primary
+                    # matcher (icon_matcher priority 0) — fetch it alone.
+                    files    = _EMBEDDER_FILES
+                    required = _REQUIRED_EMBEDDER
+                    log.info(
+                        f'ModelUpdater: softmax model is current but a newer '
+                        f'ArcFace embedder is available '
+                        f'(local={self._read_local_embedder_trained_at(models_dir)[:10] or "none"}, '
+                        f'remote={remote.get("embedder_trained_at", "")[:10]}) — downloading embedder only'
+                    )
                 else:
                     log.info(
                         f'ModelUpdater: local model is current '
@@ -171,13 +201,17 @@ class ModelUpdater:
                     self._save_check_timestamp()
                     return
 
-            log.info(
-                f'ModelUpdater: remote model is newer '
-                f'(remote={remote_ts[:10]}, local={local_ts[:10] if local_ts else "none"}) '
-                f'— downloading...'
-            )
+            if files is _MODEL_FILES:
+                log.info(
+                    f'ModelUpdater: remote model is newer '
+                    f'(remote={remote_ts[:10]}, local={local_ts[:10] if local_ts else "none"}) '
+                    f'— downloading...'
+                )
 
-            if self._download_model(models_dir, remote, on_progress=on_progress):
+            if self._download_model(
+                models_dir, remote, on_progress=on_progress,
+                files=files, required=required,
+            ):
                 # Write/update model_version.json with download timestamp.
                 ver_path = models_dir / 'model_version.json'
                 try:
@@ -195,11 +229,18 @@ class ModelUpdater:
                     log.warning(f'ModelUpdater: could not update model_version.json: {e}')
 
                 _now = _dt.datetime.now(_dt.timezone.utc).strftime('%H:%M')
-                log.info(
-                    f'ModelUpdater: model downloaded at {_now} UTC — '
-                    f'{remote.get("n_classes")} classes, '
-                    f'val_acc={remote.get("val_acc", 0):.1%}'
-                )
+                if files is _EMBEDDER_FILES:
+                    log.info(
+                        f'ModelUpdater: embedder downloaded at {_now} UTC — '
+                        f'{remote.get("embedder_n_classes")} classes, '
+                        f'recall@1={remote.get("embedder_recall", 0):.1%}'
+                    )
+                else:
+                    log.info(
+                        f'ModelUpdater: model downloaded at {_now} UTC — '
+                        f'{remote.get("n_classes")} classes, '
+                        f'val_acc={remote.get("val_acc", 0):.1%}'
+                    )
                 # Reload icon matcher ML session
                 try:
                     from warp.recognition.icon_matcher import SETSIconMatcher
@@ -271,11 +312,17 @@ class ModelUpdater:
         models_dir: Path,
         remote_meta: dict,
         on_progress: Callable[[str, int, int], None] | None = None,
+        files: list[tuple[str, str]] | None = None,
+        required: tuple[str, ...] = _REQUIRED_FULL,
     ) -> bool:
         """
         Download model files from HF knowledge repo directly.
         Uses hf_hub_download — no token needed for public repo.
         on_progress(text, current, total) is called for each file.
+
+        `files` defaults to the full model set; pass `_EMBEDDER_FILES` to refresh
+        the ArcFace embedder alone. `required` names the files whose absence
+        aborts the whole download — everything else is best-effort.
         """
         import os, shutil
         # Suppress the Windows symlinks warning — we don't need symlinks.
@@ -291,9 +338,10 @@ class ModelUpdater:
         models_dir.mkdir(parents=True, exist_ok=True)
         tmp_files: list[tuple[Path, Path]] = []  # (tmp_path, final_path)
 
-        total = len(_MODEL_FILES)
+        files = files or _MODEL_FILES
+        total = len(files)
         n_classes = remote_meta.get('n_classes', '?')
-        for idx, (hf_path, local_name) in enumerate(_MODEL_FILES):
+        for idx, (hf_path, local_name) in enumerate(files):
             if on_progress:
                 on_progress(
                     f'Downloading ML model ({n_classes} classes): {local_name}',
@@ -309,8 +357,7 @@ class ModelUpdater:
                 )
                 tmp_files.append((Path(downloaded), final_path))
             except Exception as e:
-                # icon_classifier.pt and label_map.json are required
-                if local_name in ('icon_classifier.pt', 'label_map.json'):
+                if local_name in required:
                     log.warning(f'ModelUpdater: required file {hf_path} unavailable: {e}')
                     return False
                 log.debug(f'ModelUpdater: optional file {hf_path} unavailable: {e}')
@@ -407,6 +454,34 @@ class ModelUpdater:
             return n_snake > 5
         except Exception:
             return False
+
+    @classmethod
+    def _embedder_is_outdated(cls, models_dir: Path, remote: dict) -> bool:
+        """
+        Return True if the backend advertises an ArcFace embedder newer than the
+        local one.
+
+        The softmax classifier and the embedder are trained by two independent
+        workflows, so `trained_at` alone cannot gate the embedder: with the
+        classifier idle (no new crops) the daily embedder would otherwise never
+        reach clients. Backends that do not report `embedder_trained_at` yet
+        return False — the old behaviour.
+        """
+        remote_ts = remote.get('embedder_trained_at', '')
+        if not remote_ts:
+            return False
+        return remote_ts > cls._read_local_embedder_trained_at(models_dir)
+
+    @staticmethod
+    def _read_local_embedder_trained_at(models_dir: Path) -> str:
+        """Return 'trained_at' from local icon_embedder_meta.json, or ''."""
+        meta_file = models_dir / 'icon_embedder_meta.json'
+        if not meta_file.exists():
+            return ''
+        try:
+            return json.loads(meta_file.read_text(encoding='utf-8')).get('trained_at', '')
+        except Exception:
+            return ''
 
     @staticmethod
     def _read_local_trained_at(models_dir: Path) -> str:
