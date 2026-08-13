@@ -623,6 +623,12 @@ class SyncWorker(QThread):
         oversized  = 0
         for type_dir in sorted(type_dirs):
             stype = type_dir.name
+            # 'UNKNOWN' is the not-yet-classified sentinel, not a label — the
+            # screen-type menu offers it so a user can undo a wrong pick. The
+            # backend whitelist rejects it, so skip it here rather than send a
+            # batch that is guaranteed to 400.
+            if stype == 'UNKNOWN':
+                continue
             # Build list of {png_b64} for crops we haven't uploaded yet, in
             # parallel with the sha list so we can update the cache after
             # backend ack.
