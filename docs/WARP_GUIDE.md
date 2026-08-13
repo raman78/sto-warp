@@ -323,7 +323,7 @@ If the reference icon does not match what is in the bounding box, the recognitio
 
 A hover tooltip disappears the moment you move the mouse away, which is awkward when you want to read it while doing something else — typing a correction, comparing two boxes, or scrolling the list. Tick **Pin tooltip on selection** at the end of the main toolbar, and the tooltip for the **selected** item stays on the canvas until you select something else.
 
-The pinned card appears in exactly the same spot a hover tooltip would if you were pointing at the middle of the bounding box, so nothing jumps when you switch between hovering and selecting:
+The pinned card is the same card, down to the pixel — same font, same size, same box. It appears exactly where a hover tooltip would if you were pointing at the middle of the bounding box, so nothing jumps or changes shape when you switch between hovering and selecting. (A hover tooltip follows the mouse, so its own position depends on where inside the box you point; the pinned one has no cursor to follow and uses the middle.)
 
 ```
    ┌────┐

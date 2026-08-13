@@ -155,6 +155,17 @@ def accent_qss(name: str) -> str:
         f'}}'
     )
 
+# ── Tooltip look ─────────────────────────────────────────────────────────────
+# Declarations only, so the pinned tooltip (`warp.gui.pinned_tooltip`) can wear
+# exactly what Qt's own hover tooltip wears. Any drift here would show up as a
+# card of a different size than the hover tooltip it stands in for.
+TOOLTIP_QSS_BODY = (
+    f'background-color: {MBG};'
+    f'color: {FG};'
+    f'border: 1px solid {LBG};'
+    f'padding: 2px;'
+)
+
 # ── Global stylesheet ────────────────────────────────────────────────────────
 
 WARP_QSS = f"""
@@ -411,12 +422,7 @@ QFrame[frameShape="5"] {{
     border: none;
     max-height: 1px;
 }}
-QToolTip {{
-    background-color: {MBG};
-    color: {FG};
-    border: 1px solid {LBG};
-    padding: 2px;
-}}
+QToolTip {{ {TOOLTIP_QSS_BODY} }}
 /* System dialogs (QFileDialog, QMessageBox, QFontDialog, QColorDialog)
    are Qt widget trees parented under our QApplication, so they inherit
    the global QPushButton/QToolButton rules above. That strips icons

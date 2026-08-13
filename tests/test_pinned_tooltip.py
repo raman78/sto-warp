@@ -45,6 +45,70 @@ def test_card_lands_where_a_hover_tooltip_would(pin):
     assert pos.y() == anchor.center().y() + dy
 
 
+# ── identity with the real hover tooltip ───────────────────────────────────
+
+
+def _live_tip(app):
+    """The QTipLabel Qt is currently showing, or None."""
+    for w in app.topLevelWidgets():
+        if 'Tip' in w.metaObject().className():
+            return w
+    return None
+
+
+@pytest.mark.parametrize('bbox,row', [
+    ((40, 40, 64, 64), {'state': 'confirmed', 'auto_confirmed': False,
+                        'slot': 'Fore Weapons',
+                        'name': 'Quantum Torpedo Launcher', 'conf': 0.71}),
+    ((200, 150, 48, 48), {'state': 'pending', 'slot': 'Fore Weapons',
+                          'name': 'Phaser Beam Array Mk XII', 'conf': 0.92}),
+])
+def test_card_is_pixel_identical_to_the_hover_tooltip(app, tmp_path, bbox, row):
+    """Same text ⇒ same box, same spot.
+
+    The card stands in for the hover tooltip, so any drift in font, margin,
+    indent, wrap or Qt's 1 px of slack shows up as a differently sized box.
+    Compared against a real QTipLabel, with the cursor point taken as the bbox
+    centre — the anchor the pin uses.
+    """
+    from PySide6.QtGui import QPixmap
+    from PySide6.QtWidgets import QToolTip
+    from warp.style import apply_dark_style
+
+    apply_dark_style(app)                     # the QSS font rule matters here
+    shot = tmp_path / 'shot.png'
+    QPixmap(600, 320).save(str(shot))
+
+    class _StubDataMgr:
+        def get_annotations(self, path):
+            return []
+
+    w = aw.AnnotationWidget(_StubDataMgr())
+    w.resize(600, 320)
+    w.load_image(shot)
+    w.show()
+    app.processEvents()
+    w.set_review_items([{'bbox': bbox, **row}])
+    w.set_pin_enabled(True)
+    w.set_highlighted_row(0)
+    app.processEvents()
+
+    centre = w._img_to_screen_rect(bbox).center()
+    QToolTip.showText(w.mapToGlobal(centre), w._tooltip_html_for_row(0), w)
+    app.processEvents()
+    tip = _live_tip(app)
+    if tip is None:                            # no tooltip machinery here
+        pytest.skip('platform did not materialise a QTipLabel')
+
+    try:
+        assert w._pin.size() == tip.size()
+        assert w._pin.pos() == w.mapFromGlobal(tip.pos())
+    finally:
+        QToolTip.hideText()
+        app.processEvents()
+        w.close()
+
+
 def test_card_is_clamped_at_the_right_edge(pin):
     """A bbox near the right edge cannot push the card off-screen."""
     pos = pin._place(QRect(350, 60, 30, 30))
