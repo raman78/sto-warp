@@ -127,6 +127,13 @@ def _fuzzy_tier(cand: str) -> str | None:
 # ROI for ship name/type block (top-left, fraction of image)
 SHIP_INFO_ROI = (0.0, 0.0, 0.34, 0.28)
 
+# Widest anchor token, in px, that still widens the ship-info column window.
+# Beyond this the anchor says nothing more about how wide the column is — see
+# the note where the window is built. Measured over 254 screenshots: any cap
+# in 100–200 px behaves identically (no ship-class match lost, one wrong match
+# corrected), so the middle of that plateau is used.
+_COL_PAD_ANCHOR_CAP = 150
+
 # ── Keyword sets per screen type ──────────────────────────────────────────────
 # Checked against lowercase OCR text of scan regions.
 # More specific keywords are listed first (longer matches win).
@@ -747,7 +754,19 @@ class TextExtractor:
                         break
 
             if anchor_kind:
-                col_pad = max(80, int(anchor_w * 2.0))
+                # Column window: the HUD stacks name / class / registry in one
+                # left-aligned column, so tokens outside it are other UI.
+                #
+                # The pad is capped because it used to scale with the anchor's
+                # own width, which is not a property of the column at all: a
+                # short 'U.S.S.' anchor gave a sane ±160 px, but when OCR
+                # returned a whole class line as one 404 px token the window
+                # grew to ±808 px — 81 % of a 1544 px screenshot — and stopped
+                # rejecting anything. A token from the far-right traits legend
+                # then merged into ship_type, and its bbox with it (measured:
+                # ship_type_bbox 1255 px wide, running across the equipment
+                # column). Anchors narrower than the cap are unaffected.
+                col_pad = max(80, int(min(anchor_w, _COL_PAD_ANCHOR_CAP) * 2.0))
                 col_lo = anchor_x - col_pad
                 col_hi = anchor_x + anchor_w + col_pad
 
