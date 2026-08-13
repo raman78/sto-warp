@@ -321,21 +321,25 @@ If the reference icon does not match what is in the bounding box, the recognitio
 
 #### Pin tooltip on selection
 
-A hover tooltip disappears the moment you move the mouse away, which is awkward when you want to read it while doing something else — typing a correction, comparing two boxes, or scrolling the list. Tick **Pin tooltip on selection**, above the item tree, and the tooltip for the **selected** item stays on the canvas next to its bounding box until you select something else.
+A hover tooltip disappears the moment you move the mouse away, which is awkward when you want to read it while doing something else — typing a correction, comparing two boxes, or scrolling the list. Tick **Pin tooltip on selection** at the end of the main toolbar, and the tooltip for the **selected** item stays on the canvas until you select something else.
+
+The pinned card appears in exactly the same spot a hover tooltip would if you were pointing at the middle of the bounding box, so nothing jumps when you switch between hovering and selecting:
 
 ```
-   ┌────┐ ┌──────────────────────────────┐
-   │icon│ │ ┌────┐  Fore Weapons         │   ← card stays put, no hover needed
-   └────┘ │ │icon│  Phaser Beam Array    │
-    bbox  │ └────┘  Confidence: 94%      │
-          └──────────────────────────────┘
+   ┌────┐
+   │icon│  bbox
+   └──┬─┴────────────────────────┐
+      │ ┌────┐  Fore Weapons     │   ← card stays put, no hover needed
+      │ │icon│  Phaser Beam Array│
+      │ └────┘  Confidence: 94%  │
+      └──────────────────────────┘
 ```
 
 Selecting an item **either way** pins it — clicking its bounding box on the canvas or clicking its row in the list. Selecting a group header (a slot row with several children) unpins, because there is no single item to show.
 
 Hovering keeps working exactly as before, everywhere, at the same time. The only exception is the pinned item itself: hovering over it does not pop a second copy of a card you are already looking at.
 
-The checkbox appears both in WARP's Results pane and in WARP CORE (including Fast Correction Mode); each remembers its own setting between sessions.
+The checkbox sits on the toolbar of both WARP and WARP CORE (including Fast Correction Mode); each window remembers its own setting between sessions.
 
 #### Right-click — quick actions on a Results row
 
@@ -601,7 +605,7 @@ Two things worth knowing:
 | Zoom in / out | **Ctrl + scroll wheel** (1× – 6×, anchored to cursor) |
 | Select a box | **Left click** on the box — highlights it in the review list |
 | Hover over a box | Shows a tooltip with the reference icon, slot, item name and confidence — compare the icon with what you see in the bbox to spot mismatches. After you confirm or correct an item, the tooltip updates to the icon and name you confirmed and notes whether it was confirmed by you or auto-accepted by the program |
-| Keep a tooltip on screen | Tick **Pin tooltip on selection** above the review list — the selected box keeps its tooltip beside it while you type the correction. See [Pin tooltip on selection](#pin-tooltip-on-selection) |
+| Keep a tooltip on screen | Tick **Pin tooltip on selection** at the end of the toolbar — the selected box keeps its tooltip while you type the correction. See [Pin tooltip on selection](#pin-tooltip-on-selection) |
 | Right-click a box | Opens a menu with **Open on vger.stobuilds.com** and **Open on STO Wiki** links to look up the item in your browser |
 | Draw new box | **Alt + LMB drag** — hold Alt, click and drag over an item icon |
 | Draw mode toggle | **Alt+A** button in the right panel — cursor stays as crosshair until toggled off |

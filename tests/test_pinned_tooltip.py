@@ -35,21 +35,24 @@ def pin(app):
     parent.close()
 
 
-def test_card_sits_to_the_right_of_the_bbox(pin):
+def test_card_lands_where_a_hover_tooltip_would(pin):
+    """Qt offsets a hover tooltip from the cursor by (2, 16); the pinned card
+    uses the same offset from the bbox centre, so pinning does not move it."""
     anchor = QRect(50, 60, 30, 30)
+    dx, dy = PinnedTooltip._OFFSET
     pos = pin._place(anchor)
-    assert pos.x() == anchor.right() + PinnedTooltip._GAP
-    assert pos.y() == anchor.top()
+    assert pos.x() == anchor.center().x() + dx
+    assert pos.y() == anchor.center().y() + dy
 
 
-def test_card_flips_left_when_it_would_overflow(pin):
-    """A bbox near the right edge pushes the card to the bbox's left side."""
+def test_card_is_clamped_at_the_right_edge(pin):
+    """A bbox near the right edge cannot push the card off-screen."""
     pos = pin._place(QRect(350, 60, 30, 30))
-    assert pos.x() == 350 - PinnedTooltip._GAP - 100
+    assert pos.x() == pin.parentWidget().rect().right() - pin.width()
+    assert pos.x() + pin.width() <= pin.parentWidget().width()
 
 
-def test_card_is_clamped_into_the_visible_area(pin):
-    """A bbox at the bottom edge cannot push the card off-screen."""
+def test_card_is_clamped_at_the_bottom_edge(pin):
     pos = pin._place(QRect(50, 290, 30, 30))
     assert pos.y() == pin.parentWidget().rect().bottom() - pin.height()
     assert pos.y() + pin.height() <= pin.parentWidget().height()

@@ -25,14 +25,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QPoint, QRect, QSettings, Signal
+from PySide6.QtCore import Qt, QSize, QPoint, QRect, Signal
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QPainter, QPen, QPixmap,
 )
 from PySide6.QtWidgets import (
-    QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel,
-    QListWidget, QListWidgetItem, QMenu, QPushButton, QScrollArea, QSplitter,
-    QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QApplication, QComboBox, QHBoxLayout, QHeaderView, QLabel, QListWidget,
+    QListWidgetItem, QMenu, QPushButton, QScrollArea, QSplitter, QStyle,
+    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from warp.recognition.boff_keys import group_items_by_seat, order_items_for_display
@@ -44,11 +44,6 @@ from warp.warp_importer import (
     ImportResult, RecognisedItem, SLOT_ORDER, DISPLAY_CANONICAL_ORDER,
 )
 
-
-# QSettings key — the results pane's own pin toggle. WARP CORE keeps a
-# separate one (`warp_core/pin_tooltip`); the two panes are used for
-# different jobs and remember the preference independently.
-_KEY_PIN_TOOLTIP = 'warp/pin_tooltip'
 
 # Selection accent — gold/amber, matches the Export to SETS JSON button.
 _SEL_COLOR = QColor(_THEME_ACCENT)
@@ -655,24 +650,7 @@ class ResultsView(QWidget):
             f'QTreeWidget::item:selected {{ '
             f'background-color: {_THEME_ACCENT}; color: #1a1a1a; }}'
         )
-        # Tree + its pin toggle share a pane so the checkbox sits directly
-        # above the list it applies to (mirrors WARP CORE's placement).
-        right = QWidget()
-        rl = QVBoxLayout(right)
-        rl.setContentsMargins(0, 0, 0, 0)
-        rl.setSpacing(4)
-        self._chk_pin_tooltip = QCheckBox('Pin tooltip on selection')
-        self._chk_pin_tooltip.setToolTip(
-            'Keep the selected item\'s tooltip on the canvas next to its bbox, '
-            'instead of only while hovering. Hover tooltips keep working '
-            'everywhere else.')
-        self._chk_pin_tooltip.setChecked(
-            QSettings().value(_KEY_PIN_TOOLTIP, False, type=bool))
-        self._chk_pin_tooltip.toggled.connect(self._on_pin_tooltip_toggled)
-        rl.addWidget(self._chk_pin_tooltip)
-        rl.addWidget(self._tree, 1)
-        split.addWidget(right)
-        self._canvas.set_pin_enabled(self._chk_pin_tooltip.isChecked())
+        split.addWidget(self._tree)
 
         # File list is select-only: a click picks a file, no toggle-off
         # behaviour (clearing the active file via clicking it again was
@@ -1137,8 +1115,12 @@ class ResultsView(QWidget):
                 return
         self._canvas.set_highlight(-1)
 
-    def _on_pin_tooltip_toggled(self, enabled: bool):
-        QSettings().setValue(_KEY_PIN_TOOLTIP, enabled)
+    def set_pin_tooltip(self, enabled: bool) -> None:
+        """Keep the selected item's tooltip on the canvas.
+
+        Driven by the toolbar checkbox in `warp_window`, which owns the
+        preference — this view just forwards it to the canvas.
+        """
         self._canvas.set_pin_enabled(enabled)
 
     def _on_canvas_bbox_clicked(self, gidx: int):

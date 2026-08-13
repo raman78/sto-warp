@@ -20,9 +20,13 @@ from warp.style import MBG, FG, LBG, ACCENT
 
 
 class PinnedTooltip(QLabel):
-    """Frameless rich-text card anchored beside a bbox on a canvas."""
+    """Frameless rich-text card anchored on a bbox on a canvas."""
 
-    _GAP = 8   # px between the bbox edge and the card
+    # Qt offsets a hover tooltip from the cursor by exactly this much
+    # (QTipLabel: pos + (2, 16), measured). The pinned card reuses it against
+    # the bbox centre — the point the cursor would be on while hovering — so
+    # pinning does not make the card jump somewhere else.
+    _OFFSET = (2, 16)
 
     def __init__(self, parent):
         super().__init__(parent)
@@ -54,21 +58,22 @@ class PinnedTooltip(QLabel):
     # ── placement ─────────────────────────────────────────────────────────
 
     def _place(self, anchor: QRect) -> QPoint:
-        """Prefer the right of the bbox; flip left and clamp to stay visible.
+        """Sit below-right of the bbox centre, clamped to stay visible.
 
-        The visible region is what the scroll area actually shows, so the card
-        lands on screen even when the canvas is much larger than the viewport.
+        Same geometry a hover tooltip would get with the cursor in the middle
+        of the bbox. The clamp mirrors what Qt does near a screen edge; the
+        visible region is what the scroll area actually shows, so the card
+        lands on screen even when the canvas dwarfs the viewport.
         """
         area = self.parentWidget().visibleRegion().boundingRect()
         if area.isEmpty():
             area = self.parentWidget().rect()
         w, h = self.width(), self.height()
+        dx, dy = self._OFFSET
 
-        x = anchor.right() + self._GAP
-        if x + w > area.right():
-            x = anchor.left() - self._GAP - w
+        x = anchor.center().x() + dx
         x = max(area.left(), min(x, max(area.left(), area.right() - w)))
 
-        y = anchor.top()
+        y = anchor.center().y() + dy
         y = max(area.top(), min(y, max(area.top(), area.bottom() - h)))
         return QPoint(int(x), int(y))

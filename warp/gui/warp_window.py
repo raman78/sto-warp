@@ -40,6 +40,7 @@ _SETTINGS_LAST_FILES_DIR  = 'warp/last_files_dir'
 _SETTINGS_LAST_FOLDER_DIR = 'warp/last_folder_dir'
 _SETTINGS_FORCE_BT_ON     = 'warp/force_build_type_on'
 _SETTINGS_FORCE_BT_VALUE  = 'warp/force_build_type_value'
+_SETTINGS_PIN_TOOLTIP     = 'warp/pin_tooltip'
 
 
 def _restore_dir(key: str) -> str:
@@ -230,6 +231,21 @@ class WarpWindow(QMainWindow):
             lambda v: QSettings().setValue(_SETTINGS_FORCE_BT_VALUE, v))
         tb.addWidget(self._build_combo)
 
+        tb.addSeparator()
+
+        # View preference: keep the selected item's tooltip on the Results
+        # canvas instead of only while hovering. Applied to the Results view
+        # once it exists (built further down).
+        self._chk_pin_tooltip = QCheckBox(' Pin tooltip on selection', self)
+        self._chk_pin_tooltip.setToolTip(
+            'Keep the selected item\'s tooltip on the canvas beside its bbox, '
+            'instead of only while hovering. Hover tooltips keep working '
+            'everywhere else.')
+        self._chk_pin_tooltip.setChecked(
+            s.value(_SETTINGS_PIN_TOOLTIP, False, type=bool))
+        self._chk_pin_tooltip.toggled.connect(self._on_pin_tooltip_toggled)
+        tb.addWidget(self._chk_pin_tooltip)
+
         central = QWidget(self)
         layout = QVBoxLayout(central)
         layout.setContentsMargins(8, 8, 8, 8)
@@ -262,6 +278,7 @@ class WarpWindow(QMainWindow):
         self._results.open_in_warp_fast_corr.connect(
             self.open_in_warp_fast_correction.emit)
         self._results.export_sets_requested.connect(self._on_export_sets_json)
+        self._results.set_pin_tooltip(self._chk_pin_tooltip.isChecked())
         self._tabs.addTab(self._results, 'Results')
 
         # Detection logs are scoped to WARP's own runs — live-tails the
@@ -601,6 +618,10 @@ class WarpWindow(QMainWindow):
     def _on_force_bt_toggled(self, checked: bool):
         self._build_combo.setEnabled(checked)
         QSettings().setValue(_SETTINGS_FORCE_BT_ON, checked)
+
+    def _on_pin_tooltip_toggled(self, checked: bool):
+        QSettings().setValue(_SETTINGS_PIN_TOOLTIP, checked)
+        self._results.set_pin_tooltip(checked)
 
     def _set_controls_enabled(self, enabled: bool):
         self._open_files_btn.setEnabled(enabled)

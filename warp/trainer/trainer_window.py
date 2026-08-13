@@ -403,12 +403,6 @@ class WarpCoreWindow(QMainWindow):
         hint.setWordWrap(True)
         hint.setStyleSheet(f'color:{MFG};font-size:10px;')
         pl.addWidget(hint)
-        self._chk_pin_tooltip = QCheckBox('Pin tooltip on selection')
-        self._chk_pin_tooltip.setToolTip(
-            'Keep the selected slot\'s tooltip on the canvas next to its bbox, '
-            'instead of only while hovering. Hover tooltips keep working '
-            'everywhere else.')
-        pl.addWidget(self._chk_pin_tooltip)
         self._screen_type_badge = QLabel('Screen type: —')
         self._screen_type_badge.setStyleSheet(f'color:{C_WARNING};background:{MBG};border:1px solid {LBG};border-radius:3px;padding:2px 6px;font-size:11px;')
         pl.addWidget(self._screen_type_badge)
@@ -509,6 +503,20 @@ class WarpCoreWindow(QMainWindow):
             w = tb.widgetForAction(a)
             if w is not None:
                 w.setStyleSheet(primary_toolbtn_style())
+
+        # View preference, not an action — sits at the end of the bar, past
+        # the buttons that do something. Restored here rather than in
+        # `_setup_shortcuts` because the toolbar is built after it.
+        self._chk_pin_tooltip = QCheckBox(' Pin tooltip on selection')
+        self._chk_pin_tooltip.setToolTip(
+            'Keep the selected slot\'s tooltip on the canvas beside its bbox, '
+            'instead of only while hovering. Hover tooltips keep working '
+            'everywhere else.')
+        self._chk_pin_tooltip.setChecked(
+            self._settings.value(_KEY_PIN_TOOLTIP, False, type=bool))
+        self._chk_pin_tooltip.toggled.connect(self._on_pin_tooltip_toggled)
+        tb.addWidget(self._chk_pin_tooltip)
+        self._ann_widget.set_pin_enabled(self._chk_pin_tooltip.isChecked())
 
     def _set_toolbar_actions_enabled(self, enabled: bool) -> None:
         """Toggle the four detect-relevant toolbar actions together.
@@ -2653,11 +2661,6 @@ class WarpCoreWindow(QMainWindow):
             lambda v: self._settings.setValue(_KEY_AUTO_ACCEPT, v))
         self._spin_auto_conf.valueChanged.connect(
             lambda v: self._settings.setValue(_KEY_AUTO_CONF, v))
-        # Pinned tooltip — restore, apply to the canvas, then persist changes.
-        self._chk_pin_tooltip.setChecked(
-            self._settings.value(_KEY_PIN_TOOLTIP, False, type=bool))
-        self._ann_widget.set_pin_enabled(self._chk_pin_tooltip.isChecked())
-        self._chk_pin_tooltip.toggled.connect(self._on_pin_tooltip_toggled)
 
     def _on_pin_tooltip_toggled(self, enabled: bool):
         self._settings.setValue(_KEY_PIN_TOOLTIP, enabled)

@@ -195,11 +195,13 @@ All generic review-panel UI features carry over unchanged into FC:
   (`annotation_widget.py:_show_hover_tooltip`) and the review tree
   (`trainer_window.py:_populate_review_item`) — HTML tooltip embeds a
   base64-encoded QImage loaded from `cargo.ref_icon_path(name)`.
-- **Pin tooltip on selection** (`_chk_pin_tooltip` →
-  `AnnotationWidget.set_pin_enabled`) — the highlighted row's card is kept
-  on the canvas by a `warp.gui.pinned_tooltip.PinnedTooltip` child widget.
-  FC shares the checkbox and the `warp_core/pin_tooltip` setting with
-  normal training; there is no FC-specific state.
+- **Pin tooltip on selection** — toolbar checkbox (`_chk_pin_tooltip`,
+  built in `_build_toolbar`) → `AnnotationWidget.set_pin_enabled`. The
+  highlighted row's card is kept on the canvas by a
+  `warp.gui.pinned_tooltip.PinnedTooltip` child widget, placed where a
+  hover tooltip would land for a cursor at the bbox centre. FC shares the
+  checkbox and the `warp_core/pin_tooltip` setting with normal training;
+  there is no FC-specific state.
 - **Right-click → external links** on canvas bboxes
   (`annotation_widget.py:contextMenuEvent`) and on review-tree leaf
   items (`trainer_window.py:_show_item_link_menu`) — "Open on
