@@ -98,7 +98,6 @@ def _color_for_slot(slot: str) -> QColor:
     return QColor.fromHsv(h, 200, 240)
 
 
-from warp.gui import _tooltip_html  # noqa: E402  (after top-level imports)
 
 
 class _InteractiveCanvas(QWidget):
@@ -1007,27 +1006,16 @@ class ResultsView(QWidget):
                 child.setText(0, '')
                 child.setText(1, str(it.slot_index + 1))
                 _name = it.name or '—'
-                origin_badge = ''
                 if getattr(it, 'match_origin', '') == 'user':
+                    # ✓ + green already say 'this came back from your own WARP
+                    # CORE correction'; the tooltip that used to spell it out
+                    # is gone with the rest of the tree tooltips.
                     _name = f'✓ {_name}'
                     child.setForeground(2, QBrush(QColor('#7effc8')))
-                    origin_badge = '<br><i>Match from your own WARP CORE correction (live-seed)</i>'
                 child.setText(2, _name)
                 child.setText(3, f'{it.confidence:.0%}')
-                # Rich tooltip with reference icon
-                if it.name:
-                    from warp.recognition.boff_keys import pretty_slot
-                    _slot_disp = pretty_slot(it.slot or '?')
-                    _conf = it.confidence or 0.0
-                    _col = ('#7effc8' if _conf >= 0.85 else
-                            '#e8c060' if _conf >= 0.70 else '#ff9966')
-                    _info = (f'<b>{_slot_disp}</b><br>{it.name}'
-                             f'<br>Confidence: <span style="color:{_col}">'
-                             f'{_conf:.0%}</span>{origin_badge}')
-                    from warp.gui import env_for_slot
-                    _tip = _tooltip_html(it.thumbnail, it.name, _info,
-                                         env=env_for_slot(it.slot or ''))
-                    child.setToolTip(2, _tip)
+                # No tooltip on tree rows: the card lives on the canvas, beside
+                # the bbox it describes.
                 # Stash global index for canvas↔tree sync (col 0 UserRole)
                 # and the resolved screenshot path (col 2 UserRole — used
                 # by the right-click menu / file-tint logic). The visible

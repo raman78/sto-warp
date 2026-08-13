@@ -2228,32 +2228,9 @@ class WarpCoreWindow(QMainWindow):
         item.setText(3, conf_text)
         item.setText(4, status_text)
 
-        # Tooltip on the Item column carries the verbose context the old
-        # single-cell label used to embed; col 0 (slot) gets a short copy
-        # so users hovering near the slot name still see it.
-        if conflict_disk_name:
-            info_html = (f'<b>{slot_disp}</b><br>'
-                         f'Disk (your previous confirmation): {conflict_disk_name}<br>'
-                         f'Community / current detector: {name or "—"}<br><br>'
-                         f'These disagree. Re-verify the icon and Accept the '
-                         f'correct name to cast another community vote.')
-        elif confirmed:
-            status = 'auto-confirmed by detector' if auto_confirmed else 'confirmed by user'
-            conf_line = f'ML recognition: {conf:.1%}' if conf > 0.0 else \
-                        'ML recognition: unknown (previous session)'
-            info_html = (f'<b>{slot_disp}</b><br>Item: {name or "—"}<br>'
-                         f'Status: {status}<br>{conf_line}')
-        elif name:
-            info_html = f'<b>{slot_disp}</b><br>Item: {name}<br>Confidence: {conf:.1%}'
-            if cross_check_failed:
-                info_html += '<br><br><span style="color:#ff9966">⚠ WARNING: Item type does not match slot type!</span>'
-        else:
-            info_html = f'<b>{slot_disp}</b><br>No item recognised'
-
-        from warp.gui import _tooltip_html, env_for_slot
-        tooltip = _tooltip_html(None, name, info_html, env=env_for_slot(slot))
-        item.setToolTip(0, slot_disp)
-        item.setToolTip(2, tooltip)
+        # No tooltips on the review rows: the card belongs to the canvas, where
+        # it sits next to the bbox it describes. A second one popping up under
+        # the cursor over the list was the same information in a worse place.
 
         # Slot (col 0) and Idx (col 1) are structural grouping columns —
         # keep them in the chrome foreground (white) so they don't shift

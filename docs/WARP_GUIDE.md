@@ -307,7 +307,9 @@ before exporting.
 
 #### Hover tooltip with reference icon
 
-Hovering over an item row in the Results tree (or a bounding box on the Preview canvas) pops up a tooltip that shows the **reference icon** from the local icon library alongside the slot name, item name and confidence score. This lets you compare what the detector matched against what you actually see in the screenshot — a quick visual sanity check without leaving the window.
+Hovering over a bounding box **on the canvas** pops up a card that shows the **reference icon** from the local icon library alongside the slot name, item name and confidence score. This lets you compare what the detector matched against what you actually see in the screenshot — a quick visual sanity check without leaving the window.
+
+The card belongs to the canvas, where it can sit next to the box it describes. Rows in the item lists have no tooltips: select a row and the card appears on the canvas, on the matching box.
 
 ```
   ┌──────────────────────────────────┐
@@ -649,7 +651,7 @@ Lists all items detected in the current screenshot, one row per slot. Each row s
 
 Every status can be changed. Pick the row, correct the name, and accept it — an **Inferred** or **Auto** row is no more final than any other.
 
-**Hover** over any item row to see a tooltip with the matched reference icon, slot, item name and confidence. The reference icon is the picture from the icon library that the detector decided was the best match — if it does not look like the icon in the bounding box, the match is wrong and you should correct it.
+**Select** any item row to see its card on the canvas, next to the matching bounding box: matched reference icon, slot, item name and confidence. The reference icon is the picture from the icon library that the detector decided was the best match — if it does not look like the icon in the bounding box, the match is wrong and you should correct it. (Selecting a row and clicking the box on the canvas are the same action — either way both sides follow.)
 
 **Right-click** any item row to open a menu with external links:
 
@@ -737,7 +739,7 @@ The intended WARP CORE workflow, end to end:
 ### Typical micro-loop (per item)
 
 1. Pick the lowest-confidence red item in the review list (sorted automatically).
-2. Hover over the row (or the bbox on the canvas) — the tooltip shows the reference icon the detector matched. Compare it against the actual icon in the bounding box. If they look different, the match is wrong.
+2. Select the row, or hover its bbox on the canvas — the card shows the reference icon the detector matched. Compare it against the actual icon in the bounding box. If they look different, the match is wrong.
 3. **Correct** → **Enter**. **Wrong** → type the correct name, pick from autocomplete (instant accept, no Enter needed). Not sure what the item is? Right-click and pick **Open on STO Wiki** or **Open on vger** to look it up in your browser.
 4. **Bbox in wrong position** → **Del** to remove, **Alt+drag** to redraw.
 5. Move to the next item.
@@ -959,8 +961,9 @@ The day-to-day workflow inside Fast Correction Mode mirrors the
 normal WARP CORE workflow described in
 [section 5](#5-reviewing-and-correcting-recognition) — same
 keyboard shortcuts, same Add BBox / Accept / Mark Done buttons,
-same colour conventions, same hover tooltips with reference icons,
-and same right-click links to STO Wiki / vger:
+same colour conventions, same canvas cards with reference icons
+(including **Pin tooltip on selection**), and same right-click links
+to STO Wiki / vger:
 
 1. Click a screenshot in the left list. Its bboxes load on the
    canvas.

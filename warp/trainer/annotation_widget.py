@@ -34,7 +34,6 @@ DRAW_BBOX_COLOR = QColor(255, 200, 0)   # yellow — matches Add BBox button sty
 MANIP_COLOR = QColor(100, 200, 255)  # Action blue
 
 
-from warp.gui import _tooltip_html  # noqa: F811,E402
 
 
 class AnnotationWidget(QWidget):
@@ -215,14 +214,24 @@ class AnnotationWidget(QWidget):
         if not self._annotations: return False
         return all(a.state in (AnnotationState.CONFIRMED, AnnotationState.SKIPPED) for a in self._annotations)
 
+    # Selecting a slot and selecting a group are the same act of selecting,
+    # so the canvas can only ever be showing one of them. The setters below
+    # enforce that between themselves rather than trusting every caller to
+    # clear the other kind: the canvas-click path syncs the review list with
+    # `blockSignals(True)`, which stops the list adapter from emitting the
+    # clear it would otherwise send, and that left both highlights on screen.
+
     def clear_highlight(self):
-        self._highlighted_row = -1; self._refresh_pin(); self.update()
+        self._highlighted_row = -1; self._highlighted_rows = set()
+        self._refresh_pin(); self.update()
 
     def set_highlighted_rows(self, rows):
         """Replace the group-highlight set; pass an empty iterable to clear."""
         self._highlighted_rows = set(rows or ())
         # A group header selects many rows at once — there is no single slot
-        # to pin, so the card steps aside until a leaf row is picked again.
+        # left selected, and none to pin, so the card steps aside until a leaf
+        # row is picked again.
+        self._highlighted_row = -1
         self._refresh_pin()
         self.update()
 
@@ -233,11 +242,13 @@ class AnnotationWidget(QWidget):
         self._review_items = items; self._refresh_pin(); self.update()
 
     def set_selected_row(self, row: int):
-        self._selected_row = row; self._highlighted_row = -1
+        self._selected_row = row
+        self._highlighted_row = -1; self._highlighted_rows = set()
         self._refresh_pin(); self.update()
 
     def set_highlighted_row(self, row: int):
-        self._highlighted_row = row; self._refresh_pin(); self.update()
+        self._highlighted_row = row; self._highlighted_rows = set()
+        self._refresh_pin(); self.update()
 
     def set_pin_enabled(self, enabled: bool):
         """Keep the selected row's tooltip on screen (WARP CORE 'Pin tooltip')."""

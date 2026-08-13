@@ -191,10 +191,12 @@ to remove a click target that was inert outside FC.
 
 All generic review-panel UI features carry over unchanged into FC:
 
-- **Hover tooltips with reference icon** on both the canvas
-  (`annotation_widget.py:_show_hover_tooltip`) and the review tree
-  (`trainer_window.py:_populate_review_item`) — HTML tooltip embeds a
-  base64-encoded QImage loaded from `cargo.ref_icon_path(name)`.
+- **Hover cards with reference icon** on the canvas
+  (`annotation_widget.py:_show_hover_tooltip`) — a
+  `warp.gui.pinned_tooltip.PinnedTooltip` whose HTML, composed by the
+  shared `warp.gui.slot_tooltip_html`, embeds a base64-encoded QImage
+  loaded from `cargo.ref_icon_path(name)`. The review tree carries no
+  tooltips; selecting a row puts the card on the canvas instead.
 - **Pin tooltip on selection** — toolbar checkbox (`_chk_pin_tooltip`,
   built in `_build_toolbar`) → `AnnotationWidget.set_pin_enabled`. The
   highlighted row's card is kept on the canvas by a
