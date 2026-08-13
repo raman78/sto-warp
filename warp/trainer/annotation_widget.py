@@ -96,6 +96,11 @@ class AnnotationWidget(QWidget):
         # Hover tooltip state
         self._hover_row:   int   = -1
         self._hover_timer: object = None
+        # Pinned tooltip — the selected row's card, kept on screen until the
+        # selection moves. Independent of hover, which keeps working as before.
+        self._pin_enabled: bool = False
+        self._pinned_row:  int  = -1
+        self._pin = None   # PinnedTooltip, created on first use
 
         # Drag/resize state — _annotations (legacy draw mode)
         self._drag_mode:  str | None = None   # 'move' | 'resize_NW' | etc.
@@ -133,6 +138,7 @@ class AnnotationWidget(QWidget):
         self._zoom_oy = 0.0
         self._user_scale  = None   # reset to fit-to-window on every image load
         self._eq_geom     = None   # invalidate geom overlay until next auto-detect
+        self._refresh_pin()        # selection was just cleared — drop the card
         self._compute_transform()
         self.adjustSize()
         self.setFocus()
@@ -209,24 +215,33 @@ class AnnotationWidget(QWidget):
         return all(a.state in (AnnotationState.CONFIRMED, AnnotationState.SKIPPED) for a in self._annotations)
 
     def clear_highlight(self):
-        self._highlighted_row = -1; self.update()
+        self._highlighted_row = -1; self._refresh_pin(); self.update()
 
     def set_highlighted_rows(self, rows):
         """Replace the group-highlight set; pass an empty iterable to clear."""
         self._highlighted_rows = set(rows or ())
+        # A group header selects many rows at once — there is no single slot
+        # to pin, so the card steps aside until a leaf row is picked again.
+        self._refresh_pin()
         self.update()
 
     def clear_pending(self):
         self._pending_bbox = None; self._drawing = False; self._draw_start = None; self._draw_current = None; self.update()
 
     def set_review_items(self, items: list[dict]):
-        self._review_items = items; self.update()
+        self._review_items = items; self._refresh_pin(); self.update()
 
     def set_selected_row(self, row: int):
-        self._selected_row = row; self._highlighted_row = -1; self.update()
+        self._selected_row = row; self._highlighted_row = -1
+        self._refresh_pin(); self.update()
 
     def set_highlighted_row(self, row: int):
-        self._highlighted_row = row; self.update()
+        self._highlighted_row = row; self._refresh_pin(); self.update()
+
+    def set_pin_enabled(self, enabled: bool):
+        """Keep the selected row's tooltip on screen (WARP CORE 'Pin tooltip')."""
+        self._pin_enabled = bool(enabled)
+        self._refresh_pin()
 
     def set_draw_mode(self, enabled: bool):
         self._draw_mode_forced = enabled
@@ -607,6 +622,21 @@ class AnnotationWidget(QWidget):
             from PySide6.QtWidgets import QToolTip
             QToolTip.hideText()
             return
+        # This row is already pinned — a hover copy under the cursor would say
+        # the same thing twice. Every other row still tooltips normally.
+        if self._pin_enabled and row == self._pinned_row:
+            return
+
+        text = self._tooltip_html_for_row(row)
+
+        from PySide6.QtWidgets import QToolTip
+        from PySide6.QtGui import QCursor
+        QToolTip.showText(QCursor.pos(), text, self)
+
+    def _tooltip_html_for_row(self, row: int) -> str:
+        """Compose a review row's tooltip card — shared by hover and pin."""
+        if row < 0 or row >= len(self._review_items):
+            return ''
         from warp.recognition.boff_keys import pretty_slot
         ri        = self._review_items[row]
         name      = ri.get('name') or '— unmatched —'
@@ -643,11 +673,38 @@ class AnnotationWidget(QWidget):
         thumb = None if state == 'confirmed' else ri.get('thumb')
         from warp.gui import env_for_slot
         env = env_for_slot(ri.get('slot', ''), getattr(self, '_build_type', ''))
-        text = _tooltip_html(thumb, name, info_html, env=env)
+        return _tooltip_html(thumb, name, info_html, env=env)
 
-        from PySide6.QtWidgets import QToolTip
-        from PySide6.QtGui import QCursor
-        QToolTip.showText(QCursor.pos(), text, self)
+    # ── pinned tooltip ────────────────────────────────────────────────────
+
+    def _refresh_pin(self):
+        """Re-anchor the pinned card on the highlighted row, or hide it.
+
+        Called from every path that can move the selection or the image under
+        it (selection, item refresh, zoom, resize), so the card cannot drift
+        away from its bbox.
+        """
+        row = self._highlighted_row
+        pinnable = (
+            self._pin_enabled
+            and 0 <= row < len(self._review_items)
+            and not self._highlighted_rows       # group selection → no single slot
+            and self._review_items[row].get('bbox')
+        )
+        if not pinnable:
+            self._pinned_row = -1
+            if self._pin is not None:
+                self._pin.hide()
+            return
+
+        if self._pin is None:
+            from warp.gui.pinned_tooltip import PinnedTooltip
+            self._pin = PinnedTooltip(self)
+        self._pinned_row = row
+        self._pin.show_for(
+            self._tooltip_html_for_row(row),
+            self._img_to_screen_rect(self._review_items[row]['bbox']),
+        )
 
     def _handle_positions(self, rect: QRect) -> list[tuple[int, int]]:
         l, t, r, b = rect.left(), rect.top(), rect.right(), rect.bottom(); mx, my = (l + r) // 2, (t + b) // 2
@@ -791,6 +848,7 @@ class AnnotationWidget(QWidget):
             if sa and self._user_scale is not None:
                 sa.horizontalScrollBar().setValue(int(img_x * new_s - vp_cx))
                 sa.verticalScrollBar().setValue(int(img_y * new_s - vp_cy))
+            self._refresh_pin()   # bbox moved/resized under the zoom
             self.update()
             event.accept()
         else:
@@ -925,7 +983,7 @@ class AnnotationWidget(QWidget):
             QApplication.restoreOverrideCursor()
             self._mod_cursor_active = False
 
-    def resizeEvent(self, event): self._compute_transform(); self.update()
+    def resizeEvent(self, event): self._compute_transform(); self._refresh_pin(); self.update()
 
     def sizeHint(self):
         if self._pixmap:

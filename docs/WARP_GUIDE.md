@@ -319,6 +319,24 @@ Hovering over an item row in the Results tree (or a bounding box on the Preview 
 
 If the reference icon does not match what is in the bounding box, the recognition is probably wrong — right-click and open the wiki link to double-check, or jump into WARP CORE to correct it.
 
+#### Pin tooltip on selection
+
+A hover tooltip disappears the moment you move the mouse away, which is awkward when you want to read it while doing something else — typing a correction, comparing two boxes, or scrolling the list. Tick **Pin tooltip on selection**, above the item tree, and the tooltip for the **selected** item stays on the canvas next to its bounding box until you select something else.
+
+```
+   ┌────┐ ┌──────────────────────────────┐
+   │icon│ │ ┌────┐  Fore Weapons         │   ← card stays put, no hover needed
+   └────┘ │ │icon│  Phaser Beam Array    │
+    bbox  │ └────┘  Confidence: 94%      │
+          └──────────────────────────────┘
+```
+
+Selecting an item **either way** pins it — clicking its bounding box on the canvas or clicking its row in the list. Selecting a group header (a slot row with several children) unpins, because there is no single item to show.
+
+Hovering keeps working exactly as before, everywhere, at the same time. The only exception is the pinned item itself: hovering over it does not pop a second copy of a card you are already looking at.
+
+The checkbox appears both in WARP's Results pane and in WARP CORE (including Fast Correction Mode); each remembers its own setting between sessions.
+
 #### Right-click — quick actions on a Results row
 
 Right-clicking any row in the Results tree (slot row or individual item) opens a small popup menu that operates on the source screenshot of that row:
@@ -583,6 +601,7 @@ Two things worth knowing:
 | Zoom in / out | **Ctrl + scroll wheel** (1× – 6×, anchored to cursor) |
 | Select a box | **Left click** on the box — highlights it in the review list |
 | Hover over a box | Shows a tooltip with the reference icon, slot, item name and confidence — compare the icon with what you see in the bbox to spot mismatches. After you confirm or correct an item, the tooltip updates to the icon and name you confirmed and notes whether it was confirmed by you or auto-accepted by the program |
+| Keep a tooltip on screen | Tick **Pin tooltip on selection** above the review list — the selected box keeps its tooltip beside it while you type the correction. See [Pin tooltip on selection](#pin-tooltip-on-selection) |
 | Right-click a box | Opens a menu with **Open on vger.stobuilds.com** and **Open on STO Wiki** links to look up the item in your browser |
 | Draw new box | **Alt + LMB drag** — hold Alt, click and drag over an item icon |
 | Draw mode toggle | **Alt+A** button in the right panel — cursor stays as crosshair until toggled off |

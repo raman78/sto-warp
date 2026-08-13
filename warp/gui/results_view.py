@@ -25,14 +25,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Qt, QSize, QPoint, Signal
+from PySide6.QtCore import Qt, QSize, QPoint, QRect, QSettings, Signal
 from PySide6.QtGui import (
     QBrush, QColor, QFont, QPainter, QPen, QPixmap,
 )
 from PySide6.QtWidgets import (
-    QApplication, QComboBox, QHBoxLayout, QHeaderView, QLabel, QListWidget,
-    QListWidgetItem, QMenu, QPushButton, QScrollArea, QSplitter, QStyle,
-    QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
+    QApplication, QCheckBox, QComboBox, QHBoxLayout, QHeaderView, QLabel,
+    QListWidget, QListWidgetItem, QMenu, QPushButton, QScrollArea, QSplitter,
+    QStyle, QTreeWidget, QTreeWidgetItem, QVBoxLayout, QWidget,
 )
 
 from warp.recognition.boff_keys import group_items_by_seat, order_items_for_display
@@ -44,6 +44,11 @@ from warp.warp_importer import (
     ImportResult, RecognisedItem, SLOT_ORDER, DISPLAY_CANONICAL_ORDER,
 )
 
+
+# QSettings key — the results pane's own pin toggle. WARP CORE keeps a
+# separate one (`warp_core/pin_tooltip`); the two panes are used for
+# different jobs and remember the preference independently.
+_KEY_PIN_TOOLTIP = 'warp/pin_tooltip'
 
 # Selection accent — gold/amber, matches the Export to SETS JSON button.
 _SEL_COLOR = QColor(_THEME_ACCENT)
@@ -126,6 +131,11 @@ class _InteractiveCanvas(QWidget):
         self._highlight_set: set[int] = set()
         self._hover_gidx:     int = -1
         self._hover_timer: object = None
+        # Pinned tooltip — the selected item's card, kept beside its bbox
+        # until the selection moves. Hover is unaffected.
+        self._pin_enabled: bool = False
+        self._pinned_gidx: int  = -1
+        self._pin = None   # PinnedTooltip, created on first use
         # Skill-tree overlay: [(x, y, w, h, on), ...] in image coords. Drawn
         # green (ON) / red (OFF) on top of the screenshot for skill screens,
         # which carry no RecognisedItems.
@@ -151,6 +161,7 @@ class _InteractiveCanvas(QWidget):
         self._highlight_set = set()
         self._hover_gidx = -1
         self._cancel_hover_timer()
+        self._refresh_pin()
         self._compute_fit()
         self.update()
 
@@ -164,6 +175,7 @@ class _InteractiveCanvas(QWidget):
         self._highlight_set = set()
         self._hover_gidx = -1
         self._cancel_hover_timer()
+        self._refresh_pin()
         self.update()
 
     def set_skill_boxes(self, boxes: list) -> None:
@@ -176,6 +188,7 @@ class _InteractiveCanvas(QWidget):
         if new_set == self._highlight_set:
             return
         self._highlight_set = new_set
+        self._refresh_pin()
         self.update()
 
     def set_highlight_set(self, gidxs) -> None:
@@ -183,7 +196,14 @@ class _InteractiveCanvas(QWidget):
         if new_set == self._highlight_set:
             return
         self._highlight_set = new_set
+        # A group header highlights many bboxes — no single slot to pin.
+        self._refresh_pin()
         self.update()
+
+    def set_pin_enabled(self, enabled: bool) -> None:
+        """Keep the selected item's tooltip on the canvas ('Pin tooltip')."""
+        self._pin_enabled = bool(enabled)
+        self._refresh_pin()
 
     # ── Geometry ────────────────────────────────────────────────────
 
@@ -204,6 +224,7 @@ class _InteractiveCanvas(QWidget):
         self._compute_fit()
         if self._scale != prev:
             self._scaled = None
+            self._refresh_pin()   # the bbox moved under the new fit scale
         super().resizeEvent(e)
 
     def sizeHint(self) -> QSize:
@@ -279,13 +300,29 @@ class _InteractiveCanvas(QWidget):
         self._hover_timer.start(500)
 
     def _show_hover_tooltip(self, gidx: int):
-        it: RecognisedItem | None = None
+        # This item is already pinned beside its bbox — a hover copy under the
+        # cursor would just repeat it. Every other item tooltips as before.
+        if self._pin_enabled and gidx == self._pinned_gidx:
+            return
+        text = self._tooltip_html_for_gidx(gidx)
+        if not text:
+            return
+
+        from PySide6.QtWidgets import QToolTip
+        from PySide6.QtGui import QCursor
+        QToolTip.showText(QCursor.pos(), text, self)
+
+    def _item_for_gidx(self, gidx: int) -> RecognisedItem | None:
         for item, g in zip(self._items, self._gidx):
             if g == gidx:
-                it = item
-                break
+                return item
+        return None
+
+    def _tooltip_html_for_gidx(self, gidx: int) -> str:
+        """Compose an item's tooltip card — shared by hover and pin."""
+        it = self._item_for_gidx(gidx)
         if it is None or not it.name:
-            return
+            return ''
         from warp.recognition.boff_keys import pretty_slot
         slot = pretty_slot(it.slot or '?')
         conf = it.confidence or 0.0
@@ -295,12 +332,37 @@ class _InteractiveCanvas(QWidget):
                      f'<br>Confidence: <span style="color:{color}">{conf:.0%}</span>')
 
         from warp.gui import env_for_slot
-        text = _tooltip_html(it.thumbnail, it.name, info_html,
+        return _tooltip_html(it.thumbnail, it.name, info_html,
                              env=env_for_slot(it.slot or ''))
 
-        from PySide6.QtWidgets import QToolTip
-        from PySide6.QtGui import QCursor
-        QToolTip.showText(QCursor.pos(), text, self)
+    # ── pinned tooltip ──────────────────────────────────────────────
+
+    def _screen_rect_for_gidx(self, gidx: int) -> QRect | None:
+        """Widget-space rect of an item's bbox, or None when it has none."""
+        it = self._item_for_gidx(gidx)
+        if it is None or not it.bbox or len(it.bbox) < 4:
+            return None
+        x0, y0 = self._image_origin()
+        x, y, w, h = it.bbox[:4]
+        return QRect(x0 + int(x * self._scale), y0 + int(y * self._scale),
+                     max(1, int(w * self._scale)), max(1, int(h * self._scale)))
+
+    def _refresh_pin(self) -> None:
+        """Re-anchor the pinned card on the highlighted item, or hide it."""
+        gidx = next(iter(self._highlight_set)) if len(self._highlight_set) == 1 else -1
+        rect = self._screen_rect_for_gidx(gidx) if gidx >= 0 else None
+        html = self._tooltip_html_for_gidx(gidx) if rect is not None else ''
+        if not html or rect is None or not self._pin_enabled:
+            self._pinned_gidx = -1
+            if self._pin is not None:
+                self._pin.hide()
+            return
+
+        if self._pin is None:
+            from warp.gui.pinned_tooltip import PinnedTooltip
+            self._pin = PinnedTooltip(self)
+        self._pinned_gidx = gidx
+        self._pin.show_for(html, rect)
 
     def mousePressEvent(self, e):
         if e.button() == Qt.MouseButton.LeftButton:
@@ -593,7 +655,24 @@ class ResultsView(QWidget):
             f'QTreeWidget::item:selected {{ '
             f'background-color: {_THEME_ACCENT}; color: #1a1a1a; }}'
         )
-        split.addWidget(self._tree)
+        # Tree + its pin toggle share a pane so the checkbox sits directly
+        # above the list it applies to (mirrors WARP CORE's placement).
+        right = QWidget()
+        rl = QVBoxLayout(right)
+        rl.setContentsMargins(0, 0, 0, 0)
+        rl.setSpacing(4)
+        self._chk_pin_tooltip = QCheckBox('Pin tooltip on selection')
+        self._chk_pin_tooltip.setToolTip(
+            'Keep the selected item\'s tooltip on the canvas next to its bbox, '
+            'instead of only while hovering. Hover tooltips keep working '
+            'everywhere else.')
+        self._chk_pin_tooltip.setChecked(
+            QSettings().value(_KEY_PIN_TOOLTIP, False, type=bool))
+        self._chk_pin_tooltip.toggled.connect(self._on_pin_tooltip_toggled)
+        rl.addWidget(self._chk_pin_tooltip)
+        rl.addWidget(self._tree, 1)
+        split.addWidget(right)
+        self._canvas.set_pin_enabled(self._chk_pin_tooltip.isChecked())
 
         # File list is select-only: a click picks a file, no toggle-off
         # behaviour (clearing the active file via clicking it again was
@@ -1057,6 +1136,10 @@ class ResultsView(QWidget):
                 self._canvas.set_highlight_set(gidxs)
                 return
         self._canvas.set_highlight(-1)
+
+    def _on_pin_tooltip_toggled(self, enabled: bool):
+        QSettings().setValue(_KEY_PIN_TOOLTIP, enabled)
+        self._canvas.set_pin_enabled(enabled)
 
     def _on_canvas_bbox_clicked(self, gidx: int):
         self._canvas.set_highlight(gidx)

@@ -40,7 +40,7 @@ from warp.style import (
 # workers into focused modules. trainer_window.py now imports the names
 # it still uses internally; nothing external imports them from here.
 from warp.trainer.constants import (
-    _KEY_LAST_DIR, _KEY_AUTO_ACCEPT, _KEY_AUTO_CONF,
+    _KEY_LAST_DIR, _KEY_AUTO_ACCEPT, _KEY_AUTO_CONF, _KEY_PIN_TOOLTIP,
     CONF_HIGH, CONF_MEDIUM,
     SLOT_GROUPS, SCREEN_TYPE_LABELS, SCREEN_TYPE_ICONS, SCREEN_TO_SLOT_GROUP,
     FIXED_VALUE_SLOTS, ALL_SLOTS, SPECIALIZATION_NAMES, _SHIP_INFO_SLOTS,
@@ -403,6 +403,12 @@ class WarpCoreWindow(QMainWindow):
         hint.setWordWrap(True)
         hint.setStyleSheet(f'color:{MFG};font-size:10px;')
         pl.addWidget(hint)
+        self._chk_pin_tooltip = QCheckBox('Pin tooltip on selection')
+        self._chk_pin_tooltip.setToolTip(
+            'Keep the selected slot\'s tooltip on the canvas next to its bbox, '
+            'instead of only while hovering. Hover tooltips keep working '
+            'everywhere else.')
+        pl.addWidget(self._chk_pin_tooltip)
         self._screen_type_badge = QLabel('Screen type: —')
         self._screen_type_badge.setStyleSheet(f'color:{C_WARNING};background:{MBG};border:1px solid {LBG};border-radius:3px;padding:2px 6px;font-size:11px;')
         pl.addWidget(self._screen_type_badge)
@@ -2647,6 +2653,15 @@ class WarpCoreWindow(QMainWindow):
             lambda v: self._settings.setValue(_KEY_AUTO_ACCEPT, v))
         self._spin_auto_conf.valueChanged.connect(
             lambda v: self._settings.setValue(_KEY_AUTO_CONF, v))
+        # Pinned tooltip — restore, apply to the canvas, then persist changes.
+        self._chk_pin_tooltip.setChecked(
+            self._settings.value(_KEY_PIN_TOOLTIP, False, type=bool))
+        self._ann_widget.set_pin_enabled(self._chk_pin_tooltip.isChecked())
+        self._chk_pin_tooltip.toggled.connect(self._on_pin_tooltip_toggled)
+
+    def _on_pin_tooltip_toggled(self, enabled: bool):
+        self._settings.setValue(_KEY_PIN_TOOLTIP, enabled)
+        self._ann_widget.set_pin_enabled(enabled)
 
     def _nav_prev_screenshot(self):
         row = self._file_list.currentRow()

@@ -11,6 +11,7 @@ from __future__ import annotations
 _KEY_LAST_DIR    = 'warp_core/last_dir'
 _KEY_AUTO_ACCEPT = 'warp_core/auto_accept_enabled'
 _KEY_AUTO_CONF   = 'warp_core/auto_accept_conf'
+_KEY_PIN_TOOLTIP = 'warp_core/pin_tooltip'
 
 
 # ── Confidence buckets ────────────────────────────────────────────────
