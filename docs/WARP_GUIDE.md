@@ -1091,10 +1091,19 @@ picture**, because that is what the screen-type model has to learn from. Whateve
 it goes with it — your ship name, your captain name, chat, anything else on screen at capture
 time.
 
-Screenshots marked **Unknown** are never sent.
+Screenshots marked **Unknown** are never sent. Marking one *Discard* does **not** hold it back —
+*Discard* is a training label like any other, so those images are uploaded too.
 
-Tip: if a screenshot has something on it you would rather not share, mark it *Discard* or
-remove it from the folder before opening it in WARP CORE.
+**Keeping a screenshot out of the upload:**
+
+| Situation | What to do |
+|---|---|
+| Before opening it in WARP CORE | Keep it out of the folder. Nothing is copied or sent for a file the trainer never sees |
+| Already opened, not uploaded yet | Untick its checkbox in the file list — that deletes the training copy from the computer. Uploads run every 10 minutes, so this only helps if done before the next one |
+| Already uploaded | It cannot be recalled from the program — open an issue on the project's GitHub page |
+
+Changing a screenshot's type does not undo an earlier copy: the picture was already filed under
+whatever type it had before.
 
 ### Model update
 
