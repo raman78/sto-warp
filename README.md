@@ -76,4 +76,5 @@ GPL-3.0 — see `LICENSE`.
 - `CHANGELOG.md` — release notes.
 - `PROJECT_CONTEXT.md` — design context.
 - `CLAUDE.md` — repository rules for AI-assisted development.
-- `docs/` — technical deep-dives (BOFF / trait detection, ML pipeline, …).
+- `docs/` — technical deep-dives (BOFF / trait / ship-info detection, ML
+  pipeline, …), indexed in [`docs/README.md`](docs/README.md).

@@ -338,11 +338,14 @@ The pinned card and the hover tooltip are the same card in the same place, down 
      └──────────────────────────┘
 ```
 
-Note that this also changes plain hovering: a canvas tooltip is now tied to the bounding box rather than to the mouse pointer, so it no longer shifts by a few pixels depending on where inside the box you happen to point.
+Selecting an item **either way** pins it — clicking its bounding box on the canvas, or clicking its row in the list. The two are one and the same action: whichever side you click, the other follows. Selecting a group header (a slot row with several children) unpins, because there is no single item to show.
 
-Selecting an item **either way** pins it — clicking its bounding box on the canvas or clicking its row in the list. Selecting a group header (a slot row with several children) unpins, because there is no single item to show.
+Hovering still works on the canvas at the same time, on every box except the pinned one — there it would only repeat the card you are already looking at.
 
-Hovering keeps working exactly as before, everywhere, at the same time. The only exception is the pinned item itself: hovering over it does not pop a second copy of a card you are already looking at.
+Two things you may notice if you used earlier versions:
+
+- A card is tied to its bounding box, not to the mouse pointer, so it no longer shifts by a few pixels depending on where inside the box you point.
+- Rows in the item lists no longer show a tooltip of their own. Select a row and the card appears on the canvas, on the matching box.
 
 The checkbox sits on the toolbar of both WARP and WARP CORE (including Fast Correction Mode); each window remembers its own setting between sessions.
 
@@ -496,7 +499,9 @@ Double-clicking a filename in the list opens a popup menu with every supported s
 
 Tip: Changing the screen type used to be on the right-click menu. It is now on double-click — right-click copies the file name or path instead (see below).
 
-Picking **Discard** marks the screenshot as "not a build screenshot" — for example, a console screenshot, a random image, or anything else that is not part of a PC build. Discarded screenshots are automatically marked as Done. No recognition is attempted on them, and they are not included in any export. Over time, the ML model learns to recognise and auto-discard such images.
+Picking **Discard** marks the screenshot as "not a build screenshot" — for example, a console screenshot, a random image, or anything else that is not part of a PC build. Discarded screenshots are automatically marked as Done. No recognition is attempted on them, and they are not included in any export.
+
+*Discard* and the three *Skills* types are also real training labels now, alongside Equipment, Traits and the rest — until recently they were offered in the menu but thrown away before they reached the model. Each of them needs a handful of examples from the community before the program can start recognising that kind of screen on its own, so marking a few is what gets it started. See [Your contribution](#your-contribution) in section 8 for what leaves your machine when you do.
 
 #### Right-click — copy the file name or path
 
@@ -1065,12 +1070,31 @@ automatically downloaded to your installation.
 
 ### Your contribution
 
-Every time you confirm an item annotation in WARP CORE, the icon crop is queued for upload to
-HuggingFace (`sets-sto/sto-icon-dataset`). The upload happens automatically in the background
-**every 10 minutes** (first run 15 s after app start) when a HuggingFace token is configured.
+Everything in this section happens in **WARP CORE only**. Running a recognition in WARP
+uploads nothing.
 
-**What is sent:** Only the icon crop image (small PNG, ~64×64 px) and its label (item name +
-slot type). No screenshots, no ship names, no personal data.
+Every time you confirm an item annotation in WARP CORE, the icon crop is queued for upload to
+the community dataset. The upload happens automatically in the background **every 10 minutes**
+(first run 15 s after app start). No account or token is needed — uploads go through the WARP
+backend.
+
+**What is sent:**
+
+| What | When | Contains |
+|---|---|---|
+| Icon crop | You confirm an item | Small PNG (~64×64 px) plus the item name and slot |
+| Ship class / tier strip | You confirm the ship class or tier | A narrow strip of the screenshot with that text on it |
+| Whole screenshot | A screenshot gets a screen type — whether you picked it or the program did | The full image, exactly as you captured it |
+
+The last row is the one to be aware of: **classifying a screenshot in WARP CORE sends the whole
+picture**, because that is what the screen-type model has to learn from. Whatever is visible on
+it goes with it — your ship name, your captain name, chat, anything else on screen at capture
+time.
+
+Screenshots marked **Unknown** are never sent.
+
+Tip: if a screenshot has something on it you would rather not share, mark it *Discard* or
+remove it from the folder before opening it in WARP CORE.
 
 ### Model update
 
