@@ -8,6 +8,42 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.28] — 2026-08-14
+
+### Added
+- **Item cards can stay on screen.** A new **Pin tooltip on selection**
+  checkbox on the main toolbar keeps the selected slot's card on the canvas,
+  next to its bounding box, instead of letting it vanish as soon as the mouse
+  moves. Selecting the slot in the list or clicking its box on the canvas both
+  pin it. Available in WARP and in WARP CORE, including Fast Correction Mode,
+  and each window remembers the setting.
+
+### Changed
+- Item cards on the canvas are anchored to the bounding box rather than to the
+  mouse pointer, and sit just below it — above it near the bottom edge — so the
+  slot itself stays visible. Both programs now draw the same card for the same
+  item.
+- Rows in the review lists no longer pop a card of their own. Selecting a row
+  shows the card on the canvas, on the matching box.
+- Screenshots left as *Unknown* are no longer sent to the community dataset.
+- The user guide now states what actually leaves the computer when a screenshot
+  is classified in WARP CORE — the whole image is uploaded to train screen-type
+  recognition, not only small icon crops — and how to keep a screenshot out of
+  that. *Discard* and the *Skills* types are real training labels now, so the
+  program can learn to recognise those screens on its own.
+
+### Fixed
+- Recognition improvements arrive again even when the main model has not been
+  retrained. The second, more accurate matching model was being held back
+  whenever the first one stayed unchanged.
+- Clicking a slot on the canvas after selecting a group header left both
+  highlighted. One selection is shown at a time now, whichever side it was made
+  from.
+- The ship class box could stretch across the picture and over the equipment
+  slots when the class line was read as a single long piece of text. A stray
+  word from the far side of the screen was being pulled into the recognised
+  ship class along with it.
+
 ## [1.0.27] — 2026-08-12
 
 ### Fixed
