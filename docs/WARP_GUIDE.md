@@ -658,6 +658,8 @@ Every status can be changed. Pick the row, correct the name, and accept it — a
 
 **Select** any item row to see its card on the canvas, next to the matching bounding box: matched reference icon, slot, item name and confidence. The reference icon is the picture from the icon library that the detector decided was the best match — if it does not look like the icon in the bounding box, the match is wrong and you should correct it. (Selecting a row and clicking the box on the canvas are the same action — either way both sides follow.)
 
+**Move through the list with the Up and Down arrow keys.** They work wherever you are in the window — after clicking a box on the canvas you do not have to click back into the list first. Each press moves one slot and steps over the grey group headings. Typing fields, the drop-downs and the screenshot list on the left keep their own arrow keys, so nothing you are editing gets disturbed.
+
 **Right-click** any item row to open a menu with external links:
 
 - **Open on vger.stobuilds.com** — opens the relevant vger category page in your browser (equipment or traits). Not shown for BOFF abilities.
@@ -856,6 +858,20 @@ Choosing an item from the autocomplete dropdown confirms it immediately — no E
 ### Duplicate warning
 
 If you confirm an item into a slot that already has a confirmed item at the same position (>70% overlap), WARP CORE shows a warning. This prevents accidentally confirming the same physical slot twice.
+
+### One row per slot
+
+Some slots can only hold one thing, and the review list keeps them to a single row no matter how often you re-run Auto-Detect:
+
+| Screenshot | Slots kept to one row |
+|---|---|
+| Any | Ship name, ship class, ship tier |
+| Space equipment | Deflector, secondary deflector, engines, warp core, shield, experimental weapon |
+| Ground equipment | Body armour, EV suit, personal shield, kit |
+
+What you already confirmed wins. A fresh detection of the same slot updates that row instead of adding a second one, and it keeps the box exactly where you put it. If the newly read value disagrees with the one you saved, the row does not change quietly — it comes back for you to check, the same way a community conflict does.
+
+The same applies to positions: a freshly detected box that lands on top of a box you already confirmed is dropped, so equipment, trait and Bridge Officer boxes never end up stacked on each other.
 
 ### Community conflicts
 
@@ -1148,6 +1164,7 @@ after positioning. Ship names are treated as personal data.
 | Shortcut | Action |
 |----------|--------|
 | **Enter** | Accept current item |
+| **Up** / **Down** | Previous / next slot in the review list, from anywhere in the window |
 | **Del** / **Backspace** | Remove selected bounding box |
 | **Alt + A** | Toggle Add BBox draw mode |
 | **Alt + D** | Toggle Mark Done / Back to Edit |

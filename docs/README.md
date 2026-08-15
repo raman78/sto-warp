@@ -28,6 +28,7 @@ written for people who read or change the code.
 | Doc | Scope |
 |---|---|
 | [`FAST_CORRECTION_MODE.md`](FAST_CORRECTION_MODE.md) | The throwaway workspace: staging, snapshot/restore, lifecycle |
+| [`REVIEW_MERGE.md`](REVIEW_MERGE.md) | How the review panel merges confirmed annotations with fresh detection |
 | [`gpu_setup.md`](gpu_setup.md) | Optional GPU acceleration — for trainers, not for recognition |
 | [`RELEASE_HOWTO.md`](RELEASE_HOWTO.md) | Cutting a release (in Polish) |
 

@@ -17,6 +17,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QSizePolicy, QFrame, QScrollArea,
     QAbstractItemView, QCompleter, QMenu, QPlainTextEdit,
     QCheckBox, QDoubleSpinBox, QTabWidget, QTreeWidgetItem,
+    QAbstractSpinBox, QTextEdit,
 )
 from PySide6.QtCore import Qt, QSettings, QSortFilterProxyModel, QSize, QTimer, Signal
 from PySide6.QtGui import QFont, QAction, QBrush, QColor, QIcon, QStandardItemModel, QStandardItem, QKeySequence, QShortcut
@@ -27,7 +28,7 @@ from warp.trainer.annotation_widget import AnnotationWidget
 from warp.trainer.fast_session      import display_name as _disp_name
 from warp.trainer.training_data      import (
     TrainingDataManager, AnnotationState, NON_ICON_SLOTS, SINGLE_INSTANCE_SLOTS,
-    TEXT_LEARNING_SLOTS, VIRTUAL_ITEM_NAMES,
+    TEXT_LEARNING_SLOTS, VIRTUAL_ITEM_NAMES, _bbox_iou,
 )
 from warp.style import (
     apply_dark_style, primary_btn_style, primary_toolbtn_style,
@@ -57,6 +58,70 @@ from warp.recognition.boff_keys      import pretty_slot as _pretty_slot
 from warp.warp_importer              import SLOT_ORDER as _SLOT_ORDER
 
 log = logging.getLogger(__name__)
+
+
+# ── Confirmed-on-disk beats fresh detection ───────────────────────────
+#
+# An annotation already confirmed for this screenshot is settled ground
+# truth, so a fresh detection may never duplicate it. `_populate_review_panel`
+# enforces two rules while merging disk annotations with detector output:
+#
+#   1. single-instance slots (Ship Name / Type / Tier, Deflector, Sec-Def,
+#      Engines, Warp Core, Shield, …) appear exactly once per screenshot.
+#      A fresh detection of an already-confirmed slot folds onto the
+#      confirmed row even when the two bboxes barely overlap — OCR widens
+#      or narrows the ship-info line between runs, which used to slip past
+#      the IoU recovery and produce a second 'Ship Tier' row.
+#   2. icon slots (equipment / traits / BOFFs) may not overlap. A fresh
+#      bbox colliding with a confirmed one is dropped; the confirmed row
+#      is re-added by the leftover pass.
+#
+# Ship-info slots are exempt from rule 2 — Ship Type and Ship Tier share
+# the same text line by design — and rule 1 already caps them at one row.
+# `_MERGE_IOU_OVERLAP` matches the threshold `_merge_recognition` uses for
+# the fresh-vs-preserved pass, so both merge paths agree on "collides".
+
+_MERGE_IOU_OVERLAP = 0.3
+_SHIP_INFO_TEXT_SLOTS: frozenset = frozenset(NON_ICON_SLOTS | {'Ship Name'})
+
+
+def _single_instance_twin(slot: str, confirmed_by_id: dict,
+                          seen_ids: set) -> str | None:
+    """ann_id of an unconsumed disk-confirmed annotation holding `slot`.
+
+    Only meaningful for `SINGLE_INSTANCE_SLOTS`; returns None otherwise.
+    """
+    if slot not in SINGLE_INSTANCE_SLOTS:
+        return None
+    for aid, ci in confirmed_by_id.items():
+        if aid in seen_ids:
+            continue
+        if ci.get('slot', '') == slot:
+            return aid
+    return None
+
+
+def _confirmed_overlap(slot: str, bbox, confirmed_by_id: dict, seen_ids: set,
+                       threshold: float = _MERGE_IOU_OVERLAP) -> tuple | None:
+    """(ann_id, bbox) of an unconsumed confirmed annotation whose box
+    collides with `bbox`, or None when the position is free.
+
+    Ship-info text slots are skipped on both sides: their boxes overlap
+    legitimately and rule 1 keeps them unique.
+    """
+    if not bbox or slot in _SHIP_INFO_TEXT_SLOTS:
+        return None
+    for aid, ci in confirmed_by_id.items():
+        if aid in seen_ids:
+            continue
+        if ci.get('slot', '') in _SHIP_INFO_TEXT_SLOTS:
+            continue
+        cbbox = ci.get('bbox')
+        if not cbbox:
+            continue
+        if _bbox_iou(tuple(bbox), tuple(cbbox)) >= threshold:
+            return aid, tuple(cbbox)
+    return None
 
 
 class WarpCoreWindow(QMainWindow):
@@ -1880,6 +1945,10 @@ class WarpCoreWindow(QMainWindow):
             return best_aid
         merged: list[dict] = []
         seen_ids: set[str] = set()
+        # Slots already placed in `merged` that may hold only one row.
+        # Guards the fresh-vs-fresh case (two detections of the same
+        # single-instance slot) and the leftover pass below.
+        _single_taken: set[str] = set()
         # Track disk-confirmed entries that gained seat_key / slot_index
         # via fresh Auto-Detect — flushed once after the loop so the
         # next restart can render the per-seat layout straight from
@@ -1887,6 +1956,11 @@ class WarpCoreWindow(QMainWindow):
         _layout_backfilled = False
         for ri in items:
             bbox = ri.get('bbox')
+            _slot = ri.get('slot', '')
+            if _slot in SINGLE_INSTANCE_SLOTS and _slot in _single_taken:
+                log.info(f'populate: drop fresh {_slot!r} bbox={bbox} — '
+                         f'slot already holds a row (single-instance)')
+                continue
             # Capture fresh detector geometry before any merge branch
             # reassigns `ri` from a disk-confirmed dict. Legacy
             # annotations don't carry seat_key / slot_index (both are
@@ -1921,6 +1995,38 @@ class WarpCoreWindow(QMainWindow):
                             f'{legacy.get("slot")!r} → {promoted["slot"]!r} '
                             f'(seat_key={promoted.get("seat_key","")!r})'
                         )
+                # Rule 1 — single-instance slot already confirmed on disk.
+                # The IoU recovery above only fires from 0.5 up, and the
+                # ship-info text boxes move too much between OCR runs to
+                # reach that. Fold the fresh detection onto the confirmed
+                # entry (keeping its bbox) so the slot stays one row; a
+                # name disagreement still goes through the conflict /
+                # pending branches below instead of being swallowed.
+                if aid not in confirmed_by_id:
+                    twin_aid = _single_instance_twin(_slot, confirmed_by_id, seen_ids)
+                    if twin_aid:
+                        confirmed_by_id[aid] = dict(confirmed_by_id[twin_aid])
+                        seen_ids.add(twin_aid)
+                        log.info(
+                            f'populate: fresh {_slot!r} bbox={bbox} folded onto '
+                            f'confirmed bbox={confirmed_by_id[aid].get("bbox")} '
+                            f'— single-instance slot'
+                        )
+                # Rule 2 — the position is already taken by a confirmed
+                # icon annotation. Confirmed wins; the leftover pass below
+                # re-adds it, so dropping here removes the duplicate row
+                # rather than the detection.
+                if aid not in confirmed_by_id:
+                    clash = _confirmed_overlap(_slot, bbox, confirmed_by_id, seen_ids)
+                    if clash:
+                        _clash_aid, _clash_bbox = clash
+                        log.info(
+                            f'populate: drop fresh {_slot!r} bbox={tuple(bbox)} — '
+                            f'overlaps confirmed '
+                            f'{confirmed_by_id[_clash_aid].get("slot")!r} '
+                            f'bbox={_clash_bbox}'
+                        )
+                        continue
                 if aid in confirmed_by_id:
                     confirmed = confirmed_by_id[aid]
                     fresh_name = (ri.get('name') or '').strip()
@@ -2038,6 +2144,11 @@ class WarpCoreWindow(QMainWindow):
                             _layout_backfilled = True
                 seen_ids.add(aid)
             merged.append(ri)
+            # The merge branches may have replaced `ri` with the disk
+            # entry, so read the slot back off the row that was kept.
+            _kept_slot = ri.get('slot', '')
+            if _kept_slot in SINGLE_INSTANCE_SLOTS:
+                _single_taken.add(_kept_slot)
         if _layout_backfilled:
             try:
                 self._data_mgr.save()
@@ -2046,8 +2157,18 @@ class WarpCoreWindow(QMainWindow):
             except Exception as _e:
                 log.warning(f'populate: layout-field save failed: {_e}')
         for aid, ci in confirmed_by_id.items():
-            if aid not in seen_ids:
-                merged.append(ci)
+            if aid in seen_ids:
+                continue
+            # Legacy data can hold two confirmed rows for a slot that may
+            # only have one (written before add_annotation deduped them).
+            _ci_slot = ci.get('slot', '')
+            if _ci_slot in SINGLE_INSTANCE_SLOTS:
+                if _ci_slot in _single_taken:
+                    log.info(f'populate: skip confirmed {_ci_slot!r} '
+                             f'bbox={ci.get("bbox")} — slot already holds a row')
+                    continue
+                _single_taken.add(_ci_slot)
+            merged.append(ci)
         self._recognition_items = self._order_items_for_review(merged, stype)
         # Auto-accept high-conf items before drawing the list
         self._apply_auto_accept()
@@ -2643,6 +2764,84 @@ class WarpCoreWindow(QMainWindow):
         self._settings.setValue(_KEY_PIN_TOOLTIP, enabled)
         self._ann_widget.set_pin_enabled(enabled)
 
+    # Widgets that own the arrow keys themselves: item views (the review
+    # list, which navigates natively, and the screenshot list), text
+    # editors, combos and spin boxes. Anywhere else — canvas, buttons,
+    # checkboxes, toolbar — Up/Down steps the review list instead.
+    _ARROW_OWNERS = (QAbstractItemView, QLineEdit, QComboBox,
+                     QAbstractSpinBox, QPlainTextEdit, QTextEdit)
+
+    def _arrow_steps_review_list(self, event) -> bool:
+        """True when this key press should move the review-list selection.
+
+        Focus lands on the canvas after almost every click there, which
+        used to make plain Up/Down a no-op until the user tabbed back to
+        the list.
+        """
+        from PySide6.QtWidgets import QApplication
+        if event.key() not in (Qt.Key.Key_Up, Qt.Key.Key_Down):
+            return False
+        # Alt+Up / Alt+Down already navigate screenshots; leave every
+        # other modifier combination to whoever wants it. The keypad bit
+        # rides along on the numpad arrows and means nothing here.
+        mods = event.modifiers() & ~Qt.KeyboardModifier.KeypadModifier
+        if mods != Qt.KeyboardModifier.NoModifier:
+            return False
+        if not self.isActiveWindow():
+            return False
+        app = QApplication.instance()
+        if app is None:
+            return False
+        # A completer popup, an open combo or a modal dialog is using the
+        # arrows for its own selection.
+        if app.activePopupWidget() is not None or app.activeModalWidget() is not None:
+            return False
+        rl = getattr(self, '_review_list', None)
+        # isVisible() is False while the Detection Logs tab is up, so the
+        # log pane keeps its own scrolling.
+        if rl is None or not rl.isVisible() or rl.count() == 0:
+            return False
+        fw = app.focusWidget()
+        # The review list is handled here too, not left to the tree's own
+        # walk: a native Up/Down stops on every group header, and what the
+        # user wants to step through are the slots.
+        if fw is rl:
+            return True
+        return not isinstance(fw, self._ARROW_OWNERS)
+
+    def _nav_review_row(self, delta: int):
+        """Step the review-list selection by `delta` item rows, clamped.
+
+        Row indices are the adapter's flat insertion order — the display
+        order of the item rows — so group headers are stepped over
+        instead of being selected on the way.
+        """
+        rl = self._review_list
+        cur = rl.currentRow()
+        if cur < 0:
+            # No item row is current: either nothing is selected, or the
+            # selection sits on a group header. Enter the group from the
+            # side the key points at.
+            item = rl.currentItem()
+            first_child = rl.row(item.child(0)) if (
+                item is not None and item.childCount()) else -1
+            if first_child < 0:
+                self._set_review_row(0 if delta > 0 else rl.count() - 1)
+            else:
+                self._set_review_row(first_child if delta > 0
+                                     else first_child - 1)
+            return
+        self._set_review_row(cur + delta)
+
+    def _set_review_row(self, row: int):
+        """Select an item row, clamped, expanding its group if collapsed."""
+        rl = self._review_list
+        row = max(0, min(rl.count() - 1, row))
+        item = rl.item(row)
+        if item is not None and item.parent() is not None:
+            item.parent().setExpanded(True)
+        rl.setCurrentRow(row)
+
     def _nav_prev_screenshot(self):
         row = self._file_list.currentRow()
         if row > 0:
@@ -2659,6 +2858,12 @@ class WarpCoreWindow(QMainWindow):
         rl = getattr(self, '_review_list', None)
         aw = getattr(self, '_ann_widget', None)
         sa = getattr(self, '_scroll_area', None)
+        # Up / Down anywhere in the window step the review list. This
+        # filter is installed on the application (`_setup_shortcuts`), so
+        # the branch runs before the focused widget sees the key.
+        if event.type() == QEvent.Type.KeyPress and self._arrow_steps_review_list(event):
+            self._nav_review_row(-1 if event.key() == Qt.Key.Key_Up else 1)
+            return True
         if obj in (rl, aw) and obj is not None and event.type() == QEvent.Type.KeyPress:
             key = event.key()
             if key in (Qt.Key.Key_Delete, Qt.Key.Key_Backspace):

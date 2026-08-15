@@ -55,8 +55,8 @@ class AnnotationState(str, Enum):
 # Accepting a new confirmed annotation for these slots removes any existing one
 # at a different bbox position (prevents duplicates from misclicks).
 SINGLE_INSTANCE_SLOTS: frozenset = frozenset({
-    'Ship Type', 'Ship Tier',
-    'Deflector', 'Sec-Def', 'Engines', 'Warp Core', 'Shield',
+    'Ship Name', 'Ship Type', 'Ship Tier',
+    'Deflector', 'Sec-Def', 'Engines', 'Warp Core', 'Shield', 'Experimental',
     'Kit', 'Body Armor', 'EV Suit', 'Personal Shield',
     'Primary Specialization', 'Secondary Specialization',
 })
