@@ -8,6 +8,30 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.29] — 2026-08-15
+
+### Changed
+- The **Up** and **Down** arrow keys now move through WARP CORE's review
+  list from anywhere in the window. Clicking a bounding box on the canvas
+  moved the keyboard focus there, which left the arrows doing nothing until
+  the list was clicked again. Each press now moves one slot and steps over
+  the grey group headings instead of stopping on them. Text fields,
+  drop-downs and the screenshot list keep their own arrow keys.
+
+### Fixed
+- Slots that can hold only one thing — ship name, ship class, ship tier,
+  deflector, secondary deflector, engines, warp core, shield, experimental
+  weapon, and the ground body armour, EV suit, personal shield and kit —
+  now keep a single row in the review list. Re-running Auto-Detect could
+  add a second ship tier row next to the one already confirmed, because the
+  box drawn around the tier text changes width between runs. A fresh
+  reading now updates the confirmed row instead of doubling it, and a
+  reading that disagrees still comes back for review rather than being
+  applied silently.
+- Equipment, trait and Bridge Officer boxes no longer stack on top of each
+  other after a re-detection: a confirmed box keeps its position, and a
+  freshly detected box landing on the same spot is dropped.
+
 ## [1.0.28] — 2026-08-14
 
 ### Added
