@@ -6,17 +6,25 @@
 # move outside its rect, on any mouse press, and after a display timeout. None
 # of that is configurable away, so a pinned card has to be a real widget.
 #
-# It is a child of the canvas, so it scrolls and clips with the image, and it
-# is transparent to mouse events, so it never steals a click meant for a bbox
-# underneath it. Both canvases use it: AnnotationWidget (WARP CORE training +
-# Fast Correction) and _InteractiveCanvas (WARP results view).
+# It is transparent to mouse events, so it never steals a click meant for a
+# bbox underneath it. Both canvases use it: AnnotationWidget (WARP CORE
+# training + Fast Correction) and _InteractiveCanvas (WARP results view).
+#
+# It parents itself to the scroll area's viewport rather than to the canvas.
+# A child cannot paint outside its parent, and the canvas widget is sized to
+# the *image* — so a card anchored near the edge of a small screenshot was
+# being squeezed back inside the picture even with most of the viewport empty
+# around it. The working area is the visible canvas, not the image. Anchors
+# still arrive in canvas coordinates and are mapped here, and the card follows
+# the canvas as it scrolls (see `eventFilter`).
 
 from __future__ import annotations
 
-from PySide6.QtCore    import Qt, QPoint, QRect, QSize
+from PySide6.QtCore    import QEvent, Qt, QPoint, QRect, QSize
 from PySide6.QtGui     import QFontMetrics, QPalette
 from PySide6.QtGui     import Qt as _GuiQt   # hosts mightBeRichText in PySide6
-from PySide6.QtWidgets import QFrame, QLabel, QStyle, QToolTip
+from PySide6.QtWidgets import (QAbstractScrollArea, QFrame, QLabel, QStyle,
+                               QToolTip)
 
 from warp.style import TOOLTIP_QSS_BODY
 
@@ -49,8 +57,31 @@ class PinnedTooltip(QLabel):
         """
         return QPoint(rect.center().x(), rect.bottom())
 
-    def __init__(self, parent):
-        super().__init__(parent)
+    @staticmethod
+    def _host_for(canvas):
+        """The widget the card should live in: the viewport, when there is one.
+
+        `QAbstractScrollArea.setWidget` reparents the canvas into the viewport,
+        so the viewport is simply the canvas's parent. Falls back to the canvas
+        itself for a canvas that is not inside a scroll area.
+        """
+        parent = canvas.parentWidget()
+        grandparent = parent.parentWidget() if parent is not None else None
+        if isinstance(grandparent, QAbstractScrollArea) and \
+                parent is grandparent.viewport():
+            return parent
+        return canvas
+
+    def __init__(self, canvas):
+        self._canvas = canvas
+        self._anchor: QRect | None = None
+        host = self._host_for(canvas)
+        super().__init__(host)
+        if host is not canvas:
+            # The canvas moves inside the viewport as the user scrolls, and its
+            # own geometry changes on zoom. Either way the anchor has travelled
+            # and the card has to follow it.
+            canvas.installEventFilter(self)
         self.setTextFormat(Qt.TextFormat.RichText)
         self.setAttribute(Qt.WidgetAttribute.WA_TransparentForMouseEvents, True)
         self.setFocusPolicy(Qt.FocusPolicy.NoFocus)
@@ -105,10 +136,23 @@ class PinnedTooltip(QLabel):
         if not html:
             self.hide()
             return
+        self._anchor = QRect(anchor)
         self.prepare(html)
         self.move(self.place_for(anchor))
         self.show()
         self.raise_()
+
+    def eventFilter(self, watched, event):
+        """Keep the card on its bbox while the canvas moves under it.
+
+        Parented to the viewport, the card no longer rides along with the image
+        for free, so a scroll or a zoom has to be answered by re-placing it.
+        """
+        if (watched is self._canvas and self.isVisible()
+                and self._anchor is not None
+                and event.type() in (QEvent.Type.Move, QEvent.Type.Resize)):
+            self.move(self.place_for(self._anchor))
+        return super().eventFilter(watched, event)
 
     # ── placement ─────────────────────────────────────────────────────────
 
@@ -124,10 +168,20 @@ class PinnedTooltip(QLabel):
         a screen edge; the difference is the box being fitted into — the
         visible canvas here, since the card is a child of it and would
         otherwise just be clipped.
+
+        *anchor* is in canvas coordinates. The card lives in the viewport, so
+        the anchor is mapped across first: the box to fit into is the visible
+        area, never the image, which may be far smaller than it.
         """
-        area = self.parentWidget().visibleRegion().boundingRect()
-        if area.isEmpty():
-            area = self.parentWidget().rect()
+        host = self.parentWidget()
+        if host is not self._canvas:
+            anchor = QRect(self._canvas.mapTo(host, anchor.topLeft()),
+                           anchor.size())
+            area = host.rect()
+        else:
+            area = host.visibleRegion().boundingRect()
+            if area.isEmpty():
+                area = host.rect()
         w, h = self.width(), self.height()
         dx, dy = self._OFFSET
         point = self.anchor_point(anchor)
