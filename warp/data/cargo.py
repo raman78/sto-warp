@@ -671,6 +671,18 @@ def _build_starship_traits() -> dict[str, dict]:
     return {trait['name']: trait for trait in raw if trait.get('name')}
 
 
+# The wiki spells one specialisation two ways in a BOFF ability's `type`:
+# `Temporal` and `Temporal Operative`. Buckets are keyed by that value and the
+# trainer looks them up from its slot name (`Boff Temporal`), so the longer
+# spelling was simply unreachable — seven ground abilities, among them Causal
+# Entanglement, could not be picked at all. Folding the aliases keeps every
+# ability reachable from the slot that owns it, whichever spelling the wiki
+# happens to use for it that week.
+_BOFF_CAREER_ALIASES: dict[str, str] = {
+    'Temporal Operative': 'Temporal',
+}
+
+
 def _build_boff_abilities() -> dict:
     """Bucketize raw `boff_abilities.json` (flat list) into the shape
     every consumer expects:
@@ -692,6 +704,7 @@ def _build_boff_abilities() -> dict:
         if not name:
             continue
         prof = ab.get('type') or 'Unknown'
+        prof = _BOFF_CAREER_ALIASES.get(prof, prof)
         env  = 'ground' if (ab.get('region') or '').lower() == 'ground' else 'space'
 
         info = dict(ab)
