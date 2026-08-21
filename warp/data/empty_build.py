@@ -18,7 +18,10 @@ def empty_build(build_type: str = 'full') -> dict:
             'active_rep_traits': [None] * 5,
             'aft_weapons':       [None] * 5,
             'boffs':             [[None] * 4 for _ in range(6)],
-            'boff_specs':        [[None, None] for _ in range(6)],
+            # `['', '']` is what SETS stores for a seat the ship doesn't
+            # have; `None` renders as the string "None" in the seat label
+            # and hides the station from SETS' markdown export.
+            'boff_specs':        [['', ''] for _ in range(6)],
             'core':              [''],
             'deflector':         [''],
             'devices':           [None] * 6,

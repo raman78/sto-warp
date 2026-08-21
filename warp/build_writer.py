@@ -138,6 +138,9 @@ def build_from_result(result: ImportResult, cache=None) -> tuple[dict, WriteRepo
     report = WriteReport()
 
     ship_data = _resolve_ship(build, result.ship_type, result.ship_tier, cache, report)
+    # Seat specs come from the ship, not from recognition — write them
+    # whether or not this run saw a BOFF screen.
+    _write_seat_specs(build, ship_data)
 
     boff_items, overflow = _write_equipment_and_traits(build, result.items, cache, report)
 
@@ -342,6 +345,59 @@ _SPEC_TO_PROF = {
     'Intelligence':       'Intelligence',
     'Pilot':              'Pilot',
 }
+
+
+def _seat_strings(ship_data: dict) -> list[str]:
+    """Ship seat layout as a list of `'<rank> <profession>-<spec>'`.
+
+    The cargo mirrors disagree on this field's type: `STOCD/SETS-Data`
+    and `warp/data/baseline/ship_list.json` carry a list, while
+    `raman78/warp-cargo-data` serves the raw wiki export, where it is one
+    comma-separated string. Iterating the string yields characters, so
+    normalise before parsing.
+    """
+    boffs = ship_data.get('boffs')
+    if isinstance(boffs, str):
+        boffs = boffs.split(',')
+    if not isinstance(boffs, list):
+        return []
+    return [s.strip() for s in boffs if isinstance(s, str) and s.strip()]
+
+
+def _write_seat_specs(build: dict, ship_data: dict | None) -> int:
+    """Fill `space.boff_specs` from the ship's seat layout.
+
+    SETS writes these when a ship is picked (`update_boff_seat`, clear
+    path) and never recomputes them on load, so whatever the file says is
+    what the build keeps. Left at the skeleton's `['', '']` a seat reads
+    as "None / None" in the UI and `ExportWindow.get_build_markdown`
+    drops the whole station from the markdown export.
+
+    Seats the ship doesn't have stay `['', '']` — that is what SETS
+    stores for a hidden seat, and `if any(specs)` then skips it.
+    Universal seats default to Tactical here; `_write_abilities`
+    promotes them to their cluster's profession when one matches.
+    """
+    specs = build['space']['boff_specs']
+    if not ship_data:
+        return 0
+
+    try:
+        seats = [_get_boff_spec(s) for s in _seat_strings(ship_data)]
+    except Exception as e:
+        log.warning(f'build_writer: could not parse seat specs: {e}')
+        return 0
+    if not seats:
+        return 0
+
+    written = 0
+    for seat_id, (_rank, profession, spec) in enumerate(sorted(seats, reverse=True)):
+        if seat_id >= len(specs):
+            break
+        specs[seat_id] = ['Tactical' if profession == 'Universal' else profession, spec or '']
+        written += 1
+    log.info(f'build_writer: wrote {written} space seat specs')
+    return written
 
 
 def _write_boffs(build: dict, boff_items: list[RecognisedItem], ship_data: dict | None,
