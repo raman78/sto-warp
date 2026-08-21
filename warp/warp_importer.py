@@ -755,7 +755,14 @@ class ShipDB:
             log.warning(f'ShipDB: ship_list.json not found at {p}')
             return
         try:
-            ships = json.loads(p.read_text(encoding='utf-8'))
+            # ShipDB reads the cache file directly rather than going
+            # through `cargo.ships()`, so it has to normalise field types
+            # itself: the warp-cargo-data mirror serves `boffs` as one
+            # comma-joined string, and iterating that yields characters —
+            # `_boff_profile_from_shipdb` then returns an empty BOFF
+            # profile for every ship.
+            from warp.data.cargo import _normalise_ship
+            ships = [_normalise_ship(s) for s in json.loads(p.read_text(encoding='utf-8'))]
             self._ships = ships
             for ship in ships:
                 raw_name = ship.get('name') or ''

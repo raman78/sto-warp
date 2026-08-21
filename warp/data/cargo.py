@@ -639,9 +639,65 @@ def _build_equipment() -> dict[str, dict[str, dict]]:
     return out
 
 
+# `ship_list.json` is the one file whose field *types* differ per source.
+# `STOCD/SETS-Data` (and the bundled baseline) serve typed JSON; the
+# `raman78/warp-cargo-data` mirror serves the raw Special:CargoExport
+# output, where every field is a string and list-valued columns arrive
+# comma-joined. Consumers must not have to ask which source answered:
+# `for seat in ship['boffs']` yields characters instead of seats, and a
+# string `tier` breaks any arithmetic on the slot profile.
+#
+# The field lists below were measured by diffing all 797 ships from both
+# sources; the other four cargo files carry no type conflicts (the mirror
+# only adds fields SETS-Data lacks).
+_SHIP_LIST_FIELDS = ('boffs', 'type', 'abilities')
+_SHIP_NUMERIC_FIELDS = (
+    'aft', 'consoleseng', 'consolessci', 'consolestac', 'devices',
+    'experimental', 'fc', 'fore', 'hangars', 'hull', 'hullmod', 'impulse',
+    'inertia', 'powerall', 'powerauxiliary', 'powerboost', 'powerengines',
+    'powershields', 'powerweapons', 'secdeflector', 'shieldmod', 'tier',
+    'turnrate',
+)
+
+
+def _as_number(value: str) -> int | float | str:
+    """`'5'` → 5, `'1.25'` → 1.25, anything else unchanged."""
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return value
+    return int(number) if number.is_integer() and '.' not in value else number
+
+
+def _normalise_ship(ship: dict) -> dict:
+    """Coerce a raw-export ship record into the typed shape SETS uses.
+
+    Idempotent: records that already arrived typed pass through
+    untouched, so this runs safely against either source.
+    """
+    out = dict(ship)
+    for field in _SHIP_LIST_FIELDS:
+        value = out.get(field)
+        if isinstance(value, str):
+            value = value.split(',')
+        elif value is None:
+            value = []
+        if isinstance(value, list):
+            # Blank and whitespace-padded entries occur in both sources
+            # (4 empty seats in SETS-Data, 6 in the baseline). SETS drops
+            # them in `parse_boff_stations`; kept, they become phantom
+            # Commander seats with no profession.
+            out[field] = [str(part).strip() for part in value if str(part).strip()]
+    for field in _SHIP_NUMERIC_FIELDS:
+        value = out.get(field)
+        if isinstance(value, str):
+            out[field] = None if value == '' else _as_number(value)
+    return out
+
+
 def _build_ships() -> dict[str, dict]:
     raw = _load_raw('ship_list.json')
-    return {ship['Page']: ship for ship in raw if ship.get('Page')}
+    return {ship['Page']: _normalise_ship(ship) for ship in raw if ship.get('Page')}
 
 
 def _build_traits() -> dict[str, dict[str, dict[str, dict]]]:

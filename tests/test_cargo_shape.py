@@ -145,3 +145,75 @@ def test_canonical_names_unions_every_source():
     assert boff_sample in names, 'boff ability missing from canonical set'
     st_sample = next(iter(cargo.starship_traits()))
     assert st_sample in names, 'starship trait missing from canonical set'
+
+
+# --- ship_list field typing --------------------------------------------
+# `STOCD/SETS-Data` and the bundled baseline serve typed JSON; the
+# `raman78/warp-cargo-data` mirror serves the raw Special:CargoExport
+# output, where every field is a string and list columns arrive
+# comma-joined. Consumers iterate `boffs` and do arithmetic on the slot
+# counts, so cargo has to hand out one shape whichever source answered.
+
+_RAW_EXPORT_SHIP = {
+    'Page': 'Test Battlecruiser',
+    'name': 'Test Battlecruiser',
+    'boffs': 'Commander Tactical-Miracle Worker,Lieutenant Universal,Ensign Science',
+    'type': 'Battlecruiser',
+    'abilities': 'Cloaking Device,Sensor Analysis',
+    'tier': '6',
+    'fore': '5',
+    'hullmod': '1.25',
+    'hangars': '',
+}
+
+
+def test_raw_export_ship_fields_are_typed():
+    from warp.data.cargo import _normalise_ship
+
+    ship = _normalise_ship(_RAW_EXPORT_SHIP)
+
+    assert ship['boffs'] == ['Commander Tactical-Miracle Worker',
+                             'Lieutenant Universal', 'Ensign Science']
+    assert ship['type'] == ['Battlecruiser']
+    assert ship['tier'] == 6
+    assert ship['hullmod'] == 1.25
+    assert ship['hangars'] is None
+
+
+def test_normalising_a_typed_ship_changes_nothing():
+    """Both sources must survive the same call — it runs on either."""
+    from warp.data.cargo import _normalise_ship
+
+    typed = _normalise_ship(_RAW_EXPORT_SHIP)
+
+    assert _normalise_ship(typed) == typed
+
+
+def test_shipdb_reads_boff_seats_from_a_raw_export_cache(tmp_path):
+    """The regression this normalisation exists for.
+
+    `ShipDB` parses the cache file itself. Fed the mirror's shape, it
+    iterated the `boffs` string character by character and returned an
+    empty BOFF slot profile for every ship, which leaves the layout
+    detector without ability-slot counts.
+    """
+    import json
+    from warp.warp_importer import ShipDB
+
+    (tmp_path / 'ship_list.json').write_text(
+        json.dumps([_RAW_EXPORT_SHIP]), encoding='utf-8')
+
+    profile = ShipDB(tmp_path).get_profile('Test Battlecruiser', 'Battlecruiser')
+
+    assert profile['Boff Tactical'] > 0
+    assert profile['Boff Science'] > 0
+
+
+def test_blank_seat_entries_are_dropped():
+    """Six baseline ships carry an empty seat string; parsed, it becomes a
+    phantom Commander seat with no profession. SETS skips them too."""
+    from warp.data.cargo import _normalise_ship
+
+    ship = _normalise_ship({'Page': 'X', 'boffs': ['Ensign Tactical', '', '  ']})
+
+    assert ship['boffs'] == ['Ensign Tactical']
