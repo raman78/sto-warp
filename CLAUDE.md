@@ -215,10 +215,19 @@ the maintainer, by hand, on a machine that has to be switched on. Treat its
 freshness as "usually no worse than the fallback", never as a guarantee, and
 do not describe it to users as self-refreshing.
 
-Both were verified byte-compatible for every builder in this module by
-building all caches from each source and diffing all 47 buckets. An ETag is
-only replayed against the source that issued it, so a fallback cannot answer
-304 with the other mirror's bytes.
+Both were verified to carry the same records by building all caches from
+each source and diffing all 47 buckets. An ETag is only replayed against
+the source that issued it, so a fallback cannot answer 304 with the other
+mirror's bytes.
+
+They are **not** typed the same way. `ship_list.json` from our mirror is
+the raw `Special:CargoExport` output — every field a string, list columns
+comma-joined — while SETS-Data and `warp/data/baseline/` serve lists and
+numbers. `cargo._normalise_ship` coerces both into the typed shape, and
+every reader of that file must apply it (`cargo._build_ships`,
+`warp_importer.ShipDB._load`). Never assume a cargo field's type from one
+source alone; check a live cache and the baseline. See
+`docs/CARGO_DATA_PLAN.md`.
 
 | File | Purpose |
 |---|---|

@@ -181,6 +181,38 @@ wheel under `warp/data/baseline/`. Loader precedence:
 > the published release. Do not re-announce the mirror as a user-facing
 > feature until its refresh runs without the maintainer's workstation.
 
+> **Field types differ per source (measured 2026-08-21).** "Interchangeable"
+> holds for *which* records each mirror carries, not for how they are typed.
+> `STOCD/SETS-Data` and the bundled baseline serve `ship_list.json` typed —
+> `boffs`, `type` and `abilities` as lists, slot counts as numbers.
+> `raman78/warp-cargo-data` serves the raw `Special:CargoExport` output,
+> where every field is a string and list columns arrive comma-joined
+> (794/797 ships). The other four files carry no type conflicts; the mirror
+> only adds fields SETS-Data lacks.
+>
+> `cargo._normalise_ship` coerces records into the typed shape, and both
+> readers of the file apply it: `cargo._build_ships` and
+> `warp_importer.ShipDB._load` (which parses the cache file directly). It
+> is idempotent, so it runs safely against either source. Without it,
+> iterating `ship['boffs']` yields characters —
+> `_boff_profile_from_shipdb` returned an empty BOFF slot profile for
+> every ship on any install whose cargo came from the mirror, which is the
+> default. Blank entries are dropped as well — six baseline ships carry an
+> empty seat string, which parses into a phantom Commander seat with no
+> profession; SETS drops them the same way.
+>
+> Verified by diffing all 797 normalised mirror records against SETS-Data.
+> What remains is upstream data, not typing: five `image` values and one
+> `type` string where the two mirrors hold different wiki text, HTML
+> entities that SETS-Data leaves encoded (`&quot;`), and one ship
+> (`Tamarian Deep Space Cruiser`) whose ability names contain literal
+> commas. SETS-Data keeps those commas escaped as `&#44;` so its own split
+> is unambiguous; our mirror decodes them before joining, so the split
+> shatters five ability names into fragments. Only `'Innovation Effects'
+> in abilities` reads this field (`warp_importer:694`), so the effect is
+> cosmetic today — but the fix belongs in the mirror's exporter, which
+> should keep `&#44;` encoded or emit arrays.
+
 Snapshot is updated by the maintainer via `warp/tools/make_baseline.py`,
 which walks the same `UPSTREAM_BASES` chain as the runtime loader. Refresh
 cadence: per minor release — but **not** while upstream is known to be
