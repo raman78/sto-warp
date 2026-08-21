@@ -42,11 +42,22 @@ jobs:
 
       - name: Install SETS
         run: |
+          # SETS' constants module imports PySide6.QtCore, which needs the
+          # Qt runtime libraries even under QT_QPA_PLATFORM=offscreen —
+          # a bare runner has none of them.
+          sudo apt-get update -qq
+          sudo apt-get install -y --no-install-recommends \
+            libegl1 libgl1 libglib2.0-0 libdbus-1-3 libxkbcommon0
           python -m pip install --upgrade pip
           # PyPI is the normal path; a release that hasn't been published
           # there yet still has to be checked, so fall back to the tag.
           pip install "STO-SETS==${{ steps.sets.outputs.version }}" \
             || pip install "STO-SETS @ git+https://github.com/STOCD/SETS@${{ steps.sets.outputs.tag }}"
+
+      - name: Verify SETS imports
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -c "import src.buildhelpers, src.buildmanager; print('SETS importable')"
 
       - name: Check contract
         id: check
@@ -62,8 +73,11 @@ jobs:
           echo "status=$status" >> "$GITHUB_OUTPUT"
           exit 0
 
+      # Exit 1 means the contract moved; anything else means the check
+      # could not run. Only the former is worth an issue — filing "drift"
+      # for a broken job would teach the maintainer to ignore the label.
       - name: Report drift
-        if: steps.check.outputs.status != '0'
+        if: steps.check.outputs.status == '1'
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
           TAG: ${{ steps.sets.outputs.tag }}
@@ -98,6 +112,12 @@ jobs:
               --label sets-contract --body-file issue-body.md
           fi
 
-      - name: Fail on drift
+      - name: Fail
         if: steps.check.outputs.status != '0'
-        run: exit 1
+        run: |
+          if [ "${{ steps.check.outputs.status }}" = "1" ]; then
+            echo "Contract drift — see the issue labelled sets-contract."
+          else
+            echo "The check could not run; contract state is unknown."
+          fi
+          exit 1
