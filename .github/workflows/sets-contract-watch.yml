@@ -1,0 +1,103 @@
+name: SETS contract watch
+
+# Weekly check that the newest SETS release still matches the build-JSON
+# contract frozen in warp/data/sets_contract.json. On drift the job fails
+# and files (or comments on) an issue labelled `sets-contract`, so the
+# format breaks in CI rather than in a user's SETS library.
+
+on:
+  schedule:
+    - cron: '0 5 * * 1'   # Mondays 05:00 UTC
+  workflow_dispatch:
+  push:
+    paths:
+      - 'warp/data/sets_contract.json'
+      - 'tools/sets_contract.py'
+      - '.github/workflows/sets-contract-watch.yml'
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      issues: write
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.14'
+
+      - name: Resolve newest SETS release
+        id: sets
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          tag=$(gh release view --repo STOCD/SETS --json tagName --jq .tagName)
+          echo "tag=$tag" >> "$GITHUB_OUTPUT"
+          echo "version=${tag#v}" >> "$GITHUB_OUTPUT"
+          echo "Newest SETS release: $tag"
+
+      - name: Install SETS
+        run: |
+          python -m pip install --upgrade pip
+          # PyPI is the normal path; a release that hasn't been published
+          # there yet still has to be checked, so fall back to the tag.
+          pip install "STO-SETS==${{ steps.sets.outputs.version }}" \
+            || pip install "STO-SETS @ git+https://github.com/STOCD/SETS@${{ steps.sets.outputs.tag }}"
+
+      - name: Check contract
+        id: check
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          set +e
+          python tools/sets_contract.py --check --tag "${{ steps.sets.outputs.tag }}" \
+            > contract.out 2>&1
+          status=$?
+          set -e
+          cat contract.out
+          echo "status=$status" >> "$GITHUB_OUTPUT"
+          exit 0
+
+      - name: Report drift
+        if: steps.check.outputs.status != '0'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          TAG: ${{ steps.sets.outputs.tag }}
+        run: |
+          {
+            echo "SETS \`$TAG\` no longer matches \`warp/data/sets_contract.json\`."
+            echo
+            echo '```'
+            cat contract.out
+            echo '```'
+            echo
+            echo "**What to do:** re-read the changed functions against \`warp/sets_schema.py\`,"
+            echo "adjust the rules if the behaviour moved, then refresh the snapshot:"
+            echo
+            echo '```'
+            echo "pip install STO-SETS==${TAG#v}"
+            echo "python tools/sets_contract.py --refresh --tag $TAG"
+            echo '```'
+            echo
+            echo "Filed by [\`sets-contract-watch\`](${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }})."
+          } > issue-body.md
+
+          existing=$(gh issue list --label sets-contract --state open \
+            --json number --jq '.[0].number // empty')
+          if [ -n "$existing" ]; then
+            gh issue comment "$existing" --body-file issue-body.md
+            echo "commented on existing issue #$existing"
+          else
+            gh label create sets-contract --color B60205 \
+              --description 'SETS build-JSON contract drift' 2>/dev/null || true
+            gh issue create --title "SETS contract drift: $TAG" \
+              --label sets-contract --body-file issue-body.md
+          fi
+
+      - name: Fail on drift
+        if: steps.check.outputs.status != '0'
+        run: exit 1

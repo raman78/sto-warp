@@ -19,7 +19,8 @@ import sys
 import tempfile
 from pathlib import Path
 
-from PySide6.QtCore import QObject, QSettings, QThread, Signal
+from PySide6.QtCore import QObject, QSettings, QThread, QUrl, Signal
+from PySide6.QtGui import QDesktopServices
 from PySide6.QtWidgets import (
     QApplication, QCheckBox, QComboBox, QFileDialog, QLabel,
     QMainWindow, QMessageBox, QPushButton, QTabWidget,
@@ -748,7 +749,8 @@ class WarpWindow(QMainWindow):
             # ground_skills), keyed off the classifier's per-file screen type.
             build.update(skills_from_files(
                 getattr(self._result, 'per_file_screen_type', {}) or {}))
-            write_sets_build(build, path, cache=cache)
+            violations = []
+            write_sets_build(build, path, cache=cache, report_to=violations)
         except Exception as e:
             log.exception('SETS export failed')
             QMessageBox.critical(self, 'Export failed', f'{type(e).__name__}: {e}')
@@ -759,7 +761,42 @@ class WarpWindow(QMainWindow):
                f'boff_ab={report.n_boff_abilities}')
         if report.unmatched_items:
             msg += f'  ·  {report.unmatched_items} unmatched'
+        if violations:
+            msg += f'  ·  ⚠ SETS schema: {len(violations)} warnings'
+            self._offer_schema_issue(violations, report)
         self.statusBar().showMessage(msg)
+
+    def _offer_schema_issue(self, violations: list, report) -> None:
+        """Tell the user the file may not survive SETS, offer to report it.
+
+        The file is already written — SETS will load it, just possibly
+        without the offending entries. Nothing leaves the machine here:
+        `issue_url` only builds a link, and GitHub shows the pre-filled
+        form for the user to submit (or discard).
+        """
+        from warp.sets_schema import errors, issue_url, summarise
+        from warp import __version__
+
+        box = QMessageBox(self)
+        box.setIcon(QMessageBox.Icon.Warning)
+        box.setWindowTitle('SETS schema warnings')
+        box.setText(
+            f'The exported build breaks the SETS format contract in '
+            f'{len(violations)} place(s), {len(errors(violations))} of which '
+            f'SETS resolves by silently dropping the entry.\n\n'
+            f'The file was written — this is a WARP bug worth reporting.')
+        box.setDetailedText('\n'.join(str(v) for v in violations))
+        report_btn = box.addButton('Report on GitHub', QMessageBox.ButtonRole.ActionRole)
+        box.addButton(QMessageBox.StandardButton.Close)
+        box.exec()
+
+        if box.clickedButton() is report_btn:
+            url = issue_url(violations, {
+                'sto-warp': __version__,
+                'ship': report.ship or '—',
+                'summary': summarise(violations, limit=3),
+            })
+            QDesktopServices.openUrl(QUrl(url))
 
 
 def main(argv: list[str] | None = None) -> int:

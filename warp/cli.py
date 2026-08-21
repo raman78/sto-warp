@@ -28,8 +28,33 @@ def main(argv: list[str] | None = None) -> int:
     sub.add_parser('install-desktop',
                    help='Install or refresh the menu entry '
                         '(Linux .desktop / Windows Start Menu .lnk).')
+    validate = sub.add_parser('validate-build',
+                              help='Check a build JSON against the SETS format contract.')
+    validate.add_argument('path', help='build JSON file to check')
+    validate.add_argument('--no-cargo', action='store_true',
+                          help='skip name lookups against the cargo cache (offline)')
 
     args = parser.parse_args(argv)
+
+    if args.cmd == 'validate-build':
+        import json
+        from pathlib import Path
+        from warp.sets_schema import contract, validate_sets_build
+
+        build = json.loads(Path(args.path).read_text(encoding='utf-8'))
+        cache = None
+        if not args.no_cargo:
+            from warp.data.cargo import cache_view
+            cache = cache_view()
+        violations = validate_sets_build(build, cache)
+        if not violations:
+            print(f'{args.path}: clean against SETS {contract()["sets_tag"]}')
+            return 0
+        print(f'{args.path}: {len(violations)} violations against '
+              f'SETS {contract()["sets_tag"]}', file=sys.stderr)
+        for violation in violations:
+            print(f'  [{violation.severity}] {violation}', file=sys.stderr)
+        return 1
 
     if args.cmd == 'check':
         log.info('sto-warp check: importing recognition modules...')
