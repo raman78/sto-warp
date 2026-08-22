@@ -17,12 +17,43 @@ local copy vs. the cost of a wasted HTTP fetch.
 | # | Phase id   | Source                                                    | Freshness mechanism                                                     | TTL                | Implementation                                                  |
 |---|------------|-----------------------------------------------------------|-------------------------------------------------------------------------|--------------------|-----------------------------------------------------------------|
 | 1 | `cargo`    | `raw.githubusercontent.com/raman78/warp-cargo-data/main/cargo/`, falling back to `STOCD/SETS-Data/main/cargo/` | HTTP `ETag` + `If-None-Match` per file *per source*; 24 h skip-window on top | 24 h               | `warp.data.cargo._refresh_loop`                                 |
-| 2 | `assets`   | `raw.githubusercontent.com/STOCD/SETS-Data/main/images/`  | GitHub Tree API SHA1 diff against local `_git_sha1`; 1 h manifest cache | 1 h (tree cache)   | `warp.data.asset_sync.AssetSyncManager.run`                     |
+| 2 | `assets`   | `raw.githubusercontent.com/STOCD/SETS-Data/main/images/` **and** `raman78/warp-cargo-data/main/scraped/icons/` | GitHub Tree API SHA1 diff against local `_git_sha1`; one manifest cache per source | 1 h (tree cache)   | `warp.data.asset_sync.AssetSyncManager.run`                     |
 | 3 | `knowledge`| sto-warp Space backend `/knowledge`                       | local-mtime TTL; full re-download on expiry; stale fallback on 5xx      | 24 h               | `warp.knowledge.sync_client.WARPSyncClient._download_knowledge_bg` |
 | 4 | `model`    | sto-warp Space backend `/model/version`                   | remote `trained_at` + `embedder_trained_at` ISO comparison (independent); embedder self-heal | 15 min (rate-limit)| `warp.trainer.model_updater.ModelUpdater._bg_check`             |
 | 5 | `crops`    | HF dataset `sets-sto/sto-icon-dataset` (tarball)          | dataset commit SHA recorded in `crops_manifest.json`                    | per-launch         | `warp.knowledge.community_crops.CommunityCropsClient.fetch`     |
 | 6 | `equiv`    | HF dataset resolve URL → `icon_equivalence.json`          | local-mtime TTL; full re-download on expiry; stale fallback on 5xx      | 24 h               | `WARPSyncClient._download_icon_equivalence_bg`                  |
 | 7 | `seed`     | derived from (5)                                          | mtime guard on `data/annotations.jsonl` from `community_crops`          | per-launch         | `warp.recognition.icon_matcher.SETSIconMatcher.seed_from_community_crops` |
+
+#### Why `assets` has two sources
+
+SETS-Data's `images/` is the only place item pictures ever came from, and
+it is incomplete: measured 2026-08-22, 292 slottable item names had no
+picture there and 71 of those exist on the wiki — `Jackal Mastiff` since
+2019. An item with no picture cannot be matched from a screenshot and
+shows an empty tooltip, however well its name resolves in cargo.
+
+The naming is not the problem: `File:<item> icon.png` is what both sides
+expect. The fetch is. stowiki answers 403 to plain HTTP clients behind its
+Cloudflare challenge, so nothing without a browser reaches those files.
+`warp-cargo-bay` harvests them through its browser session and republishes
+them at `scraped/icons/`, named `quote_plus(<item name>).png` — exactly
+what this sync writes into `icons/`.
+
+`OVERLAY_GROUPS` (`warp/data/asset_sync.py`) adds that path as a second
+source. Three properties matter:
+
+- **Separate manifest cache** (`overlay_tree_cache.json`) — one source
+  going quiet cannot invalidate the other's tree.
+- **Additive and optional** — an unreachable overlay skips the group and
+  leaves the run green. Those pictures stay missing, which is the state
+  that predates the second source; nothing else changes.
+- **Same target directory** — `_local_path` keys on the entry's own
+  filename, so `scraped/icons/X.png` and `images/X.png` both land in
+  `icons/X.png`. A picture SETS-Data later publishes simply overwrites the
+  harvested one on the next SHA1 diff.
+
+The names those pictures belong to are a separate concern — see
+`docs/CARGO_DATA_PLAN.md` § *Items no cargo table holds*.
 
 There's an eighth pseudo-phase, `upload`, run only by `SyncCoordinator`
 (not by the splash) — it pushes pending confirmed crops back up to HF
@@ -237,9 +268,12 @@ noticeable UI freeze on close while an upload finishes.
 │   ├── starship_traits.json + .meta
 │   ├── boff_abilities.json + .meta
 │   ├── ship_list.json + .meta
+│   ├── scraped_ground_weapons.json   ← items no cargo table holds
 │   ├── github_tree_cache.json        ← asset-sync 1 h tree manifest
+│   ├── overlay_tree_cache.json       ← same, for the harvested-icon source
 │   └── sync_failed.json              ← asset-sync 7 d failed-URL TTL
-├── icons/                            ← item icons mirrored from STOCD/SETS-Data
+├── icons/                            ← item icons: STOCD/SETS-Data, plus the
+│                                       ones only the wiki has
 ├── ship_images/                      ← ship images mirrored from STOCD/SETS-Data
 ├── community_crops/                  ← HF crops tarball extracted here
 │   ├── data/crops/<sha>.png

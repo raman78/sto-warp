@@ -399,8 +399,7 @@ A small amber label next to the dropdown indicates when the current file is usin
 ### Export to SETS JSON
 
 When a run finishes the **Export to SETS JSON…** button enables. It writes a
-SETS v3.0.0-compatible build file (via `warp.build_writer` + `warp.sets_export`)
-that you can load in the SETS build planner via `File → Load Build`.
+build file you can open in the SETS build planner with `File → Load Build`.
 
 The status bar reports a one-line summary on success:
 
@@ -408,6 +407,51 @@ The status bar reports a one-line summary on success:
 SETS build → /path/to/build.json  ·  ship=Fleet Heavy Cruiser
             eq=24  traits=11  boff_ab=12  ·  3 unmatched
 ```
+
+#### The file is checked before it is written
+
+SETS is quiet about builds it does not like: an item name it cannot place is
+dropped without a word, and a bridge officer seat with no profession shows up
+as "None / None". Both look like WARP missed something, when in fact the file
+was written wrong.
+
+So every export is checked against the format SETS expects. The file is always
+written — a check that refuses to save would be worse than the problem — and
+if anything is off you get a notice listing what:
+
+```
+┌─ SETS schema warnings ───────────────────────────────┐
+│  The exported build breaks the SETS format contract  │
+│  in 2 place(s), 2 of which SETS resolves by silently │
+│  dropping the entry.                                 │
+│                                                      │
+│  The file was written — this is a WARP bug worth     │
+│  reporting.                                          │
+│                                                      │
+│      [ Show Details… ]  [ Report on GitHub ]  [ Close ]
+└──────────────────────────────────────────────────────┘
+```
+
+**Report on GitHub** opens your browser with a bug report already filled in —
+the list of problems, your WARP version and the ship. Nothing is sent until you
+press submit on that page, and the report contains item names and version
+numbers only, never file paths or your user name.
+
+Tip: the same list also goes to the system log, so you can send it later even
+if you closed the notice.
+
+#### Checking a build file yourself
+
+Any saved build file can be checked from a terminal, including one that SETS
+itself wrote:
+
+```
+sto-warp validate-build "/path/to/build.json"
+```
+
+It prints nothing but a "clean" line when the file is fine, and one line per
+problem when it is not. Add `--no-cargo` to skip the checks that need the item
+database, if you are offline.
 
 ---
 
