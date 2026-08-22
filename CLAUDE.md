@@ -96,7 +96,20 @@ corresponding test in `tests/`. Follow these conventions:
 - **Scope:** keep tests focused — one assertion concept per test. Prefer
   many small tests over few large ones.
 
-Run the suite: `python -m pytest tests/ -v`
+Run the suite: `python -m pytest tests/ -v` — but **only from an environment
+that has the full stack installed**, i.e. an editable install of this repo
+(`pip install -e .[dev]`). On the maintainer's machine that is the pipx venv:
+
+```
+~/.local/share/pipx/venvs/sto-warp/bin/python -m pytest tests/ -q
+```
+
+A bare system Python typically has neither PySide6 nor OpenCV. The failure
+is quiet and easy to misread: the GUI tests skip on
+`importorskip('PySide6')`, and the OpenCV-backed ones fail to *collect* at
+all with `ModuleNotFoundError: No module named 'cv2'` — which looks like a
+broken repo when it is only the wrong interpreter. Skipped or uncollected
+tests are not a green suite; check the counts before reporting one.
 
 ---
 
