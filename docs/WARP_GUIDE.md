@@ -660,6 +660,8 @@ Every status can be changed. Pick the row, correct the name, and accept it — a
 
 **Move through the list with the Up and Down arrow keys.** They work wherever you are in the window — after clicking a box on the canvas you do not have to click back into the list first. Each press moves one slot and steps over the grey group headings. Typing fields, the drop-downs and the screenshot list on the left keep their own arrow keys, so nothing you are editing gets disturbed.
 
+**Enter also moves you on once an item is green.** On an item that still needs an answer, Enter accepts it and jumps to the next one that does. On an item you have already confirmed and not changed since, there is nothing left to accept, so Enter simply steps to the next slot — the same as pressing Down. That holds whether you are on the canvas, in the item list or in the name field, so you can walk a finished screenshot with one key. Change the name or the slot first and Enter goes back to meaning "accept", saving your correction.
+
 **Right-click** any item row to open a menu with external links:
 
 - **Open on vger.stobuilds.com** — opens the relevant vger category page in your browser (equipment or traits). Not shown for BOFF abilities.
@@ -1163,7 +1165,7 @@ after positioning. Ship names are treated as personal data.
 
 | Shortcut | Action |
 |----------|--------|
-| **Enter** | Accept current item |
+| **Enter** | Accept current item — or, on an item you have already confirmed and not changed, move to the next slot (same as Down) |
 | **Up** / **Down** | Previous / next slot in the review list, from anywhere in the window |
 | **Del** / **Backspace** | Remove selected bounding box |
 | **Alt + A** | Toggle Add BBox draw mode |

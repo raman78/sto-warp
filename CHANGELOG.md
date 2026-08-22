@@ -8,6 +8,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [Unreleased]
+
+### Changed
+- **Enter now moves you on when an item is already confirmed.** Pressing
+  Enter on a green item — from the picture, the item list or the name
+  field — steps to the next slot, exactly like the Down arrow. Before, it
+  re-saved the same answer and then looked for the next item still
+  needing review, so on a screenshot you had finished the selection did
+  not move at all. Enter on an item that still needs an answer accepts it
+  as before, and so does Enter after you change a name or slot.
+
 ## [1.0.30] — 2026-08-22
 
 ### Added

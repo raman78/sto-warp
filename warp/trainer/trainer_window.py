@@ -388,7 +388,7 @@ class WarpCoreWindow(QMainWindow):
         nc.addWidget(self._name_label)
         self._name_edit = QLineEdit()
         self._name_edit.setPlaceholderText("Item name (or leave blank for 'Unknown')")
-        self._name_edit.returnPressed.connect(self._on_accept)
+        self._name_edit.returnPressed.connect(self._on_enter)
         self._name_edit.textEdited.connect(self._on_name_edited)
         self._name_edit.focusInEvent  = self._on_name_focus_in
         self._name_edit.mousePressEvent = self._on_name_mouse_press
@@ -2742,7 +2742,7 @@ class WarpCoreWindow(QMainWindow):
         QShortcut(QKeySequence('Alt+D'), self,
                   activated=self._btn_done.click)
         QShortcut(QKeySequence('Return'), self,
-                  activated=self._on_accept)
+                  activated=self._on_enter)
         QShortcut(QKeySequence('Delete'), self,
                   activated=self._on_remove_item)
         QShortcut(QKeySequence('Alt+Up'), self,
@@ -2877,7 +2877,7 @@ class WarpCoreWindow(QMainWindow):
             # no-op, leaving users stranded on the current row depending
             # on which widget had focus — inconsistent and surprising.
             if obj is rl and key in (Qt.Key.Key_Return, Qt.Key.Key_Enter):
-                self._on_accept()
+                self._on_enter()
                 return True
         # Forward wheel events from anywhere in scroll area to the canvas widget
         # (only when WARP CORE is the active window)
@@ -3308,6 +3308,47 @@ class WarpCoreWindow(QMainWindow):
                     or ri.get('auto_confirmed')):
                 self._review_list.setCurrentRow(i)
                 return
+
+    def _on_enter(self):
+        """Return/Enter: accept the current row, or step down if it is done.
+
+        On a row the user has already confirmed there is nothing left to
+        accept: `_on_accept` re-saved the same annotation and then looked
+        for the next *unconfirmed* row, so on a fully reviewed screenshot
+        the selection did not move at all. Treat that case as a plain
+        step to the next slot, matching the Down arrow.
+
+        The guard compares the editors against what the row stores, so a
+        row whose name or slot the user has just changed is a real edit
+        and still goes through accept — whichever widget has focus.
+        Auto-confirmed (yellow) rows are program decisions awaiting
+        review, so Enter still confirms them.
+        """
+        row = self._review_list.currentRow()
+        if 0 <= row < len(self._recognition_items):
+            ri = self._recognition_items[row]
+            slot, name = self._current_editor_value()
+            # The combo shows what `_slot_for_combo` mapped the row's slot
+            # to — a BOFF seat key is displayed as its profession label —
+            # so compare against that, not the raw stored slot.
+            if (ri.get('state') == 'confirmed'
+                    and not ri.get('auto_confirmed')
+                    and slot == self._slot_for_combo(ri.get('slot') or '')
+                    and name == (ri.get('name') or '')):
+                self._nav_review_row(1)
+                return
+        self._on_accept()
+
+    def _current_editor_value(self) -> tuple[str, str]:
+        """The slot + item name the editor widgets currently hold."""
+        slot = self._slot_combo.currentText()
+        if slot == 'Ship Tier':
+            name = self._tier_combo.currentText()
+        elif slot == 'Ship Type':
+            name = self._ship_type_combo.currentText().strip()
+        else:
+            name = self._name_edit.text().strip()
+        return slot, name
 
     def _set_review_buttons_enabled(self, enabled: bool):
         for btn in (self._btn_remove_item,):  # btn_edit_bbox disabled
@@ -4352,13 +4393,7 @@ class WarpCoreWindow(QMainWindow):
                 'Accept blocked: screenshot is marked Done — '
                 'press ↩ Back to Edit to modify.', 6000)
             return
-        slot = self._slot_combo.currentText()
-        if slot == 'Ship Tier':
-            name = self._tier_combo.currentText()
-        elif slot == 'Ship Type':
-            name = self._ship_type_combo.currentText().strip()
-        else:
-            name = self._name_edit.text().strip()
+        slot, name = self._current_editor_value()
         # NON_ICON_SLOTS guard: if the user clicks Accept while the Ship
         # Type / Tier editor is empty (combo was blanked because OCR
         # hadn't run yet, or _on_item_selected fed it an empty `name`),
