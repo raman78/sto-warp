@@ -220,3 +220,54 @@ def test_contract_matches_the_installed_sets():
     live = sets_schema.shape_of(_sets_empty_build()('full'))
 
     assert live == stored
+
+
+class _OverlayCache:
+    """Cargo view whose ground weapon came from the harvested overlay."""
+
+    equipment = {'weapons': {
+        'Elite Fleet Colony Security Antiproton Blast Assault':
+            {'name': 'Elite Fleet Colony Security Antiproton Blast Assault',
+             'type': 'Ground Weapon', 'source': 'listing-scrape'},
+        'Phaser Compression Pistol': {'name': 'Phaser Compression Pistol'},
+    }}
+    traits = {'space': {'personal': {}, 'rep': {}, 'active_rep': {}},
+              'ground': {'personal': {}, 'rep': {}, 'active_rep': {}}}
+    starship_traits = {}
+    boff_abilities = {'all': {}}
+
+
+def _ground_weapon(build, name):
+    build['ground']['weapons'][0] = {'item': name, 'rarity': 'Ultra Rare',
+                                     'mark': 'Mk XII', 'modifiers': [None] * 4}
+    return build
+
+
+def test_an_item_only_the_overlay_knows_is_reported(clean_build):
+    """WARP resolves it; SETS reads the tables that omit it and drops it.
+
+    Adding the overlay made a build carrying one of these come back clean
+    while SETS still stripped the weapon — the exact prediction the
+    validator exists to make.
+    """
+    build = _ground_weapon(
+        clean_build, 'Elite Fleet Colony Security Antiproton Blast Assault')
+
+    violations = sets_schema.validate_sets_build(build, _OverlayCache())
+
+    assert [v.rule for v in violations] == ['not_in_sets']
+
+
+def test_an_item_the_cargo_tables_carry_is_not_reported(clean_build):
+    build = _ground_weapon(clean_build, 'Phaser Compression Pistol')
+
+    assert sets_schema.validate_sets_build(build, _OverlayCache()) == []
+
+
+def test_an_unknown_item_is_still_unknown(clean_build):
+    """`not_in_sets` narrows the old check, it does not replace it."""
+    build = _ground_weapon(clean_build, 'Nonexistent Rifle')
+
+    violations = sets_schema.validate_sets_build(build, _OverlayCache())
+
+    assert [v.rule for v in violations] == ['unknown_item']

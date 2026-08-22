@@ -20,6 +20,16 @@ Severity:
   * `warning` — loads fine, but something is off (ability recorded at a
                 rank its cargo entry doesn't offer at that slot).
 
+One rule, `not_in_sets`, reports something that is nobody's bug here.
+Items the wiki lists but never stored in a cargo table reach WARP through
+the harvested overlay (`cargo.OVERLAY_FILES`) — Elite Fleet and Colony
+Security ground weapons above all. Recognition resolves them; SETS, which
+reads the same cargo tables that omit them, cannot, and drops them on
+import. The check exists because the validator's job is to predict what
+SETS does with a file, and adding the overlay quietly made it predict
+wrong: a build carrying such a weapon came back `clean` and still lost the
+weapon. Callers should say so rather than dress it up as a WARP defect.
+
 Deliberately dependency-free: no `warp.debug`, no cargo import at module
 level, so `tools/` and tests can import it cheaply. Logging is the
 caller's job (see `warp.sets_export`).
@@ -222,9 +232,16 @@ def _check_equipment(build: dict, cache, out: list[Violation]) -> None:
                 elif any(m is not None and not isinstance(m, str) for m in modifiers):
                     out.append(Violation(path, 'modifiers', 'str / None entries',
                                          repr(modifiers)))
-                if cache is not None and name not in cache.equipment.get(key, {}):
+                if cache is None:
+                    continue
+                row = cache.equipment.get(key, {}).get(name)
+                if row is None:
                     out.append(Violation(path, 'unknown_item',
                                          f'name present in cargo equipment[{key}]', repr(name)))
+                elif isinstance(row, dict) and row.get('source'):
+                    out.append(Violation(path, 'not_in_sets',
+                                         'an item SETS can resolve',
+                                         f'{name!r} ({row["source"]})'))
 
 
 def _check_traits(build: dict, cache, out: list[Violation]) -> None:

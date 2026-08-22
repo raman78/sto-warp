@@ -81,3 +81,38 @@ def test_closing_the_dialog_sends_nothing(window, monkeypatch, opened_urls, viol
     window._offer_schema_issue(violations, _Report())
 
     assert opened_urls == []
+
+
+def test_an_upstream_gap_is_explained_not_reported(window, monkeypatch, opened_urls):
+    """Items missing from SETS' own tables are nobody's bug here.
+
+    WARP resolves them from its harvested list; SETS reads the cargo
+    tables that omit them and drops them. There is nothing to report, so
+    the dialog explains it and offers no report button.
+    """
+    monkeypatch.setattr(ww, 'QMessageBox', _dialog_answering(None))
+    upstream = [sets_schema.Violation(
+        '/ground/weapons[0]', 'not_in_sets', 'an item SETS can resolve',
+        "'Elite Fleet Colony Security Antiproton Blast Assault' (listing-scrape)")]
+
+    window._offer_schema_issue(upstream, _Report())
+
+    assert opened_urls == []
+
+
+def test_a_real_defect_alongside_one_still_offers_the_report(window, monkeypatch,
+                                                            opened_urls):
+    monkeypatch.setattr(ww, 'QMessageBox', _dialog_answering('Report'))
+    mixed = [
+        sets_schema.Violation('/ground/weapons[0]', 'not_in_sets',
+                              'an item SETS can resolve', "'X' (listing-scrape)"),
+        sets_schema.Violation('/space/boff_specs[0][0]', 'seat_profession',
+                              'non-empty str', 'None'),
+    ]
+
+    window._offer_schema_issue(mixed, _Report())
+
+    assert len(opened_urls) == 1
+    # Only the defect goes in the report; the upstream gap is not a bug.
+    assert 'seat_profession' in opened_urls[0]
+    assert 'listing-scrape' not in opened_urls[0]

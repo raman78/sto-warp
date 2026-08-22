@@ -76,6 +76,7 @@ returns a list of `Violation(path, rule, expected, got, severity)`.
 | `trait_type` | trait slots are `None`, `''`, or `{'item': name}` | `slot_trait_item` raises on a missing `item` |
 | `ability_type`, `ability_name`, `ability_rank` | BOFF dicts carry a base name and a Roman rank | `load_boff_stations` indexes `boff_abilities['all'][item][rank]` (`src/buildmanager.py:878`) |
 | `unknown_item`, `unknown_trait`, `unknown_ability` | name exists in the matching cargo bucket | `remove_invalid_build_items` (`src/buildloader.py:257`) deletes it without a message |
+| `not_in_sets` | the cargo row backing the name is not one SETS can read | SETS drops the entry — see below |
 | `rank_slot` | Roman rank matches the seat rank cargo says it unlocks at (`rank<N>rank`) | ability is rendered at a slot the game never offers it in |
 | `field_type`, `node_type` | captain fields and skill nodes have the right primitive types | wrong widget state on load |
 
@@ -138,6 +139,26 @@ sto-warp validate-build <build.json>      # add --no-cargo to skip name lookups
 
 Exit 1 with one line per violation. Works on any build JSON, including
 files SETS itself wrote.
+
+## Items SETS cannot know
+
+`not_in_sets` is the one rule that reports something no change here can fix.
+Elite Fleet and Colony Security ground weapons are listed on a wiki page and
+stored in no cargo table, so WARP reaches them through the harvested overlay
+(`cargo.OVERLAY_FILES`) while SETS — reading the same tables that omit them —
+cannot, and strips them on import.
+
+The check exists because adding that overlay quietly broke the validator's
+one job. A build carrying such a weapon came back `clean` and still lost the
+weapon in SETS: the name resolved against *our* cargo, which now includes
+rows SETS has never seen. Resolution is therefore not enough; the row's
+`source` decides. A row carrying one came from the overlay and is invisible
+to SETS.
+
+Callers must not present this as a WARP defect.
+`WarpWindow._offer_schema_issue` splits the two cases: a build whose only
+violations are `not_in_sets` gets an explanation and **no** report button,
+and a mixed set reports the real defects alone.
 
 ## Seat specs and ability ranks
 

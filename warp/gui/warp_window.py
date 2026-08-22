@@ -773,28 +773,51 @@ class WarpWindow(QMainWindow):
         without the offending entries. Nothing leaves the machine here:
         `issue_url` only builds a link, and GitHub shows the pre-filled
         form for the user to submit (or discard).
+
+        Two different messages, because two different things are wrong.
+        `not_in_sets` means the item exists in the game and in WARP but not
+        in the tables SETS reads — a gap upstream that no bug report here
+        can close, so that case gets an explanation and no report button.
+        Anything else is a build WARP wrote incorrectly, which is worth
+        reporting.
         """
         from warp.sets_schema import errors, issue_url, summarise
         from warp import __version__
 
+        upstream = [v for v in violations if v.rule == 'not_in_sets']
+        ours = [v for v in violations if v.rule != 'not_in_sets']
+
         box = QMessageBox(self)
         box.setIcon(QMessageBox.Icon.Warning)
         box.setWindowTitle('SETS schema warnings')
-        box.setText(
-            f'The exported build breaks the SETS format contract in '
-            f'{len(violations)} place(s), {len(errors(violations))} of which '
-            f'SETS resolves by silently dropping the entry.\n\n'
-            f'The file was written — this is a WARP bug worth reporting.')
+        if ours:
+            box.setText(
+                f'The exported build breaks the SETS format contract in '
+                f'{len(ours)} place(s), {len(errors(ours))} of which '
+                f'SETS resolves by silently dropping the entry.\n\n'
+                f'The file was written — this is a WARP bug worth reporting.')
+        else:
+            names = ', '.join(sorted({v.got.split(" (")[0].strip("'")
+                                      for v in upstream})[:3])
+            box.setText(
+                f'{len(upstream)} item(s) in this build are missing from the '
+                f'item tables SETS reads, so SETS will drop them on import:\n\n'
+                f'{names}{"…" if len(upstream) > 3 else ""}\n\n'
+                f'WARP recognises them from a list of its own. This is a gap '
+                f'in the wiki data SETS uses, not a fault in the export — the '
+                f'file itself is correct.')
         box.setDetailedText('\n'.join(str(v) for v in violations))
-        report_btn = box.addButton('Report on GitHub', QMessageBox.ButtonRole.ActionRole)
+        report_btn = (box.addButton('Report on GitHub',
+                                    QMessageBox.ButtonRole.ActionRole)
+                      if ours else None)
         box.addButton(QMessageBox.StandardButton.Close)
         box.exec()
 
-        if box.clickedButton() is report_btn:
-            url = issue_url(violations, {
+        if report_btn is not None and box.clickedButton() is report_btn:
+            url = issue_url(ours, {
                 'sto-warp': __version__,
                 'ship': report.ship or '—',
-                'summary': summarise(violations, limit=3),
+                'summary': summarise(ours, limit=3),
             })
             QDesktopServices.openUrl(QUrl(url))
 
