@@ -21,11 +21,13 @@ details live in the git history.
   against the same rules from the terminal.
 
 ### Fixed
-- **Bridge officer recognition on installations that downloaded their
-  reference data.** The ship's seat layout was read incorrectly, which left
-  the detector without the number of ability slots each seat holds — for
-  every ship in the game. Installations still running on the copy of the
-  data bundled with the app were not affected.
+- **Ship data downloaded from the mirror was read in the wrong shape**,
+  leaving the app without the seat layout of any ship — it fell back to
+  generic slot counts instead. Installations still running on the copy of
+  the data bundled with the app were not affected. Measured on the
+  project's test screenshots, what gets recognised comes out the same
+  either way, so this restores correct ship data rather than changing
+  today's results.
 - Bridge officer seats in exported builds now carry their profession and
   specialisation. Without them SETS showed the seat as "None / None" and
   dropped the whole station from the build text it produces for forum posts.
