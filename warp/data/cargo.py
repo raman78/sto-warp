@@ -58,6 +58,23 @@ RAW_FILES: tuple[str, ...] = (
     'starship_traits.json',
 )
 
+# Items the wiki lists on a page but never stored in a cargo table, harvested
+# from that page and published beside the mirror rather than inside it. Elite
+# Fleet, Colony Security and K-13 ground weapons live here: cargo has no rows
+# for them, so a name read off a ground build used to validate against nothing
+# and be dropped.
+#
+# Only our own mirror serves these — SETS-Data has no such path — and the
+# whole file is optional: a missing overlay costs those names and nothing
+# else, so `_resolve_raw` treats its absence as empty rather than fatal.
+# Each row carries `source`, and the publisher removes any row the real cargo
+# table has started carrying, so the overlay shrinks to nothing on its own.
+OVERLAY_BASE = 'https://raw.githubusercontent.com/raman78/warp-cargo-data/main/scraped'
+
+OVERLAY_FILES: tuple[str, ...] = (
+    'scraped_ground_weapons.json',
+)
+
 # equipment 'type' → bucket key used by `warp_importer` (`build_key`).
 # Mirrors `src.constants.EQUIPMENT_TYPES`.
 EQUIPMENT_TYPES: dict[str, str] = {
@@ -190,7 +207,8 @@ def _fetch(name: str, *, etag: str | None = None,
     other mirror's stale bytes.
     """
     errors: list[str] = []
-    for base in UPSTREAM_BASES:
+    bases = (OVERLAY_BASE,) if name in OVERLAY_FILES else UPSTREAM_BASES
+    for base in bases:
         req = urllib.request.Request(f'{base}/{name}')
         if etag and source == base:
             req.add_header('If-None-Match', etag)
@@ -238,6 +256,12 @@ def _resolve_raw(name: str) -> bytes:
     if baseline_path.exists():
         log.info(f'cargo: serving {name} from bundled baseline (offline mode)')
         return baseline_path.read_bytes()
+
+    if name in OVERLAY_FILES:
+        # The overlay is additive: without it those names simply stay
+        # unknown, which is the state every release before it shipped.
+        log.warning(f'cargo: overlay {name} unavailable — continuing without it')
+        return b'[]'
 
     raise RuntimeError(
         f'cargo: cannot resolve {name} — no cache, no network, no baseline.'
@@ -636,7 +660,44 @@ def _build_equipment() -> dict[str, dict[str, dict]]:
     uni.update(tac)
     uni.update(sci)
     uni.update(eng)
+
+    _merge_overlay(out)
     return out
+
+
+def _merge_overlay(buckets: dict[str, dict[str, dict]]) -> None:
+    """Add harvested items to their bucket, never over a real cargo row.
+
+    The overlay exists because the wiki lists these items without storing
+    them (see `OVERLAY_FILES`). A name the real table already carries wins:
+    the publisher drops such rows on its next run anyway, and until then a
+    stale overlay entry must not shadow the authoritative one.
+
+    Note what this does and does not buy. Fleet and colony weapons reuse the
+    base weapon's picture, so icon matching cannot tell them apart and this
+    changes nothing there. What it changes is validation: a name read off a
+    ground build now resolves instead of being discarded as unknown.
+    """
+    try:
+        rows = _load_raw('scraped_ground_weapons.json')
+    except Exception as exc:
+        log.warning(f'cargo: overlay unavailable ({exc}) — continuing without it')
+        return
+    if not isinstance(rows, list):
+        return
+
+    added = 0
+    for item in rows:
+        if not isinstance(item, dict):
+            continue
+        bucket = EQUIPMENT_TYPES.get(item.get('type'))
+        name = _sanitize_equipment_name(item.get('name') or '')
+        if bucket is None or not name or name in buckets.get(bucket, {}):
+            continue
+        buckets[bucket][name] = item
+        added += 1
+    if added:
+        log.info(f'cargo: overlay added {added} items the cargo tables lack')
 
 
 # `ship_list.json` is the one file whose field *types* differ per source.

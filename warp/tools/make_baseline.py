@@ -32,6 +32,10 @@ FILES = (
     'boff_abilities.json',
     'traits.json',
     'starship_traits.json',
+    # Harvested overlay; `cargo._fetch` routes it to its own base. Shipping
+    # it means a first run without network still knows the fleet and colony
+    # ground weapons the cargo tables omit.
+    'scraped_ground_weapons.json',
 )
 
 BASELINE_DIR = Path(__file__).resolve().parents[1] / 'data' / 'baseline'

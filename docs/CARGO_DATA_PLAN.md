@@ -220,6 +220,35 @@ missing data. A snapshot is the one copy a user without network ever sees,
 so it refuses to write a file that came back materially smaller than the
 committed one (`--allow-shrink` overrides).
 
+## Items no cargo table holds (added 2026-08-22)
+
+Elite Fleet, Colony Security and Fleet Station K-13 ground weapons appear on
+the `Fleet Ground Weapons` wiki page and in **no** cargo table — the page
+renders them from wikitext and stores nothing, and the individual weapons
+have no item pages. Both mirrors are equally blind to them, so a name read
+off a ground build validated against nothing and was dropped.
+
+`warp-cargo-bay` harvests them from that page's own `{{item|…}}` calls and
+publishes 136 rows to `scraped/scraped_ground_weapons.json`, beside the
+mirror rather than inside it. On this side:
+
+| Aspect | Behaviour |
+|---|---|
+| Source | `cargo.OVERLAY_BASE` — our mirror only; SETS-Data has no such path |
+| Optional | a missing overlay logs a warning and yields `[]`; those names stay unknown, as before it existed |
+| Precedence | `cargo._merge_overlay` skips any name a real cargo row already holds |
+| Provenance | every row carries `source: listing-scrape` |
+| Offline | shipped in `warp/data/baseline/` so a first run without network has them |
+
+What it does **not** do: fleet variants reuse the base weapon's icon, so icon
+matching cannot tell `Advanced Fleet Antiproton Blast Assault` from
+`Antiproton Blast Assault`. The overlay changes name validation, not picture
+matching.
+
+The overlay is meant to disappear. Each publisher run drops rows whose name
+has turned up in `equipment.json`; one went that way on the first run. At
+zero rows the whole mechanism can be retired.
+
 ## Open questions
 
 - Mirror upstream files on the sets-sto HF org as a secondary endpoint

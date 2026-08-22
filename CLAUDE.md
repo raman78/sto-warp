@@ -236,6 +236,15 @@ source alone; check a live cache and the baseline. See
 | `boff_abilities.json` | BOFF ability metadata (rank Roman numerals) |
 | `ships.json` | ship roster (used for type-first disambiguation) |
 
+One more file comes from a different path: `scraped/scraped_ground_weapons.json`
+(`OVERLAY_FILES`, `OVERLAY_BASE`). Elite Fleet, Colony Security and K-13 ground
+weapons are listed on a wiki page but stored in no cargo table, so they are
+harvested from that page and published beside the mirror. Only our own mirror
+serves it, it is **optional** (a missing overlay logs a warning and continues),
+and `cargo._merge_overlay` never lets an overlay row shadow a real cargo row.
+Each row carries `source`; the publisher drops rows the cargo tables start
+carrying, so the overlay is designed to shrink to nothing.
+
 Cache path: `~/.config/warp/cache/` (per-file mtime + 24 h refresh window;
 ETag-aware via `If-None-Match` when available).
 

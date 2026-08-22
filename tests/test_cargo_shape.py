@@ -217,3 +217,57 @@ def test_blank_seat_entries_are_dropped():
     ship = _normalise_ship({'Page': 'X', 'boffs': ['Ensign Tactical', '', '  ']})
 
     assert ship['boffs'] == ['Ensign Tactical']
+
+
+# --- harvested overlay ---------------------------------------------------
+# Elite Fleet / Colony Security ground weapons exist only on a wiki listing
+# page, never in a cargo table, so a name read off a ground build used to
+# validate against nothing. `scraped_ground_weapons.json` fills that in.
+
+def test_overlay_weapons_reach_the_ground_weapon_bucket():
+    from warp.data.cargo import equipment
+
+    weapons = equipment()['weapons']
+
+    assert 'Elite Fleet Colony Security Antiproton Blast Assault' in weapons
+    assert 'Advanced Fleet Phaser Compression Pistol' in weapons
+
+
+def test_overlay_names_are_valid_for_recognition():
+    from warp.data import cargo
+
+    assert 'Advanced Fleet Antiproton Blast Assault' in cargo.canonical_names()
+
+
+def test_an_overlay_row_never_shadows_a_real_cargo_row():
+    """The publisher drops these on its next run; until then cargo wins."""
+    from warp.data.cargo import _merge_overlay
+
+    buckets = {'weapons': {'Elite Fleet Disruptor Dual Sniper Rifles':
+                           {'name': 'Elite Fleet Disruptor Dual Sniper Rifles',
+                            'type': 'Ground Weapon'}}}
+
+    _merge_overlay(buckets)
+
+    assert 'source' not in buckets['weapons']['Elite Fleet Disruptor Dual Sniper Rifles']
+
+
+def test_a_missing_overlay_is_not_fatal(tmp_path, monkeypatch):
+    """It is additive data: without it those names stay unknown, which is
+    exactly the state of every release before it shipped."""
+    from warp.data import cargo
+
+    monkeypatch.setattr(cargo, '_BASELINE_DIR', tmp_path)
+    monkeypatch.setattr(cargo, '_fetch',
+                        lambda *a, **k: (_ for _ in ()).throw(RuntimeError('offline')))
+
+    assert cargo._resolve_raw('scraped_ground_weapons.json') == b'[]'
+
+
+def test_the_overlay_is_only_fetched_from_our_own_mirror():
+    """SETS-Data has no such path; asking it would be a guaranteed 404."""
+    from warp.data import cargo
+
+    assert cargo.OVERLAY_BASE.startswith(
+        'https://raw.githubusercontent.com/raman78/warp-cargo-data')
+    assert cargo.OVERLAY_BASE not in cargo.UPSTREAM_BASES
