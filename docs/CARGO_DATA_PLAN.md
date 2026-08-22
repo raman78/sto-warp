@@ -240,10 +240,17 @@ mirror rather than inside it. On this side:
 | Provenance | every row carries `source: listing-scrape` |
 | Offline | shipped in `warp/data/baseline/` so a first run without network has them |
 
-What it does **not** do: fleet variants reuse the base weapon's icon, so icon
-matching cannot tell `Advanced Fleet Antiproton Blast Assault` from
-`Antiproton Blast Assault`. The overlay changes name validation, not picture
-matching.
+What it does for icons depends on the family, measured 2026-08-22 against the
+wiki's own files:
+
+| Family | Dedicated icon on the wiki | Consequence |
+|---|---|---|
+| Advanced Fleet, Elite Fleet | none | reuses the base weapon's picture, so icon matching cannot tell the variant from the plain weapon; the overlay buys name validation only |
+| Elite Fleet Colony Security | yes, 49x64 | the picture is genuinely different — 58.5% of pixels differ from the base weapon by more than 8/255 — so matching *could* identify them, but only once those icons are in the database |
+
+Neither `STOCD/SETS-Data` nor our icon database carries the Colony Security
+pictures today, so those 48 weapons currently resolve by name and mismatch by
+icon.
 
 The overlay is meant to disappear. Each publisher run drops rows whose name
 has turned up in `equipment.json`; one went that way on the first run. At
