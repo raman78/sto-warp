@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [Unreleased]
+## [1.0.31] — 2026-08-22
 
 ### Changed
 - **Enter now moves you on when an item is already confirmed.** Pressing
@@ -18,6 +18,12 @@ details live in the git history.
   needing review, so on a screenshot you had finished the selection did
   not move at all. Enter on an item that still needs an answer accepts it
   as before, and so does Enter after you change a name or slot.
+- **Items that used to come back empty are now recognised and show their
+  card.** Some gear was missing from the reference data the app mirrors:
+  names it had never heard of were discarded, and items with no picture
+  showed a blank card with nothing for recognition to compare against.
+  Both gaps are filled in — several ground weapon families are the
+  largest group.
 
 ## [1.0.30] — 2026-08-22
 
