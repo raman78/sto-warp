@@ -8,6 +8,39 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.30] — 2026-08-22
+
+### Added
+- **Exported builds are now checked against the format SETS expects.** When
+  something in a build would not survive the import — a bridge officer seat
+  with no profession, an item name SETS cannot resolve — the file is still
+  written, and a notice lists what is wrong with a **Report on GitHub**
+  button that opens a pre-filled bug report. Nothing leaves the computer
+  without that click.
+- **A new `sto-warp validate-build` command** checks any saved build file
+  against the same rules from the terminal.
+
+### Fixed
+- **Bridge officer recognition on installations that downloaded their
+  reference data.** The ship's seat layout was read incorrectly, which left
+  the detector without the number of ability slots each seat holds — for
+  every ship in the game. Installations still running on the copy of the
+  data bundled with the app were not affected.
+- Bridge officer seats in exported builds now carry their profession and
+  specialisation. Without them SETS showed the seat as "None / None" and
+  dropped the whole station from the build text it produces for forum posts.
+- Exported builds now record the rank each bridge officer ability is
+  actually available at in that slot, instead of the highest rank the slot
+  could hold.
+- Seven Temporal specialisation ground abilities — Causal Entanglement,
+  Chronoplasty, Degeneration, Entropic Contagion, Spread Decay, Tachyonic
+  Conversion and Temporal Narcosis — were missing from WARP CORE's ability
+  list and can now be picked.
+- Item cards pinned next to a bounding box no longer jump back inside the
+  picture when the screenshot is smaller than the window. A card anchored at
+  the right or bottom edge was pushed over the image with empty space left
+  beside it.
+
 ## [1.0.29] — 2026-08-15
 
 ### Changed
