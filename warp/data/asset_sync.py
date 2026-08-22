@@ -58,6 +58,26 @@ ASSET_GROUPS: tuple[tuple[str, str, str], ...] = (
     ('Ship Images', 'ship_images/', 'ship'),
 )
 
+# Second source: icons the image mirror never picked up. SETS-Data's
+# `images/` is incomplete — `Jackal Mastiff` has had one on the wiki since
+# 2019 and no file there — and an item with no picture cannot be matched
+# from a screenshot and shows an empty tooltip, however well its name
+# resolves in cargo. warp-cargo-bay downloads those through a browser
+# session (stowiki answers 403 to plain HTTP clients) and publishes them
+# here, filed under exactly the names this sync writes locally.
+#
+# Additive and optional: an unreachable overlay costs those pictures and
+# nothing else, so a failure here never fails the run.
+OVERLAY_TREE_API = (
+    'https://api.github.com/repos/raman78/warp-cargo-data/git/trees/main?recursive=1'
+)
+OVERLAY_RAW_BASE = 'https://raw.githubusercontent.com/raman78/warp-cargo-data/main'
+OVERLAY_TREE_CACHE_FILENAME = 'overlay_tree_cache.json'
+
+OVERLAY_GROUPS: tuple[tuple[str, str, str], ...] = (
+    ('Overlay Icons', 'scraped/icons/', 'icon'),
+)
+
 
 # ── SHA helpers ──────────────────────────────────────────────────────────
 
@@ -95,10 +115,11 @@ def _save_tree_cache(path: Path, tree: list[dict]) -> None:
         log.warning(f'AssetSync: tree cache write failed: {e}')
 
 
-def _fetch_github_tree(session: requests.Session) -> list[dict] | None:
+def _fetch_github_tree(session: requests.Session,
+                       api_url: str = GITHUB_API_TREE) -> list[dict] | None:
     for attempt in range(1, MAX_RETRIES + 1):
         try:
-            resp = session.get(GITHUB_API_TREE, timeout=(10, config.ASSET_STALL_TIMEOUT_S))
+            resp = session.get(api_url, timeout=(10, config.ASSET_STALL_TIMEOUT_S))
             if resp.ok:
                 blobs = [e for e in resp.json().get('tree', [])
                          if e.get('type') == 'blob']
@@ -167,6 +188,9 @@ class AssetSyncManager:
         self._tree_cache_path   = self._cache_dir / TREE_CACHE_FILENAME
         self._failed_cache_path = self._cache_dir / FAILED_CACHE_FILENAME
 
+        # Set per source by `_sync_tree`; the default keeps a direct
+        # `_download_one` call (tests, ad-hoc use) pointed at the mirror.
+        self._raw_base         = GITHUB_RAW_BASE
         self._github_blocked   = False
         self._github_403_count = 0
         self._cb_lock          = threading.Lock()
@@ -200,7 +224,43 @@ class AssetSyncManager:
         total_updated = 0
         total_failed  = 0
 
-        for (label, prefix, type_tag) in ASSET_GROUPS:
+        updated, failed_n = self._sync_tree(tree, ASSET_GROUPS, GITHUB_RAW_BASE,
+                                            session, prog)
+        total_updated += updated
+        total_failed  += failed_n
+
+        overlay = self._overlay_tree(session, prog)
+        if overlay:
+            updated, failed_n = self._sync_tree(overlay, OVERLAY_GROUPS,
+                                                OVERLAY_RAW_BASE, session, prog)
+            total_updated += updated
+            total_failed  += failed_n
+
+        # Persist failed-asset map (entries added during run, plus pruned).
+        _save_failed(self._failed_cache_path, self._failed)
+
+        report = {
+            'checked': len(tree) + len(overlay or ()),
+            'updated': total_updated,
+            'failed':  total_failed,
+        }
+        log.info(f'AssetSync: complete — {report}')
+        if total_updated == 0 and total_failed == 0:
+            prog('All assets up to date', 0, 0)
+        else:
+            prog(f'Sync done: {total_updated} updated, {total_failed} failed',
+                 0, 0)
+        return report
+
+    # ── Sources ────────────────────────────────────────────────────────────
+
+    def _sync_tree(self, tree: list[dict], groups: tuple[tuple[str, str, str], ...],
+                   raw_base: str, session: requests.Session,
+                   prog: Callable[[str, int, int], None]) -> tuple[int, int]:
+        """Bring one repository's groups up to date. Returns (updated, failed)."""
+        self._raw_base = raw_base
+        total_updated = total_failed = 0
+        for (label, prefix, type_tag) in groups:
             entries = [e for e in tree if e.get('path', '').startswith(prefix)]
             to_update = self._diff_group(entries, type_tag)
             count = len(to_update)
@@ -215,22 +275,25 @@ class AssetSyncManager:
                                                      session, prog)
             total_updated += updated
             total_failed  += failed_n
+        return total_updated, total_failed
 
-        # Persist failed-asset map (entries added during run, plus pruned).
-        _save_failed(self._failed_cache_path, self._failed)
+    def _overlay_tree(self, session: requests.Session,
+                      prog: Callable[[str, int, int], None]) -> list[dict] | None:
+        """Manifest of the harvested-icon overlay, or None when unavailable.
 
-        report = {
-            'checked': len(tree),
-            'updated': total_updated,
-            'failed':  total_failed,
-        }
-        log.info(f'AssetSync: complete — {report}')
-        if total_updated == 0 and total_failed == 0:
-            prog('All assets up to date', 0, 0)
-        else:
-            prog(f'Sync done: {total_updated} updated, {total_failed} failed',
-                 0, 0)
-        return report
+        Cached separately from the main tree so one source going quiet
+        cannot invalidate the other's manifest.
+        """
+        cache_path = self._cache_dir / OVERLAY_TREE_CACHE_FILENAME
+        tree = _load_tree_cache(cache_path)
+        if tree is not None:
+            return tree
+        tree = _fetch_github_tree(session, OVERLAY_TREE_API)
+        if tree is None:
+            log.info('AssetSync: overlay manifest unavailable — skipping it')
+            return None
+        _save_tree_cache(cache_path, tree)
+        return tree
 
     # ── Diff ───────────────────────────────────────────────────────────────
 
@@ -250,7 +313,7 @@ class AssetSyncManager:
 
     def _local_path(self, github_path: str,
                     type_tag: str) -> Path | None:
-        filename = github_path.split('/', 1)[1] if '/' in github_path else ''
+        filename = github_path.rsplit('/', 1)[-1] if '/' in github_path else ''
         if not filename:
             return None
         if type_tag == 'icon':
@@ -339,7 +402,7 @@ class AssetSyncManager:
         if self._github_blocked:
             return False, 0
 
-        url = f'{GITHUB_RAW_BASE}/{quote(entry["path"])}'
+        url = f'{self._raw_base}/{quote(entry["path"])}'
         last_status = None
         for attempt in range(1, MAX_RETRIES + 1):
             try:

@@ -248,9 +248,26 @@ wiki's own files:
 | Advanced Fleet, Elite Fleet | none | reuses the base weapon's picture, so icon matching cannot tell the variant from the plain weapon; the overlay buys name validation only |
 | Elite Fleet Colony Security | yes, 49x64 | the picture is genuinely different — 58.5% of pixels differ from the base weapon by more than 8/255 — so matching *could* identify them, but only once those icons are in the database |
 
-Neither `STOCD/SETS-Data` nor our icon database carries the Colony Security
-pictures today, so those 48 weapons currently resolve by name and mismatch by
-icon.
+### Icons the image mirror never carried
+
+`STOCD/SETS-Data`'s `images/` is the only source of item pictures, and it is
+incomplete. `Jackal Mastiff` has had a 49x64 icon on the wiki since 2019 and
+no file there; the item resolves by name in cargo and shows an empty tooltip.
+Measured 2026-08-22 across every slottable item name: 292 had no picture, and
+**71 of those exist on the wiki**, all at the native 49x64.
+
+Nothing is wrong with the naming — `File:<item> icon.png` is what both sides
+expect. The fetch is what fails: stowiki answers 403 to plain HTTP clients
+behind its Cloudflare challenge, so a downloader without a browser cannot
+reach them at all.
+
+`warp-cargo-bay` harvests them through its browser session and publishes them
+to `scraped/icons/`, filed under `quote_plus(<name>).png` — exactly what
+`asset_sync` writes locally. On this side `OVERLAY_GROUPS` adds that path as a
+second source, with its own manifest cache, and an unreachable overlay skips
+the group instead of failing the run. That is what closes the Colony Security
+weapons above: their pictures differ from the base weapon's and are now
+available.
 
 The overlay is meant to disappear. Each publisher run drops rows whose name
 has turned up in `equipment.json`; one went that way on the first run. At
