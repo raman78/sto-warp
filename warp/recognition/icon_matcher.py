@@ -30,6 +30,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from urllib.parse import unquote_plus
 
@@ -112,6 +113,42 @@ HF_LABELS_FILE      = 'label_map.json'
 HF_UNAVAILABLE_FILE = 'model_unavailable.flag'
 # How many hours to wait before retrying after a failed check
 HF_RETRY_HOURS      = 24
+
+
+# Era-variant icon art. STO draws some gear differently in 23rd-century
+# content, and the wiki files that second picture as its own page —
+# `File:Impulse Engines (23c) icon.png` beside `File:Impulse Engines
+# icon.png`. The *item* is unchanged: one name, one cargo row, and the
+# article renders both pictures side by side. Our icon index is keyed by
+# filename, so a variant would otherwise enter it under a name no cargo
+# row carries and be dropped by every candidate filter downstream.
+_ERA_VARIANT_RE = re.compile(r'^(?P<base>.+?) \(23c\.?\)$')
+
+
+def _base_item_name(icon_name: str, known_names: set[str]) -> str:
+    """Map era-variant icon art onto the item it depicts.
+
+    Driven by the item names cargo currently carries rather than by the
+    spelling of the tag, because the tag is not reliably a variant marker:
+    `Modified Phaser Pistol (23c.)` is a real item name, tag and all. The
+    order of the checks is what keeps both readings working, and keeps
+    working as the wiki changes:
+
+    * the name is already an item        → leave it (a tagged item name)
+    * else the base name is an item      → variant art, fold onto the base
+    * neither                            → leave it (nothing to fold onto;
+      `Matter Anti-Matter Warp Core (23c)` is in this state today, and
+      starts folding by itself if that item ever gains a cargo row)
+
+    With no cargo available `known_names` is empty and nothing is folded,
+    which is exactly the behaviour that predates this function.
+    """
+    if not known_names or icon_name in known_names:
+        return icon_name
+    m = _ERA_VARIANT_RE.match(icon_name)
+    if m and m.group('base') in known_names:
+        return m.group('base')
+    return icon_name
 
 
 def _virtual_crop_looks_real(crop_bgr) -> bool:
@@ -603,9 +640,28 @@ class SETSIconMatcher:
             return
 
         import cv2
+        # Item names as cargo has them, used to fold era-variant art onto the
+        # item it depicts. Guarded: cargo being unavailable costs the folding
+        # and nothing else, and every other source degrades the same way.
+        try:
+            from warp.data.cargo import canonical_names
+            known_names = canonical_names()
+        except Exception as exc:
+            log.warning(f'WARP: icon index has no cargo names ({exc!r}) — '
+                        'era-variant art will not be folded')
+            known_names = set()
+
         count = 0
+        folded = 0
         for png in images_dir.glob('*.png'):
             name = unquote_plus(png.stem)
+            base = _base_item_name(name, known_names)
+            if base != name:
+                # Two entries now answer to the same item name, one per era.
+                # The index is a list scanned for the best score, so both
+                # compete and the picture the screenshot actually shows wins.
+                name = base
+                folded += 1
             orig = cv2.imread(str(png))
             if orig is None:
                 continue
@@ -628,7 +684,9 @@ class SETSIconMatcher:
             })
             count += 1
 
-        log.info(f'WARP: indexed {count} icons from {images_dir}')
+        log.info(f'WARP: indexed {count} icons from {images_dir}'
+                 + (f' ({folded} era-variant folded onto their item)'
+                    if folded else ''))
 
     def _get_images_dir(self) -> Path | None:
         arg = self._sets

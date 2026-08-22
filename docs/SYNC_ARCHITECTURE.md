@@ -55,6 +55,51 @@ source. Three properties matter:
 The names those pictures belong to are a separate concern — see
 `docs/CARGO_DATA_PLAN.md` § *Items no cargo table holds*.
 
+#### One item, two pictures: era-variant art
+
+STO draws some gear differently in 23rd-century content, and the wiki files
+that second picture as its own page — `File:Impulse Engines (23c) icon.png`
+beside `File:Impulse Engines icon.png`. The **item** is unchanged: one name,
+one cargo row, and the article renders both pictures side by side.
+
+That breaks an assumption the icon index rests on. `SETSIconMatcher._build_index`
+keys every entry on the filename (`name = unquote_plus(png.stem)`), so variant
+art would enter the index under `Impulse Engines (23c)` — a name no cargo row
+carries, which every candidate filter downstream then drops. Measured on
+`Screenshot_2026-01-19_145418.png` (a Kelvin-timeline ship, so 23c art) before
+the fold existed: the impulse slot came back as `Advanced Fleet Impulse
+Engines` @0.48 restricted to engine candidates, and `Shield Array` @0.50
+unrestricted. With the variant present and folded: `Impulse Engines` @0.72 in
+both.
+
+`_base_item_name` (`warp/recognition/icon_matcher.py`) folds a variant onto the
+item it depicts, and asks cargo rather than reading the tag:
+
+| Icon name | Base in cargo? | Name in cargo? | Indexed as |
+|---|---|---|---|
+| `Impulse Engines (23c)` | yes | no | `Impulse Engines` |
+| `Modified Phaser Pistol (23c.)` | no | **yes** | unchanged |
+| `Matter Anti-Matter Warp Core (23c)` | no | no | unchanged |
+| *(cargo unavailable)* | — | — | unchanged |
+
+The tag cannot be the deciding factor because it is not always a variant
+marker: `Modified Phaser Pistol (23c.)` is a whole item name, tag included.
+Measured 2026-08-22 against the live wiki and the cargo cache — 35 `(23c)`
+files, none of them an item name, 34 with an item under the base name; one
+`(23c.)` file that *is* an item name. Deciding from cargo also means the rule
+needs no maintenance: an item the tables only start carrying later begins
+folding on its own, and a tagged name that becomes a real item keeps working.
+
+Two index entries then answer to the same item name, one per era. The index is
+a list scanned for the best score, so both compete and the picture the
+screenshot actually shows wins.
+
+The publishing half mirrors this. `fetcher/icons.py::era_variants` in
+`warp-cargo-bay` asks the wiki which variant files exist (`intitle:"23c"
+intitle:"icon"`) on every run rather than working from a list, applies the
+same cargo test, and publishes what is left to `scraped/icons/` under
+`quote_plus('<item> (23c)').png`. 34 files as of 2026-08-22.
+
 There's an eighth pseudo-phase, `upload`, run only by `SyncCoordinator`
 (not by the splash) — it pushes pending confirmed crops back up to HF
 when the user has been correcting in WARP CORE.

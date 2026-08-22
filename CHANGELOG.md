@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [Unreleased]
+
+### Fixed
+- **Gear on 23rd-century ships is recognised again.** Some equipment is
+  drawn differently in 23rd-century content — a Kelvin or TOS-era ship
+  shows a different picture for the same item — and the app only knew the
+  modern picture. Those slots came back as the wrong item at low
+  confidence: on a test screenshot the impulse engines read as *Advanced
+  Fleet Impulse Engines*, and with no slot restriction as *Shield Array*.
+  The app now knows both pictures for the same item, and reads that slot
+  as *Impulse Engines*. Affects 34 items in total, among them phaser,
+  disruptor and plasma weapons, torpedo launchers, deflectors, shields,
+  engines, a warp core and the ground kits. The extra pictures arrive with
+  the normal reference-data download, so nothing needs to be reinstalled.
+
 ## [1.0.31] — 2026-08-22
 
 ### Changed
