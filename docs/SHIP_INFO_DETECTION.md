@@ -155,6 +155,103 @@ middle of the plateau. Ten screenshots lose a junk prefix in `ship_type`
 `AWAY TEAM`). `ship_*` bboxes wider than 40 % of the image: 15 → 11; the
 remainder are genuinely long class names (41–48 %) plus `doff.png`.
 
+### Decision 2026-08-26: the tier tiebreaker is confined to equal-length candidates
+
+**Change.** `_fuzzy_tier` (`warp/recognition/text_extractor.py:102`) picks the
+canonical tier with the highest list index among candidates scoring within
+0.10 of the best ratio. That pool is now filtered to candidates of the **same
+length as the OCR token**, falling back to the unfiltered pool when nothing
+matches on length. One line:
+
+```python
+same_length = [v for v in pool if len(v) == len(cand)]
+return max(same_length or pool, key=SHIP_TIER_VALUES.index)
+```
+
+**Why.** The tiebreaker exists to rescue `'T6-XZ'` (a misread `2`) from being
+demoted to `T6-X`. On noisy input it did the opposite. `'TG-X'` — a `6` read
+as `G`, seen on `b1-faa648cbbf29a0f9.png` — scores 0.750 against `T6-X` *and*
+`T5-X`, and 0.667 against both `-X2` forms. The 0.10 buffer reaches 0.65, so
+the `-X2` variants entered the pool and "prefer higher" promoted the token two
+steps to `T6-X2`.
+
+The cost is not cosmetic. `_apply_ship_and_tier_bonuses`
+(`warp/warp_importer.py:699`) grants +1 Universal Console, Device and Starship
+Trait for `-X`, +2 for `-X2`, so the layout asked for rows the ship does not
+have — measured on that screenshot, 2 Universal Consoles where the pixels
+showed 1, and 5 Devices where they showed 4. Under `T6-X` the profile matches
+the pixel counts exactly.
+
+**Alternatives measured.** Thirteen OCR variants seen in the wild, three
+rules:
+
+| Input | Expected | Buffer 0.10 (old) | Buffer 0.05 | Equal length (shipped) |
+|---|---|---|---|---|
+| `TG-X`, `TB-X`, `T8-X`, `TS-X` | `T6-X` | ✗ `T6-X2` | ✓ | ✓ |
+| `T6-XZ`, `T6-XL` | `T6-X2` | ✓ | ✗ `T6-X` | ✓ |
+| `T6-X`, `T6-X2`, `T6`, `TB-X2`, `T8-X2`, `T5-U`, `TS-U` | itself | ✓ | ✓ | ✓ |
+| **errors** | | **4** | **2** | **0** |
+
+Narrowing the buffer alone breaks the case the tiebreaker was written for.
+The length rule rests on OCR substituting characters far more readily than
+dropping them, so a four-character bracket is not a five-character tier.
+
+**How to revert.** Delete the `same_length` line and return
+`max(pool, key=SHIP_TIER_VALUES.index)`. `tests/test_tier_snapping.py` then
+fails on the four `test_a_mangled_digit_does_not_promote_the_suffix` cases and
+passes everything else — that split is the signature of the old behaviour, so
+a revert is visible rather than silent.
+
+**Not covered by this change.** A tier the OCR *did* read stays authoritative
+against pixel evidence: `_infer_x_bonus` only runs when no tier was found at
+all (`warp_importer.py:1917`). What a misread no longer survives is the user —
+see the decision below.
+
+### Decision 2026-08-26: a confirmed class or tier outranks OCR, in WARP CORE only
+
+**Change.** `_process_image` consults `_load_confirmed_ship_info(source)`
+before ShipDB resolves the ship, gated on `_is_trainer_call` — the same
+`_use_confirmed` gate that already loads the confirmed layout. A user-confirmed
+`Ship Type` or `Ship Tier` replaces what OCR read, and the swap is logged with
+both values:
+
+```
+WarpImporter: tier 'T6-X2' (OCR) → 'T6-X' — confirmed by user, taken as
+truth; slot bonuses follow the confirmed tier
+```
+
+**Why.** The tier decides how many boxes get drawn, and the correction had
+nowhere to go. `_merge_recognition` keeps the confirmed row — the freshly
+detected one is dropped as a `SINGLE_INSTANCE_SLOTS` duplicate — but the grid
+had already been sized from the OCR value earlier in the same run. The user
+could correct the tier as often as they liked and the surplus rows returned on
+every Auto-Detect.
+
+**A second defect surfaced while implementing it.** `_load_confirmed_layout`
+and `_load_confirmed_profile` look the image up by **filename**, while
+`TrainingDataManager` has keyed `annotations.json` by the first 16 hex chars
+of the image's sha256 for some time. Measured on one maintainer's store: 168
+of 178 entries are hash-keyed and therefore invisible to those two functions,
+including 130 confirmed `Ship Type` / `Ship Tier` rows. `_use_confirmed` has
+been substantially dead. The new `_annotations_for` helper reads both schemes,
+hash first; the two older loaders are **not** rewired by this change and still
+carry the defect.
+
+**Boundaries.**
+
+| | |
+|---|---|
+| Who counts | user-confirmed rows only. `auto_confirmed` is the detector accepting its own answer on a threshold — feeding that back would let a misread tier confirm itself and defend the slots it invented |
+| When | `_is_trainer_call` only. WARP proper never reads annotations; the ARCHITECTURE RULE in `_process_image` is untouched |
+| Visibility | both values go to the log, so a misread stays measurable instead of being papered over |
+| Empty names | a confirmed bbox with no text says *where* the tier is, not *what* it is, and is ignored |
+
+**How to revert.** Delete the `if _is_trainer_call:` block before
+`resolution: ShipResolution | None = None`. `tests/test_confirmed_ship_info.py`
+keeps passing — it tests the loader, which is independently useful — so the
+revert is only visible in behaviour, not in a red suite. That asymmetry is
+deliberate: the loader is the part worth keeping either way.
+
 **Rejected: a font-height guard.** One line of text is one font, so a token
 whose height differs from the anchor's looks like a different piece of UI —
 the stray token is h=16 against the class line's h=24. Measured, it does not
@@ -186,3 +283,18 @@ more than silent clamping, since the bbox also feeds crops (S2).
 3. **Tightening the separator rule is not an option.** Requiring two real
    separators kills prefix-less names — 40+ of the 48 in the corpus, including
    every ground/character screen.
+
+4. **`_load_confirmed_layout` and `_load_confirmed_profile` look up by
+   filename.** `annotations.json` is keyed by content hash; 168 of 178 entries
+   in one maintainer's store are invisible to both functions, so the confirmed
+   *layout* — pixel-perfect bboxes instead of estimated ones — has quietly not
+   been applied for most screenshots. `_annotations_for` already reads both
+   schemes and routing these two through it is a one-line change each; left
+   undone deliberately, as it touches behaviour beyond the ship info this
+   commit is about.
+
+5. **Pixel evidence still cannot contradict an OCR tier.** `_infer_x_bonus`
+   runs only when no tier was read at all, so a misread nobody corrects keeps
+   its surplus rows. Letting the measured counts argue with OCR needs care:
+   they are lower bounds — a row is only as full as the player left it — which
+   is why they are trusted today only in the absence of any other evidence.

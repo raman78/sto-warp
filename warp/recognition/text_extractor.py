@@ -110,6 +110,25 @@ def _fuzzy_tier(cand: str) -> str | None:
     ship — both score high, and erring upward matches how STO lists tier
     upgrades. Clean inputs (`'T6'`, `'T6-X'`) score a perfect 1.0 and the
     runner-up sits well below the 0.10 buffer, so they stay put.
+
+    That last sentence is only true of *clean* input, which is what made the
+    tiebreaker dangerous. On a noisy token the top score falls to the point
+    where the 0.10 buffer reaches the longer variants, and "prefer higher"
+    then promotes rather than rescues: `'TG-X'` (6↔G) scored 0.750 against
+    both `T6-X` and `T5-X`, 0.667 against both `-X2` forms, and came out as
+    `T6-X2` — two steps up from what the screen said. Downstream that is not
+    a cosmetic error: `_apply_ship_and_tier_bonuses` grants +2 Universal
+    Consoles, Devices and Starship Traits for `-X2` against +1 for `-X`, so
+    the layout asked for three rows the ship does not have.
+
+    The tiebreaker is therefore confined to candidates of the *same length*
+    as the OCR token. OCR substitutes characters far more readily than it
+    drops them, so a four-character bracket is not a five-character tier.
+    `'T6-XZ'` still snaps to `T6-X2` — same length, higher index — and
+    `'TG-X'` can no longer reach it. Measured over the OCR variants seen in
+    the wild, this is the only one of the three candidate rules that gets
+    every case right; see `docs/SHIP_INFO_DETECTION.md` for the table and for
+    how to revert.
     """
     import difflib as _df
     scored = sorted(
@@ -122,7 +141,8 @@ def _fuzzy_tier(cand: str) -> str | None:
     if best_ratio < 0.6:
         return scored[0][0]
     pool = [v for v, r in scored if r >= best_ratio - 0.10]
-    return max(pool, key=SHIP_TIER_VALUES.index)
+    same_length = [v for v in pool if len(v) == len(cand)]
+    return max(same_length or pool, key=SHIP_TIER_VALUES.index)
 
 # ROI for ship name/type block (top-left, fraction of image)
 SHIP_INFO_ROI = (0.0, 0.0, 0.34, 0.28)

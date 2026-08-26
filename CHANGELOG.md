@@ -11,6 +11,22 @@ details live in the git history.
 ## [Unreleased]
 
 ### Fixed
+- **In WARP CORE, a ship class or tier you have confirmed is now believed.**
+  Correcting the tier in the review panel used to change nothing: your answer
+  stayed in the list, but the next Auto-Detect still measured the screen using
+  the tier it had read itself, so the same surplus slots came back every time.
+  A confirmed class or tier is now what the detection works from, and the log
+  says which value was used and what the reading had been. Only your own
+  confirmations count — a row the program accepted on its own does not
+  promote itself to ground truth.
+- **A misread ship tier no longer invents empty slots.** When the tier badge
+  came out garbled — `[T6-X]` read as `[TG-X]`, a six mistaken for a G — the
+  app could round it up to *T6-X2*, which grants two extra universal consoles,
+  devices and starship traits instead of one. The result was a row of empty
+  boxes to review that the ship never had, coming back after every re-run.
+  The tier is now matched only against badges of the same length, so a
+  mangled digit can no longer promote the ship an upgrade step. A genuinely
+  misread *T6-X2* still recovers correctly.
 - **Temporal bridge officer seats now arrive correctly in SETS.** On a ship
   with a Temporal specialist seat, the exported build named that seat
   *Temporal Operative* — the spelling the wiki uses — while SETS calls it

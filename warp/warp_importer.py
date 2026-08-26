@@ -1808,6 +1808,34 @@ class WarpImporter:
         _no_ship_profile = _is_ground or build_type in ('SPEC', 'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
                                                          'TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS')
         ship_tier = text_info.get('ship_tier', '')
+
+        # A class or tier the user confirmed in WARP CORE outranks what OCR
+        # read on this pass. The ARCHITECTURE RULE further down still holds —
+        # this is the `_use_confirmed` gate, not a detection fallback: WARP
+        # proper never gets here, and what OCR read is logged either way, so a
+        # misread stays visible instead of being papered over.
+        #
+        # It has to happen before ShipDB, because the tier is not a label but
+        # a slot count: `_apply_ship_and_tier_bonuses` grants +1 Universal
+        # Console, Device and Starship Trait for `-X` and +2 for `-X2`. Until
+        # this hook existed a corrected tier changed nothing — the confirmed
+        # row survived the trainer's merge while the grid had already been
+        # sized from the OCR value, so the same surplus rows came back on
+        # every Auto-Detect with no way for the user to stop them.
+        if _is_trainer_call:
+            _confirmed_ship = self._load_confirmed_ship_info(source)
+            _ct = _confirmed_ship.get('Ship Type', '')
+            if _ct and _ct != ship_type:
+                _slog.info(f'WarpImporter: ship type {ship_type!r} (OCR) → '
+                           f'{_ct!r} — confirmed by user, taken as truth')
+                ship_type = _ct
+            _cr = _confirmed_ship.get('Ship Tier', '')
+            if _cr and _cr != ship_tier:
+                _slog.info(f'WarpImporter: tier {ship_tier!r} (OCR) → {_cr!r} '
+                           f'— confirmed by user, taken as truth; slot bonuses '
+                           f'follow the confirmed tier')
+                ship_tier = _cr
+
         resolution: ShipResolution | None = None
         if _no_ship_profile:
             profile = {}
@@ -3097,6 +3125,67 @@ class WarpImporter:
         except Exception as e:
             _slog.debug(f'WarpImporter: _load_confirmed_layout error: {e}')
             return None
+
+    def _annotations_for(self, source: str) -> list[dict]:
+        """Every annotation recorded for this exact image, in either on-disk
+        key scheme.
+
+        `annotations.json` is keyed by the first 16 hex chars of the image's
+        sha256 and wraps the rows in `{'filename': …, 'annotations': […]}`
+        (`TrainingDataManager._image_id`). Entries written before that change
+        are keyed by the filename and hold the bare list.
+
+        Content hash first, filename only as a fallback, which is the order
+        the trainer itself uses: two screenshots can share a name, and
+        matching on it would hand one image's ground truth to another.
+        """
+        try:
+            from warp import userdata as _userdata
+            ann_path = _userdata.training_data_dir() / 'annotations.json'
+            if not ann_path.exists():
+                return []
+            import json
+            data = json.loads(ann_path.read_text(encoding='utf-8'))
+        except Exception as e:
+            _slog.debug(f'WarpImporter: _annotations_for read error: {e}')
+            return []
+
+        entry = None
+        try:
+            import hashlib
+            h = hashlib.sha256()
+            with open(source, 'rb') as f:
+                for chunk in iter(lambda: f.read(1 << 20), b''):
+                    h.update(chunk)
+            entry = data.get(h.hexdigest()[:16])
+        except OSError:
+            pass                      # not on disk (in-memory / test) — try the name
+        if entry is None:
+            entry = data.get(Path(source).name)
+        if entry is None:
+            return []
+        rows = entry.get('annotations', []) if isinstance(entry, dict) else entry
+        return [r for r in rows if isinstance(r, dict)]
+
+    def _load_confirmed_ship_info(self, source: str) -> dict[str, str]:
+        """`{'Ship Type': …, 'Ship Tier': …}` as the *user* confirmed them.
+
+        Auto-confirmed rows are excluded on purpose. Those carry the
+        detector's own answer, accepted on a confidence threshold and still
+        awaiting review — treating one as ground truth would let a misread
+        tier confirm itself and then defend the slot count it invented.
+        """
+        out: dict[str, str] = {}
+        for a in self._annotations_for(source):
+            slot = a.get('slot', '')
+            if slot not in ('Ship Type', 'Ship Tier'):
+                continue
+            if a.get('state') != 'confirmed' or a.get('auto_confirmed'):
+                continue
+            name = (a.get('name') or '').strip()
+            if name:
+                out[slot] = name
+        return out
 
     def _load_confirmed_profile(self, source: str) -> dict[str, int]:
         """Load confirmed annotation counts per slot from training_data on disk.
