@@ -11,6 +11,20 @@ details live in the git history.
 ## [Unreleased]
 
 ### Fixed
+- **Temporal bridge officer seats now arrive correctly in SETS.** On a ship
+  with a Temporal specialist seat, the exported build named that seat
+  *Temporal Operative* — the spelling the wiki uses — while SETS calls it
+  *Temporal*. SETS did not complain: it quietly left the seat showing
+  whatever it showed before, so a build that looked fine on export came up
+  with the wrong seat type. The seat is now written the way SETS reads it,
+  and the export check refuses any seat specialisation SETS would not
+  recognise. Affects 154 seats across 121 ships.
+- **Kit modules for the Temporal Operative specialisation show their
+  picture again.** Ten of them — *Causal Entanglement*, *Chronoplasty*,
+  *Degeneration* and the rest — had no picture in the app's reference data,
+  so their card and tooltip came up empty even though the item itself was
+  recognised. The pictures are now published with the reference data and
+  arrive with the normal download.
 - **Gear on 23rd-century ships is recognised again.** Some equipment is
   drawn differently in 23rd-century content — a Kelvin or TOS-era ship
   shows a different picture for the same item — and the app only knew the

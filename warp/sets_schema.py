@@ -55,6 +55,18 @@ RARITIES = frozenset({'Common', 'Uncommon', 'Rare', 'Very Rare', 'Ultra Rare', '
 BOFF_RANKS = ('I', 'II', 'III')
 PROFESSIONS = frozenset({'Tactical', 'Engineering', 'Science'})
 
+# `src.constants.PRIMARY_SPECS` / `GROUND_BOFF_SPECS`. The seat label is fed
+# to `QComboBox.setCurrentText`, which a non-editable combo ignores outright
+# when the string is not one of its entries — so a spec SETS does not know
+# does not fail loudly, it just leaves the seat reading as something else.
+# The wiki spells one of them `Temporal Operative` in every ship row it has;
+# `build_writer._get_boff_spec` folds that to `Temporal` on the way out, and
+# this is the check that says so if it ever stops.
+SPACE_SPECS  = frozenset({'Command', 'Intelligence', 'Miracle Worker',
+                          'Temporal', 'Pilot'})
+GROUND_SPECS = frozenset({'Command', 'Intelligence', 'Miracle Worker',
+                          'Temporal'})
+
 # Seat rank a BOFF ability tier unlocks at (cargo field `rank<N>rank`)
 # → BOFF slot index. The wiki spells Lieutenant Commander three ways;
 # SETS' own `constants.BOFF_RANKS` knows two of them, so an ability
@@ -190,6 +202,10 @@ def _check_boff_seats(build: dict, out: list[Violation]) -> None:
         if not isinstance(specialisation, str):
             out.append(Violation(f'{path}[1]', 'seat_specialisation',
                                  "str ('' when none)", repr(specialisation)))
+        elif specialisation and specialisation not in SPACE_SPECS:
+            out.append(Violation(f'{path}[1]', 'seat_specialisation',
+                                 'one of ' + '/'.join(sorted(SPACE_SPECS)),
+                                 repr(specialisation)))
 
     ground = build.get('ground', {})
     for seat_id, profession in enumerate(ground.get('boff_profs', [])):
@@ -200,6 +216,10 @@ def _check_boff_seats(build: dict, out: list[Violation]) -> None:
         if not isinstance(specialisation, str) or specialisation == '':
             out.append(Violation(f'/ground/boff_specs[{seat_id}]', 'seat_specialisation',
                                  'non-empty str', repr(specialisation)))
+        elif specialisation not in GROUND_SPECS:
+            out.append(Violation(f'/ground/boff_specs[{seat_id}]', 'seat_specialisation',
+                                 'one of ' + '/'.join(sorted(GROUND_SPECS)),
+                                 repr(specialisation)))
 
 
 def _check_equipment(build: dict, cache, out: list[Violation]) -> None:

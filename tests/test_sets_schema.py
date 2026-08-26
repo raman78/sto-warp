@@ -74,6 +74,34 @@ def test_empty_seat_spec_is_allowed(clean_build):
     assert sets_schema.validate_sets_build(clean_build) == []
 
 
+def test_a_specialisation_sets_does_not_know_is_caught(clean_build):
+    """The seat label is a non-editable combo: `setCurrentText` with a
+    string it does not offer is a no-op, so the seat quietly keeps the
+    wrong label. `Temporal Operative` is how the wiki spells the one SETS
+    calls `Temporal`."""
+    clean_build['space']['boff_specs'][0] = ['Tactical', 'Temporal Operative']
+
+    rules = {(v.path, v.rule) for v in sets_schema.validate_sets_build(clean_build)}
+
+    assert ('/space/boff_specs[0][1]', 'seat_specialisation') in rules
+
+
+def test_the_spelling_sets_uses_passes(clean_build):
+    clean_build['space']['boff_specs'][0] = ['Tactical', 'Temporal']
+
+    assert sets_schema.validate_sets_build(clean_build) == []
+
+
+def test_pilot_is_a_space_seat_only(clean_build):
+    """`GROUND_BOFF_SPECS` has no Pilot — a ground seat asking for one
+    would land on a combo that cannot show it."""
+    clean_build['ground']['boff_specs'][0] = 'Pilot'
+
+    rules = {(v.path, v.rule) for v in sets_schema.validate_sets_build(clean_build)}
+
+    assert ('/ground/boff_specs[0]', 'seat_specialisation') in rules
+
+
 def test_missing_version_is_a_shape_violation():
     violations = sets_schema.validate_sets_build(empty_build('full'))
 

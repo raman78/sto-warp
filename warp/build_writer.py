@@ -101,13 +101,32 @@ _BOFF_RANKS = {
 
 def _get_boff_spec(seat_details: str) -> tuple[int, str, str]:
     """`'Lieutenant Tactical-Pilot'` → (2, 'Tactical', 'Pilot').
-    Port of `src.buildupdater.get_boff_spec`."""
+
+    Mirrors `src.buildhelpers.parse_boff_stations`, which is what SETS runs
+    over the same cargo strings when a ship is picked in its own UI.
+
+    The `Temporal` fold is not cosmetic. Every Temporal seat in the ship
+    roster spells the specialisation `Temporal Operative` — 154 seats across
+    121 ships, every Temporal seat there is — while SETS' vocabulary is
+    `Temporal` throughout (`constants.PRIMARY_SPECS`,
+    `GROUND_BOFF_SPECS`). `load_boff_stations` feeds the seat label to
+    `QComboBox.setCurrentText`, and a non-editable combo silently ignores a
+    string that is not in its list: the seat would keep whatever label it had,
+    with nothing to say the build asked for something else. SETS folds the two
+    spellings in four places of its own and added this one in v3.1.2; we write
+    the value it reads, so we fold it here too.
+
+    Kept deliberately: `split('-', 1)`, where SETS splits unbounded and would
+    raise on a second dash. Being more forgiving than the reader costs nothing.
+    """
     if '-' in seat_details:
         rank_and_prof, spec = seat_details.split('-', 1)
+        if spec.strip().startswith('Temporal'):
+            spec = 'Temporal'
     else:
         rank_and_prof, spec = seat_details, ''
     rank_name, _, profession = rank_and_prof.rpartition(' ')
-    return (_BOFF_RANKS.get(rank_name, 4), profession, spec)
+    return (_BOFF_RANKS.get(rank_name.strip(), 4), profession.strip(), spec.strip())
 
 
 # ── Public entry point ──────────────────────────────────────────────
@@ -338,12 +357,21 @@ def _redistribute_console_overflow(
 # ── BOFFs ───────────────────────────────────────────────────────────
 
 
+# Seat specialisation → the profession its abilities are filed under in
+# cargo. The value is the key for all but one; what the dict really does is
+# gate `_affinity`, which must not see a specialisation nothing is filed
+# under. Keyed in SETS' vocabulary, because `_get_boff_spec` folds the
+# wiki's `Temporal Operative` before a seat ever reaches here — with only
+# the old spelling as a key, every Temporal seat silently lost its
+# specialisation affinity. The old spelling stays as an alias for callers
+# that pass a raw cargo string or a spec read back out of a build file.
 _SPEC_TO_PROF = {
-    'Temporal Operative': 'Temporal',
     'Command':            'Command',
-    'Miracle Worker':     'Miracle Worker',
     'Intelligence':       'Intelligence',
+    'Miracle Worker':     'Miracle Worker',
     'Pilot':              'Pilot',
+    'Temporal':           'Temporal',
+    'Temporal Operative': 'Temporal',
 }
 
 

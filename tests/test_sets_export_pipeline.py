@@ -68,6 +68,46 @@ def test_seat_specs_come_from_the_ship_layout(space_result, offline_cache):
     ]
 
 
+def test_the_temporal_seat_is_written_the_way_sets_spells_it(offline_cache):
+    """Every Temporal seat in the ship roster says `Temporal Operative`;
+    SETS' vocabulary is `Temporal`, and its seat label is a non-editable
+    combo that ignores a string it does not offer. Folded on the way out,
+    the way `parse_boff_stations` folds it on the way in."""
+    from warp import build_writer
+
+    _rank, profession, spec = build_writer._get_boff_spec(
+        'Lieutenant Commander Universal-Temporal Operative')
+
+    assert (profession, spec) == ('Universal', 'Temporal')
+
+
+def test_every_seat_the_roster_has_keeps_its_spec_affinity(offline_cache):
+    """`_prepare_seats` feeds `_get_boff_spec`'s output to `_SPEC_TO_PROF`,
+    so folding a spelling on one side and not the other costs the seat its
+    specialisation affinity — silently, since a miss just means no bonus."""
+    from warp import build_writer
+
+    seen = set()
+    for ship in cargo.ships().values():
+        for station in build_writer._seat_strings(ship):
+            spec = build_writer._get_boff_spec(station)[2]
+            if spec:
+                seen.add(spec)
+
+    assert seen, 'no specialised seats in the baseline roster'
+    assert seen <= set(build_writer._SPEC_TO_PROF), \
+        f'no ability profession for {seen - set(build_writer._SPEC_TO_PROF)}'
+
+
+def test_other_specialisations_are_left_alone(offline_cache):
+    """The fold is one spelling of one spec, not a general truncation."""
+    from warp import build_writer
+
+    assert build_writer._get_boff_spec(
+        'Commander Tactical-Miracle Worker')[2] == 'Miracle Worker'
+    assert build_writer._get_boff_spec('Ensign Science')[2] == ''
+
+
 def test_seat_specs_survive_a_comma_joined_cargo_field(offline_cache, monkeypatch):
     """`raman78/warp-cargo-data` serves `boffs` as one comma-joined string."""
     from warp import build_writer

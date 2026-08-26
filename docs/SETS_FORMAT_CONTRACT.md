@@ -10,7 +10,7 @@ Two artefacts capture it on this side:
 | `warp/data/sets_contract.json` | container shape + upstream fingerprints | `tools/sets_contract.py --refresh` |
 | `warp/sets_schema.py` | value rules, hand-written | edited by a human when the contract drifts |
 
-The contract is generated from a real SETS release (currently `v3.1.1`,
+The contract is generated from a real SETS release (currently `v3.1.2`,
 PyPI package `STO-SETS`). sto-warp never imports SETS at runtime —
 `tools/sets_contract.py` and the workflow install it, the shipped code
 reads the frozen JSON.
@@ -34,8 +34,8 @@ it is a prompt to re-read that function against the mirrored rule.
 ```
 # warp/data/sets_contract.json
 {
-  "sets_version": "3.1.1",
-  "sets_tag": "v3.1.1",
+  "sets_version": "3.1.2",
+  "sets_tag": "v3.1.2",
   "build_version": 1,
   "shape": { "/space/boff_specs": "list[6]", ... },
   "consumers": { "src.buildmanager:BuildManager.load_boff_stations": "<sha256>", ... }
@@ -71,7 +71,7 @@ returns a list of `Violation(path, rule, expected, got, severity)`.
 |---|---|---|
 | `missing`, `shape` | every contract path present, same list length / key set | `merge_build` keeps the wrong-sized list; slots shift or vanish |
 | `build_version` | `_version` equals the contract's | `load_build_file` takes the migration branch |
-| `seat_profession`, `seat_specialisation` | `space.boff_specs[i]` is `[str, str]`, ground specs non-empty `str` | seat label reads `"None / None"`; `ExportWindow.get_build_markdown` (`src/exportwindow.py:306`) guards with `if any(specs)` and drops the whole station |
+| `seat_profession`, `seat_specialisation` | `space.boff_specs[i]` is `[str, str]`, ground specs non-empty `str`, both specs from SETS' own vocabulary | seat label reads `"None / None"`; `ExportWindow.get_build_markdown` (`src/exportwindow.py:306`) guards with `if any(specs)` and drops the whole station; an unknown spec is worse than either — `load_boff_stations` hands it to `QComboBox.setCurrentText`, which a non-editable combo ignores in silence |
 | `slot_type`, `item_keys`, `item_name`, `rarity`, `modifiers` | equipment dicts carry `item`/`rarity`/`mark`/`modifiers`, rarity from SETS' six | `slot_equipment_item` does `getattr(overlays, rarity.lower()...)` (`src/buildmanager.py:726`) and raises on anything else |
 | `trait_type` | trait slots are `None`, `''`, or `{'item': name}` | `slot_trait_item` raises on a missing `item` |
 | `ability_type`, `ability_name`, `ability_rank` | BOFF dicts carry a base name and a Roman rank | `load_boff_stations` indexes `boff_abilities['all'][item][rank]` (`src/buildmanager.py:878`) |
