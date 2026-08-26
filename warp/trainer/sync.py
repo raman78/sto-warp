@@ -572,7 +572,8 @@ class SyncWorker(QThread):
             _slog.debug('HF Sync: no new anchor grids to upload')
             return
 
-        sent = 0
+        sent     = 0
+        refused  = 0
         for start in range(0, len(grids_payload), BULK_ANCHORS_BATCH):
             sub      = grids_payload[start:start + BULK_ANCHORS_BATCH]
             sub_sha  = new_hashes[start:start + BULK_ANCHORS_BATCH]
@@ -584,6 +585,15 @@ class SyncWorker(QThread):
             except urllib.error.HTTPError as e:
                 body = e.read().decode('utf-8', errors='replace')[:300]
                 _slog.warning(f'HF Sync: anchors backend rejected batch (HTTP {e.code}): {body}')
+                # A 4xx is a verdict on *these* grids; the batches behind them
+                # are different data and deserve their own answer. The whole
+                # upload used to stop here, so one permanently-refused grid
+                # held back every grid queued after it, every run. 5xx and
+                # network errors are the server's problem and apply to
+                # everything, so those still stop the pass.
+                if 400 <= e.code < 500:
+                    refused += len(sub)
+                    continue
                 break
             except Exception as e:
                 _slog.warning(f'HF Sync: anchors backend POST failed: {e}')
@@ -595,7 +605,11 @@ class SyncWorker(QThread):
             cache_file.write_text(json.dumps(sorted(uploaded_grids)))
         except Exception:
             pass
-        _slog.info(f'HF Sync: uploaded {sent} anchor grid entries')
+        # Refused grids stay out of the cache on purpose: the verdict belongs
+        # to the backend's whitelist, which changes without us, so they are
+        # offered again next run rather than written off here.
+        _slog.info(f'HF Sync: uploaded {sent} anchor grid entries'
+                   + (f', {refused} refused by the backend' if refused else ''))
 
     # ---------------------------------------------------------------- screen types
 
