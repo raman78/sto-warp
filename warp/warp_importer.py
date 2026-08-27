@@ -3096,20 +3096,19 @@ class WarpImporter:
         return them as a layout dict {slot_name: [bbox, ...]}.
         This gives pixel-perfect bboxes instead of estimated positions.
         Returns None if no confirmed annotations found.
+
+        Looked up through `_annotations_for`, which reads both on-disk key
+        schemes. This function used to key on the filename alone, while
+        `annotations.json` has been keyed by the image's content hash for
+        some time: 168 of 178 entries in one maintainer's store were
+        invisible, so the confirmed layout was silently not applied to
+        almost anything.
         """
         _NON_ICON = frozenset({'Ship Type', 'Ship Tier',
                                'Primary Specialization', 'Secondary Specialization'})
         try:
-            from warp import userdata as _userdata
-            ann_path = _userdata.training_data_dir() / 'annotations.json'
-            if not ann_path.exists():
-                return None
-            import json
-            data = json.loads(ann_path.read_text(encoding='utf-8'))
-            fname = Path(source).name
-            ann_list = data.get(fname, [])
             layout: dict[str, list] = {}
-            for a in ann_list:
+            for a in self._annotations_for(source):
                 if a.get('state') != 'confirmed': continue
                 slot = a.get('slot', '')
                 bbox = a.get('bbox')
@@ -3189,26 +3188,23 @@ class WarpImporter:
 
     def _load_confirmed_profile(self, source: str) -> dict[str, int]:
         """Load confirmed annotation counts per slot from training_data on disk.
-        Returns {slot_name: count} for the given source image file."""
+        Returns {slot_name: count} for the given source image file.
+
+        Looked up through `_annotations_for` — see `_load_confirmed_layout`
+        for why keying on the filename alone found almost nothing.
+        """
+        _NON_PROFILE = frozenset({'Ship Type', 'Ship Tier',
+                                  'Primary Specialization', 'Secondary Specialization'})
         try:
-            from warp import userdata as _userdata
-            ann_path = _userdata.training_data_dir() / 'annotations.json'
-            if not ann_path.exists():
-                return {}
-            import json
-            data = json.loads(ann_path.read_text(encoding='utf-8'))
-            fname = Path(source).name
-            ann_list = data.get(fname, [])
-            _NON_PROFILE = frozenset({'Ship Type', 'Ship Tier',
-                                      'Primary Specialization', 'Secondary Specialization'})
             counts: dict[str, int] = {}
-            for a in ann_list:
+            for a in self._annotations_for(source):
                 if a.get('state') != 'confirmed': continue
                 slot = a.get('slot', '')
                 if slot and slot not in _NON_PROFILE:
                     counts[slot] = counts.get(slot, 0) + 1
             if counts:
-                _slog.info(f'WarpImporter: confirmed profile from disk for {fname}: {counts}')
+                _slog.info(f'WarpImporter: confirmed profile from disk for '
+                           f'{Path(source).name}: {counts}')
             return counts
         except Exception as e:
             _slog.debug(f'WarpImporter: _load_confirmed_profile error: {e}')

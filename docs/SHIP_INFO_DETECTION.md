@@ -234,8 +234,9 @@ of the image's sha256 for some time. Measured on one maintainer's store: 168
 of 178 entries are hash-keyed and therefore invisible to those two functions,
 including 130 confirmed `Ship Type` / `Ship Tier` rows. `_use_confirmed` has
 been substantially dead. The new `_annotations_for` helper reads both schemes,
-hash first; the two older loaders are **not** rewired by this change and still
-carry the defect.
+hash first, and all three loaders now go through it — so the confirmed
+*layout* (pixel-perfect bboxes instead of estimated ones) starts being applied
+where it never was.
 
 **Boundaries.**
 
@@ -284,14 +285,14 @@ more than silent clamping, since the bbox also feeds crops (S2).
    separators kills prefix-less names — 40+ of the 48 in the corpus, including
    every ground/character screen.
 
-4. **`_load_confirmed_layout` and `_load_confirmed_profile` look up by
-   filename.** `annotations.json` is keyed by content hash; 168 of 178 entries
-   in one maintainer's store are invisible to both functions, so the confirmed
-   *layout* — pixel-perfect bboxes instead of estimated ones — has quietly not
-   been applied for most screenshots. `_annotations_for` already reads both
-   schemes and routing these two through it is a one-line change each; left
-   undone deliberately, as it touches behaviour beyond the ship info this
-   commit is about.
+4. **Whose confirmation counts, for the layout.** `_load_confirmed_layout`
+   and `_load_confirmed_profile` accept any row in state `confirmed`,
+   including `auto_confirmed` ones — the detector's own bboxes, accepted on a
+   threshold and still awaiting review. `_load_confirmed_ship_info` excludes
+   those, and the architecture note above says the trainer path is for bboxes
+   "explicitly confirmed by the user". The two readings disagree; unifying
+   them would change how much layout the trainer reuses, so it wants a
+   measurement first, not a patch.
 
 5. **Pixel evidence still cannot contradict an OCR tier.** `_infer_x_bonus`
    runs only when no tier was read at all, so a misread nobody corrects keeps

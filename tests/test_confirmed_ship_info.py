@@ -141,6 +141,26 @@ def test_an_empty_name_is_not_a_correction(store):
 
 # ── What it is worth ───────────────────────────────────────────────────
 
+def test_the_layout_and_profile_loaders_see_the_same_rows(store):
+    """Both used to key on the filename alone while the store had moved to
+    content hashes — the confirmed layout was silently not applied."""
+    shot, sha16, write = store
+    write({sha16: {'filename': shot.name, 'annotations': [
+        _ann('Fore Weapons', 'Phaser Beam Array'),
+        _ann('Fore Weapons', 'Phaser Beam Array'),
+        _ann('Deflector', 'Deflector Array'),
+        _ann('Ship Tier', 'T6-X'),          # non-icon: not a layout row
+    ]}})
+    imp = _importer()
+
+    layout = imp._load_confirmed_layout(str(shot))
+    profile = imp._load_confirmed_profile(str(shot))
+
+    assert set(layout) == {'Fore Weapons', 'Deflector'}
+    assert len(layout['Fore Weapons']) == 2
+    assert profile == {'Fore Weapons': 2, 'Deflector': 1}
+
+
 def test_the_confirmed_tier_changes_the_slot_count(store):
     """The point of the whole exercise, stated as arithmetic."""
     from warp.warp_importer import _apply_ship_and_tier_bonuses
