@@ -1,7 +1,8 @@
-"""Merging two systems' training data into one shared store.
+"""Merging one training-data store into another.
 
-The second system must not overwrite the first. These lock the merge rules
-that decide what happens when both sides know about the same screenshot.
+Relocating a store must not overwrite what is already at the destination.
+These lock the merge rules that decide what happens when both sides know
+about the same screenshot.
 """
 from __future__ import annotations
 
@@ -50,7 +51,7 @@ def test_rows_the_other_system_has_are_added(tmp_path):
 
 
 def test_an_overlapping_box_is_not_added_twice():
-    """Same icon, boxes drawn a pixel apart on two systems."""
+    """Same icon, boxes drawn a pixel apart in the two stores."""
     local = {'aaa': _entry(_row(bbox=[0, 0, 10, 10]))}
     shared = {'aaa': _entry(_row(bbox=[1, 1, 10, 10]))}
 

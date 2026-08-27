@@ -1,29 +1,30 @@
-"""Put the training data on a shared volume, so two systems build one set.
+"""Move the training data to a chosen directory, merging what is already there.
 
-On a dual-boot machine each system has its own home, so
-``~/.local/share/warp/training_data`` is two independent stores. Work done on
-one is invisible to the other: the same screenshot gets reviewed twice, a
-correction made on one side does not exist on the other, and the icon
-matcher's session pool is seeded from half the material. It also makes for a
-nasty scare — a store that "lost" 97 entries turns out to be the other
-system's.
+The store lives under the user's data directory
+(``~/.local/share/warp/training_data``), so a second WARP CORE installation —
+another account, another machine, a restored backup — builds a second,
+independent one. Two stores mean the same screenshot gets reviewed twice, a
+correction made in one does not exist in the other, and the icon matcher's
+session pool is seeded from half the material.
 
-This moves one store to a shared location and leaves a symlink behind, so
-both systems read and write the same files. Run it once per system:
+This relocates a store to a directory of the caller's choosing and leaves a
+symlink behind, so the installation keeps reading and writing through its
+usual path:
 
     python -m warp.tools.share_training_data                  # report only
     python -m warp.tools.share_training_data --apply
+    python -m warp.tools.share_training_data --shared /path   # elsewhere
 
-The second system does not overwrite the first. Everything is **merged**, and
-nothing is ever deleted: the local store is renamed aside, not removed, and a
-file that exists on both sides keeps the shared copy unless the local one is
-demonstrably richer.
+Pointing a second installation at a destination that already holds a store
+**merges** the two. Nothing is deleted: the local store is renamed aside
+rather than removed, and a file present on both sides is never silently
+clobbered.
 
 ## What merges, and how
 
 | File | Rule |
 |---|---|
-| ``annotations.json`` | union by image key, and by row inside a key both sides know: a row the other system has and this one does not is added; a collision (same slot, overlapping box) goes to whichever row the user confirmed, and if both did, to the one confirmed **later** — the answer given after the correction. Every difference is reported |
+| ``annotations.json`` | union by image key, and by row inside a key both sides know: a row only one side has is added; a collision (same slot, overlapping box) goes to whichever row the user confirmed, and if both did, to the one confirmed **later** — the answer given after the correction. Every difference is reported |
 | ``anchors.json`` | union of ``learned[]``, de-duplicated on the whole entry |
 | ``screen_types.json`` | union by image key; a key labelled differently on the two sides is reported and the shared label kept |
 | ``screen_types_user_confirmed.json``, ``screenshots_done.json`` | set union |
@@ -31,17 +32,17 @@ demonstrably richer.
 | ``crops/``, ``screen_types/`` | files absent on the shared side are copied; existing ones are never overwritten |
 | ``canonical_layout.json`` | not merged — it is aggregated from ``anchors.json`` and is rebuilt on the next run |
 
-The clash rules are conservative on purpose. Two systems reviewing the same
-screenshot differently is a real possibility, and this tool is not the place
-to decide which reviewer was right; it reports the clash and leaves the shared
-side alone.
+The clash rules are conservative on purpose. The same screenshot reviewed
+twice, with different answers, is a real possibility, and this tool is not
+the place to decide which review was right; it reports the difference and
+records it.
 
-Row level rather than entry level because the entry-level rule threw away
-whichever side lost. Measured on a real pair of stores: of 70 screenshots
-annotated on both systems, 48 had the same number of user-confirmed rows and
-different content, so a tiebreak decided them — and in one case that meant
-keeping a misspelt ship class over the corrected one, because the misspelt
-side happened to have one row more.
+Row level rather than entry level because choosing a whole entry throws away
+whichever side loses. Measured on a pair of real stores: of the 70
+screenshots present in both, 48 held the same number of user-confirmed rows
+and different content, so a tiebreak decided them — and in one case that
+meant keeping a misspelt ship class over the corrected one, because the
+misspelt side happened to carry one row more.
 """
 from __future__ import annotations
 
@@ -112,7 +113,7 @@ def confirmed_at(base: Path, row: dict) -> float | None:
     the row. What does is the crop the row points at: writing it is what
     confirming does. Measured across a real pair of stores, 94% and 97% of
     user-confirmed rows resolve to a crop that still exists, which is enough
-    to decide the handful of rows two systems disagree about.
+    to decide the handful of rows the two stores disagree about.
 
     `shutil.copy2` preserves mtimes, so merging a store does not reset this.
     """
@@ -130,15 +131,15 @@ def merge_entry(local, shared, local_base: Path | None = None,
     """Union the two sides' rows for one screenshot.
 
     Picking a whole entry, which is what this used to do, throws away
-    whichever side lost. Measured on a real pair of stores: 70 screenshots
-    were annotated on both systems, 48 of them with the same number of
-    user-confirmed rows and different content, so the winner was decided by
-    a tiebreak that meant nothing. One of them kept a misspelt ship class
-    over the corrected one purely because that side had one row more.
+    whichever side loses. Measured on a pair of real stores: 70 screenshots
+    were present in both, 48 of them with the same number of user-confirmed
+    rows and different content, so the winner was decided by a tiebreak that
+    meant nothing. One of those kept a misspelt ship class over the corrected
+    one purely because that side carried one row more.
 
     Row level keeps both sides' work. A collision — same slot, overlapping
     box — is resolved in favour of the row the user confirmed; if both are
-    confirmed and they disagree, the shared side stays and the difference is
+    confirmed and they disagree, the later answer wins and the difference is
     reported, because this tool cannot know which review was right.
     """
     kept = list(_rows(shared))
@@ -193,7 +194,7 @@ def merge_annotations(local: dict, shared: dict, local_base: Path | None = None,
         for note in notes:
             clashes.append(f'{name}: {note}')
         if added and not notes:
-            clashes.append(f'{name}: +{added} row(s) from the other system')
+            clashes.append(f'{name}: +{added} row(s) from the other store')
     return out, clashes
 
 
@@ -312,7 +313,7 @@ def run(shared: Path, *, apply: bool = False) -> int:
     print(f'\nmerged into {shared}')
     print(f'local store kept at {backup}')
     print(f'{local} -> {os.path.realpath(local)}')
-    print('Run this on the other system too; it will merge, not overwrite.')
+    print('Point another installation at the same directory to merge it in.')
     return 0
 
 
