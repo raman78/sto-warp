@@ -249,14 +249,14 @@ GROUND_SLOT_ORDER: list[dict] = [
 # Reputation traits: up to 5 space + 5 ground.
 
 SPACE_TRAITS_SLOT_ORDER: list[dict] = [
-    {'name': 'Personal Space Traits',  'key': 'personal_traits',   'mandatory': True,  'max': 10, 'weapon': False, 'exp': False},
+    {'name': 'Personal Space Traits',  'key': 'personal_traits',   'mandatory': True,  'max': 11, 'weapon': False, 'exp': False},
     {'name': 'Starship Traits',        'key': 'starship_traits',   'mandatory': True,  'max': 7,  'weapon': False, 'exp': False},
     {'name': 'Space Reputation',       'key': 'rep_traits',        'mandatory': True,  'max': 5,  'weapon': False, 'exp': False},
     {'name': 'Active Space Rep',       'key': 'active_rep_traits', 'mandatory': False, 'max': 5,  'weapon': False, 'exp': False},
 ]
 
 GROUND_TRAITS_SLOT_ORDER: list[dict] = [
-    {'name': 'Personal Ground Traits', 'key': 'personal_ground',   'mandatory': True,  'max': 10, 'weapon': False, 'exp': False},
+    {'name': 'Personal Ground Traits', 'key': 'personal_ground',   'mandatory': True,  'max': 11, 'weapon': False, 'exp': False},
     {'name': 'Ground Reputation',      'key': 'rep_ground_traits', 'mandatory': True,  'max': 5,  'weapon': False, 'exp': False},
     {'name': 'Active Ground Rep',      'key': 'active_ground_rep', 'mandatory': False, 'max': 5,  'weapon': False, 'exp': False},
 ]
@@ -326,23 +326,6 @@ for _order_list in SLOT_ORDER.values():
 # Traits below Space Reputation.
 DISPLAY_CANONICAL_ORDER: list[str] = list(_ALL_SLOT_DEFS.keys())
 
-SPACE_SLOTS        = [(s['name'], s['max']) for s in SPACE_SLOT_ORDER]
-GROUND_SLOTS       = [(s['name'], s['max']) for s in GROUND_SLOT_ORDER]
-SPACE_TRAITS_SLOTS = [(s['name'], s['max']) for s in SPACE_TRAITS_SLOT_ORDER]
-GROUND_TRAITS_SLOTS= [(s['name'], s['max']) for s in GROUND_TRAITS_SLOT_ORDER]
-BOFFS_SLOTS        = [(s['name'], s['max']) for s in BOFFS_SLOT_ORDER]
-SPEC_SLOTS         = [(s['name'], s['max']) for s in SPEC_SLOT_ORDER]
-
-SLOT_SPECS = {
-    'SPACE':         SPACE_SLOTS,
-    'GROUND':        GROUND_SLOTS,
-    'SPACE_TRAITS':  SPACE_TRAITS_SLOTS,
-    'GROUND_TRAITS': GROUND_TRAITS_SLOTS,
-    'BOFFS':         BOFFS_SLOTS,
-    'SPEC':          SPEC_SLOTS,
-    'SPACE_SKILLS':  [],
-    'GROUND_SKILLS': [],
-}
 
 # Weapon types that can only go in Experimental slot
 EXPERIMENTAL_TYPES = frozenset({'Experimental Weapon'})

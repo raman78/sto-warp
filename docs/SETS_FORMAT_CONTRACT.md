@@ -38,6 +38,7 @@ it is a prompt to re-read that function against the mirrored rule.
   "sets_tag": "v3.1.2",
   "build_version": 1,
   "shape": { "/space/boff_specs": "list[6]", ... },
+  "vocabularies": { "FACTIONS": ["Federation", ...], "SPECIES": {...}, ... },
   "consumers": { "src.buildmanager:BuildManager.load_boff_stations": "<sha256>", ... }
 }
 ```
@@ -48,6 +49,7 @@ it is a prompt to re-read that function against the mirrored rule.
 | `sets_tag` | str | release tag the snapshot describes |
 | `build_version` | int | SETS `constants.BUILD_VERSION`; the exporter writes it as `_version` |
 | `shape` | dict | `path -> token`, `dict{k1,k2}` or `list[n]` |
+| `vocabularies` | dict | SETS constants mirrored by value: `name -> sorted values`, or `<missing>` |
 | `consumers` | dict | `module:qualname -> sha256(source)`, or `<missing>` |
 
 `shape` records containers only; scalar leaves are omitted deliberately.
@@ -76,6 +78,32 @@ writing a faction, because the species dropdown is populated from it and an
 empty faction leaves `setCurrentText` with nothing to match. Any faction whose
 list contains `Alien` would do; the exporter uses `Federation` when the build
 does not already name one, since SETS reads the faction for nothing else.
+
+### Vocabularies, and why a hash is not enough
+
+`consumers` fingerprints SETS functions whose *behaviour* is mirrored. Some
+of what `warp/sets_schema.py` copies is not behaviour but a list of names —
+factions, species, seat specialisations — and for those a changed hash would
+say only that something moved. `vocabularies` snapshots the values, so the
+drift report names what appeared or disappeared:
+
+```
+vocabulary SPECIES[Federation] lost: ['Alien']
+vocabulary FACTIONS lost: ['Federation']
+```
+
+That pair matters because `build_writer._apply_alien_species` writes
+`Federation` / `Alien` to make an eleven-trait build display. Neither is
+likely to move — a founding faction and the catch-all species — but the
+choice is only sound while SETS still offers them, and no other check would
+notice if it stopped.
+
+Two guards, in different places, because either alone lets the copies drift:
+
+| Guard | Compares | Fires |
+|---|---|---|
+| `sets-contract-watch` workflow | snapshot against the newest SETS release | weekly, opens an issue |
+| `tests/test_sets_schema.py` | the constants in `warp/sets_schema.py` against the snapshot | every push |
 
 ## Validation rules
 

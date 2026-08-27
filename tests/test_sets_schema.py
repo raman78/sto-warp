@@ -355,3 +355,43 @@ def test_every_faction_offers_at_least_one_species():
     """A faction with no species would make its captains unrepresentable."""
     assert set(sets_schema.SPECIES) == set(sets_schema.FACTIONS)
     assert all(sets_schema.SPECIES[f] for f in sets_schema.FACTIONS)
+
+
+# ── Mirrored vocabularies ──────────────────────────────────────────────
+#
+# `warp/data/sets_contract.json` snapshots the SETS constants this module
+# copies by value. The weekly contract watch compares that snapshot against
+# the newest SETS release; these compare the snapshot against the copies. One
+# side catches SETS moving, the other catches the copy going stale — a
+# vocabulary needs both, because either alone still lets the two drift.
+
+def _vocab() -> dict:
+    return sets_schema.contract()['vocabularies']
+
+
+def test_the_mirrored_factions_match_the_contract():
+    assert sets_schema.FACTIONS == set(_vocab()['FACTIONS'])
+
+
+def test_the_mirrored_species_match_the_contract():
+    snapshot = {k: set(v) for k, v in _vocab()['SPECIES'].items()}
+
+    assert {k: set(v) for k, v in sets_schema.SPECIES.items()} == snapshot
+
+
+def test_the_mirrored_seat_specialisations_match_the_contract():
+    assert sets_schema.SPACE_SPECS == set(_vocab()['PRIMARY_SPECS'])
+    assert sets_schema.GROUND_SPECS == set(_vocab()['GROUND_BOFF_SPECS'])
+
+
+def test_the_faction_the_exporter_writes_still_exists():
+    """The exporter names a faction so an eleven-trait build displays. That
+    choice is only sound while SETS still offers it — a founding faction and
+    a catch-all species are unlikely to move, and nothing else here would
+    notice if they did."""
+    from warp.build_writer import _ALIEN_FACTION
+
+    vocab = _vocab()
+
+    assert _ALIEN_FACTION in vocab['FACTIONS']
+    assert 'Alien' in vocab['SPECIES'][_ALIEN_FACTION]

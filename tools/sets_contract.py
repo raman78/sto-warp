@@ -65,6 +65,37 @@ CONSUMERS = (
 )
 
 
+# SETS constants `warp/sets_schema.py` mirrors by value rather than by
+# behaviour. A consumer hash says a function changed; these say exactly which
+# name appeared or disappeared, which is what a mirrored vocabulary needs.
+#
+# The exporter picks `Federation` / `Alien` to make an eleven-trait build
+# display (`build_writer._apply_alien_species`). Neither is likely to move —
+# they are a founding faction and the catch-all species — but the choice is
+# only sound while SETS still offers them, and nothing else would notice if
+# it stopped. That is what this section is for.
+VOCABULARIES: dict[str, str] = {
+    'FACTIONS':         'src.constants:FACTIONS',
+    'SPECIES':          'src.constants:SPECIES',
+    'PRIMARY_SPECS':    'src.constants:PRIMARY_SPECS',
+    'GROUND_BOFF_SPECS': 'src.constants:GROUND_BOFF_SPECS',
+}
+
+
+def _vocabularies() -> dict:
+    """Snapshot the mirrored constants, sorted so the diff is stable."""
+    out: dict = {}
+    for name, dotted in VOCABULARIES.items():
+        value = _resolve(dotted)
+        if value is None:
+            out[name] = '<missing>'
+        elif isinstance(value, dict):
+            out[name] = {k: sorted(v) for k, v in sorted(value.items())}
+        else:
+            out[name] = sorted(value)
+    return out
+
+
 def _resolve(dotted: str):
     """Return the named function, or None when upstream no longer has it."""
     module_name, _, qualname = dotted.partition(':')
@@ -116,6 +147,7 @@ def build_contract(tag: str | None = None) -> dict:
         'sets_tag': tag or f'v{sets_version}',
         'build_version': BUILD_VERSION,
         'shape': shape_of(empty_build('full')),
+        'vocabularies': _vocabularies(),
         'consumers': _consumer_hashes(),
     }
 
@@ -136,6 +168,27 @@ def diff_contract(old: dict, new: dict) -> list[str]:
     for path in sorted(set(old_shape) & set(new_shape)):
         if old_shape[path] != new_shape[path]:
             lines.append(f'shape changed: {path or "/"}: {old_shape[path]} -> {new_shape[path]}')
+
+    old_vocab, new_vocab = old.get('vocabularies', {}), new.get('vocabularies', {})
+    for name in sorted(set(old_vocab) | set(new_vocab)):
+        before, after = old_vocab.get(name), new_vocab.get(name)
+        if before == after:
+            continue
+        if isinstance(before, dict) and isinstance(after, dict):
+            for key in sorted(set(before) | set(after)):
+                gone = set(before.get(key, ())) - set(after.get(key, ()))
+                added = set(after.get(key, ())) - set(before.get(key, ()))
+                if gone:
+                    lines.append(f'vocabulary {name}[{key}] lost: {sorted(gone)}')
+                if added:
+                    lines.append(f'vocabulary {name}[{key}] gained: {sorted(added)}')
+        else:
+            gone = set(before or ()) - set(after or ())
+            added = set(after or ()) - set(before or ())
+            if gone:
+                lines.append(f'vocabulary {name} lost: {sorted(gone)}')
+            if added:
+                lines.append(f'vocabulary {name} gained: {sorted(added)}')
 
     old_consumers, new_consumers = old.get('consumers', {}), new.get('consumers', {})
     for name in sorted(set(old_consumers) - set(new_consumers)):

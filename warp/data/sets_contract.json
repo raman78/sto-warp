@@ -77,6 +77,86 @@
     "/ground_skills[3]": "list[4]",
     "/skill_desc": "dict{ground,space}"
   },
+  "vocabularies": {
+    "FACTIONS": [
+      "DSC Federation",
+      "Dominion",
+      "Federation",
+      "Klingon",
+      "Romulan",
+      "TOS Federation"
+    ],
+    "SPECIES": {
+      "DSC Federation": [
+        "Alien",
+        "Human",
+        "Vulcan"
+      ],
+      "Dominion": [
+        "Jem'Hadar",
+        "Jem'Hadar Vanguard"
+      ],
+      "Federation": [
+        "Alien",
+        "Andorian",
+        "Bajoran",
+        "Benzite",
+        "Betazoid",
+        "Bolian",
+        "Caitian",
+        "Cardassian",
+        "Ferengi",
+        "Human",
+        "Joined Trill",
+        "Klingon",
+        "Liberated Borg",
+        "Pakled",
+        "Rigelian",
+        "Saurian",
+        "Talaxian",
+        "Tellarite",
+        "Trill",
+        "Vulcan"
+      ],
+      "Klingon": [
+        "Alien",
+        "Cardassian",
+        "Ferasan",
+        "Gorn",
+        "Klingon",
+        "Lethean",
+        "Liberated Borg",
+        "Nausicaan",
+        "Orion",
+        "Talaxian"
+      ],
+      "Romulan": [
+        "Alien",
+        "Liberated Borg",
+        "Reman",
+        "Romulan"
+      ],
+      "TOS Federation": [
+        "Andorian",
+        "Human",
+        "Tellarite",
+        "Vulcan"
+      ]
+    },
+    "PRIMARY_SPECS": [
+      "Command",
+      "Intelligence",
+      "Miracle Worker",
+      "Pilot",
+      "Temporal"
+    ],
+    "GROUND_BOFF_SPECS": [
+      "Command",
+      "Intelligence",
+      "Miracle Worker",
+      "Temporal"
+    ]
+  },
   "consumers": {
     "src.buildhelpers:empty_build": "c3ae4712271ff6f551b44ffe35d5e51475740c309975a96d5cb385ca3e90963d",
     "src.buildhelpers:parse_boff_stations": "861ba6da485fdb17a434b419cbc60a806f9262f9bdcfe9ee425ed49cf0536256",
