@@ -202,10 +202,10 @@ fails on the four `test_a_mangled_digit_does_not_promote_the_suffix` cases and
 passes everything else — that split is the signature of the old behaviour, so
 a revert is visible rather than silent.
 
-**Not covered by this change.** A tier the OCR *did* read stays authoritative
-against pixel evidence: `_infer_x_bonus` only runs when no tier was found at
-all (`warp_importer.py:1917`). What a misread no longer survives is the user —
-see the decision below.
+**Not covered by this change.** A badge this rule snaps to the wrong value is
+still wrong. Two things catch that afterwards: a tier confirmed in WARP CORE
+(the decision below), and — since 2026-08-27 — the measured row counts, which
+may raise a tier read too low.
 
 ### Decision 2026-08-26: a confirmed class or tier outranks OCR, in WARP CORE only
 
@@ -253,6 +253,48 @@ keeps passing — it tests the loader, which is independently useful — so the
 revert is only visible in behaviour, not in a red suite. That asymmetry is
 deliberate: the loader is the part worth keeping either way.
 
+### Decision 2026-08-27: measured rows may raise an OCR tier, never lower it
+
+**Change.** The X-bonus inference (`warp_importer._infer_x_bonus`) used to run
+only when OCR found no tier at all. It now runs whenever the build is a space
+one, and when the rows on screen hold more slots than the read tier grants,
+the tier is raised to match.
+
+**What is actually measured.** Not the badge — that is OCR's job and nothing
+else reads it. `-X` grants +1 Universal Console, Device and Starship Trait,
+`-X2` grants +2, so *counting those rows* measures the upgrade:
+
+```
+pixel_count(Devices)            - profile['Devices']
+pixel_count(Universal Consoles) - profile['Universal Consoles']
+detected(Starship Traits)       - profile['Starship Traits']
+```
+
+The profile already carries whatever the read tier granted, so each figure is
+a surplus **over the tier the build claims**, not an absolute level. That is
+what makes the same function serve both cases with one arithmetic.
+
+**Why only upwards.** Every reading is a lower bound: a pixel count sees
+filled slots, so an empty one makes the evidence too small and never too
+large. Measuring *less* than the badge claims is therefore not evidence of a
+lower tier — it is what an unfilled slot looks like. Raising is safe in the
+same sense: a surplus cannot be produced by a player leaving something empty.
+
+**A trap found while implementing it.** The Starship Traits figure used to be
+measured against the constant `_BASE_STARSHIP_TRAITS = 5` rather than against
+the profile. Those are the same number while the function only ran with no
+tier read, and different the moment a read tier has already added its bonus:
+a correct `-X` screen showing six starship traits would have read as one more
+upgrade and promoted the ship to `-X2`. `tests/test_tier_bonus_inference.py`
+holds that case specifically.
+
+**How to revert.** Restore the `not ship_tier and` guard at the head of the
+block. The tier then comes from OCR alone whenever OCR produced one, which is
+the behaviour before this decision. The logs distinguish the two events —
+`no tier on screen — inferred …` against `tier 'T6-X' (OCR) raised to …` — so
+how often the raise fires, and how often it is wrong, can be counted before
+deciding.
+
 **Rejected: a font-height guard.** One line of text is one font, so a token
 whose height differs from the anchor's looks like a different piece of UI —
 the stray token is h=16 against the class line's h=24. Measured, it does not
@@ -285,8 +327,8 @@ more than silent clamping, since the bbox also feeds crops (S2).
    separators kills prefix-less names — 40+ of the 48 in the corpus, including
    every ground/character screen.
 
-4. **Pixel evidence still cannot contradict an OCR tier.** `_infer_x_bonus`
-   runs only when no tier was read at all, so a misread nobody corrects keeps
-   its surplus rows. Letting the measured counts argue with OCR needs care:
-   they are lower bounds — a row is only as full as the player left it — which
-   is why they are trusted today only in the absence of any other evidence.
+4. **A tier read too high cannot be corrected by anything but the user.**
+   Raising is now allowed (see the decision below), lowering is not, because
+   a shortfall in the measured rows is indistinguishable from slots the player
+   left empty. A badge misread upwards therefore keeps its surplus rows until
+   someone confirms the right tier in WARP CORE.

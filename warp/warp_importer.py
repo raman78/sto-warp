@@ -623,7 +623,15 @@ def _infer_x_bonus(profile: dict[str, int],
             evidence.append(counted - profile.get(slot, 0))
     n_traits = len(layout.get('Starship Traits') or ())
     if n_traits:
-        evidence.append(n_traits - _BASE_STARSHIP_TRAITS)
+        # Against the profile, like the other two, and for the same reason:
+        # every reading here is a surplus over what the build already claims.
+        # Subtracting the constant instead was equivalent while this only ran
+        # with no tier read — the profile holds exactly the base then — but it
+        # double-counts once a tier the OCR did read has already added its
+        # bonus. A correct `-X` screen showing six starship traits would have
+        # read as one more upgrade and promoted the ship to `-X2`.
+        evidence.append(n_traits - profile.get('Starship Traits',
+                                               _BASE_STARSHIP_TRAITS))
     usable = [v for v in evidence if 0 <= v <= 2]
     return max(usable) if usable else 0
 
@@ -1920,21 +1928,39 @@ class WarpImporter:
             app_cache=self._cache if _needs_matcher else None,
             ocr_tokens=ocr_tokens,
         )
-        # Tier badge absent from the screenshot → no X-bonus was applied and
-        # Universal Consoles / Devices / Starship Traits are short. Recover
-        # the bonus from what the first pass actually measured, then re-run
-        # so the recovered rows get bboxes. Only when OCR found no tier at
-        # all: a tier it did read is authoritative.
+        # `-X` grants +1 Universal Console, Device and Starship Trait, `-X2`
+        # +2, so counting those rows measures the upgrade without reading the
+        # badge. Two things come out of that, and the profile is re-detected
+        # afterwards so recovered rows get bboxes:
+        #
+        #   no badge on screen  — many screenshots crop the header, leaving
+        #     the tier empty and three rows short. Universal Consoles falls
+        #     to 0, which makes the layout detector skip the row entirely.
+        #
+        #   badge read too low  — a misread suffix (`[T6-X2]` as `[T6-X]`)
+        #     leaves the same rows short, and the user has no way to tell
+        #     until slots are missing from the export.
+        #
+        # Raising only. Every measurement here is a LOWER bound: a pixel
+        # count sees filled slots, so an empty one makes the evidence too
+        # small and never too large. Measuring less than the badge claims is
+        # therefore no evidence at all — it is what an unfilled slot looks
+        # like — and can never lower a tier the OCR read.
         _inferred_tier = ''
-        if (not ship_tier and not _is_ground and profile
-                and build_type in ('SPACE', 'SPACE_MIXED')):
+        if not _is_ground and profile and build_type in ('SPACE', 'SPACE_MIXED'):
+            _ocr_x = 2 if '-X2' in ship_tier else 1 if '-X' in ship_tier else 0
+            # `_infer_x_bonus` subtracts the profile, which already carries
+            # whatever bonus the OCR tier granted — so what comes back is the
+            # surplus beyond that tier, not the absolute level.
             _x = _infer_x_bonus(
                 profile, self._get_layout().last_row_pixel_counts, layout)
-            if _x:
+            _raised_to = min(2, _ocr_x + _x)
+            if _x and _raised_to > _ocr_x:
+                _delta = _raised_to - _ocr_x
                 _apply_ship_and_tier_bonuses(
-                    profile, None, 'T6-X2' if _x == 2 else 'T6-X')
+                    profile, None, 'T6-X2' if _delta == 2 else 'T6-X')
                 _inferred_tier = _compose_inferred_tier(
-                    self._cache.ships.get(ship_type), _x)
+                    self._cache.ships.get(ship_type), _raised_to)
                 if _inferred_tier:
                     # Downstream (build writer, SETS export, FC mode) reads
                     # these two, and must treat the tier like any other:
@@ -1942,13 +1968,26 @@ class WarpImporter:
                     # item, so the trainer can label it for the user.
                     ship_tier = _inferred_tier
                     result.ship_tier = _inferred_tier
-                _slog.info(
-                    f'WarpImporter: no tier on screen — inferred '
-                    f'{_inferred_tier or f"+{_x}"} from measured slots '
-                    f'(Universal Consoles='
-                    f'{profile.get("Universal Consoles", 0)}, '
-                    f'Devices={profile.get("Devices", 0)}, '
-                    f'Starship Traits={profile.get("Starship Traits", 0)})')
+                # Two distinct events, logged apart on purpose: raising a
+                # tier the OCR did read is the newer and less certain of the
+                # two, and telling them apart is what makes it possible to
+                # count how often it is wrong.
+                _measured = (f'Universal Consoles='
+                             f'{profile.get("Universal Consoles", 0)}, '
+                             f'Devices={profile.get("Devices", 0)}, '
+                             f'Starship Traits='
+                             f'{profile.get("Starship Traits", 0)}')
+                if _ocr_x:
+                    _slog.info(
+                        f'WarpImporter: tier {ship_tier!r} (OCR) raised to '
+                        f'{_inferred_tier or f"+{_raised_to}"} — the screen '
+                        f'holds {_x} slot(s) more than that tier grants '
+                        f'({_measured})')
+                else:
+                    _slog.info(
+                        f'WarpImporter: no tier on screen — inferred '
+                        f'{_inferred_tier or f"+{_x}"} from measured slots '
+                        f'({_measured})')
                 if not confirmed_layout:
                     layout = self._get_layout().detect(
                         img, build_type, profile,

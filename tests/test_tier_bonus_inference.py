@@ -106,3 +106,65 @@ def test_result_is_always_a_canonical_tier_value():
     for base in ('5', '6'):
         for x in (1, 2):
             assert _compose_inferred_tier({'tier': base}, x) in SHIP_TIER_VALUES
+
+
+# ── Raising a tier the OCR did read ────────────────────────────────────
+#
+# `_infer_x_bonus` subtracts the profile, and the profile already carries
+# whatever the OCR tier granted — so what it returns is the surplus beyond
+# that tier. These lock the arithmetic that turns a surplus into a new tier.
+
+def _raise(ocr_tier: str, surplus: int) -> tuple[int, int]:
+    """`(new level, what to add to the profile)` for an OCR tier and surplus."""
+    ocr_x = 2 if '-X2' in ocr_tier else 1 if '-X' in ocr_tier else 0
+    raised_to = min(2, ocr_x + surplus)
+    return raised_to, max(0, raised_to - ocr_x)
+
+
+def test_a_surplus_over_a_read_tier_raises_it():
+    """`[T6-X]` read correctly but the screen holds one more of each row:
+    the ship is X2 and three rows would otherwise come out short."""
+    assert _raise('T6-X', 1) == (2, 1)
+
+
+def test_a_surplus_over_no_tier_behaves_as_before():
+    assert _raise('', 2) == (2, 2)
+    assert _raise('', 1) == (1, 1)
+
+
+def test_no_surplus_changes_nothing():
+    assert _raise('T6-X', 0) == (1, 0)
+    assert _raise('T6-X2', 0) == (2, 0)
+
+
+def test_a_tier_is_never_raised_past_the_game_maximum():
+    """The game grants at most +2; a larger reading is a miscount."""
+    assert _raise('T6-X2', 2) == (2, 0)
+    assert _raise('T6-X', 2) == (2, 1)
+
+
+def test_measuring_less_than_the_badge_claims_is_not_evidence():
+    """Pixel counts are lower bounds — an unfilled slot looks exactly like a
+    slot the ship does not have, so a shortfall can never lower a tier."""
+    profile = {'Devices': 5, 'Universal Consoles': 2, 'Starship Traits': 7}
+    px = {'Devices': 4, 'Universal Consoles': 1}
+
+    assert _infer_x_bonus(profile, px, {'Starship Traits': [0] * 6}) == 0
+
+
+def test_a_screen_agreeing_with_the_read_tier_reports_no_surplus():
+    """The trap this nearly walked into: with `-X` already applied, six
+    starship traits is exactly right. Measured against the constant base of
+    five it reads as one more upgrade and promotes the ship to `-X2`."""
+    profile = {'Devices': 4, 'Universal Consoles': 1, 'Starship Traits': 6}
+    px = {'Devices': 4, 'Universal Consoles': 1}
+
+    assert _infer_x_bonus(profile, px, {'Starship Traits': [0] * 6}) == 0
+
+
+def test_a_genuine_surplus_over_a_read_tier_is_still_seen():
+    """Same `-X` profile, but the screen holds an X2 ship's rows."""
+    profile = {'Devices': 4, 'Universal Consoles': 1, 'Starship Traits': 6}
+    px = {'Devices': 5, 'Universal Consoles': 2}
+
+    assert _infer_x_bonus(profile, px, {'Starship Traits': [0] * 7}) == 1
