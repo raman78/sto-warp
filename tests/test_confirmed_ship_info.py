@@ -141,6 +141,21 @@ def test_an_empty_name_is_not_a_correction(store):
 
 # ── What it is worth ───────────────────────────────────────────────────
 
+def test_the_layout_ignores_what_the_detector_confirmed_for_itself(store):
+    """`auto_confirmed` is the detector accepting its own bbox on a
+    threshold. The trainer already draws those differently and indexes them
+    as pending; the user's word is what counts as ground truth here too."""
+    shot, sha16, write = store
+    write({sha16: {'filename': shot.name, 'annotations': [
+        _ann('Fore Weapons', 'Phaser Beam Array'),
+        _ann('Deflector', 'Deflector Array', auto=True),
+    ]}})
+    imp = _importer()
+
+    assert set(imp._load_confirmed_layout(str(shot))) == {'Fore Weapons'}
+    assert imp._load_confirmed_profile(str(shot)) == {'Fore Weapons': 1}
+
+
 def test_the_layout_and_profile_loaders_see_the_same_rows(store):
     """Both used to key on the filename alone while the store had moved to
     content hashes — the confirmed layout was silently not applied."""

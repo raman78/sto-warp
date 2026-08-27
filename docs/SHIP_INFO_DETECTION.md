@@ -242,7 +242,7 @@ where it never was.
 
 | | |
 |---|---|
-| Who counts | user-confirmed rows only. `auto_confirmed` is the detector accepting its own answer on a threshold — feeding that back would let a misread tier confirm itself and defend the slots it invented |
+| Who counts | user-confirmed rows only, via `_user_confirmed`. `auto_confirmed` is the detector accepting its own answer on a threshold — feeding that back would let a misread tier confirm itself and defend the slots it invented. Settled 2026-08-27 for the layout and profile loaders too, which had accepted them: measured at 2 of 2623 confirmed rows in one store, with no screenshot losing its layout, because the flag clears when the user accepts the row |
 | When | `_is_trainer_call` only. WARP proper never reads annotations; the ARCHITECTURE RULE in `_process_image` is untouched |
 | Visibility | both values go to the log, so a misread stays measurable instead of being papered over |
 | Empty names | a confirmed bbox with no text says *where* the tier is, not *what* it is, and is ignored |
@@ -285,16 +285,7 @@ more than silent clamping, since the bbox also feeds crops (S2).
    separators kills prefix-less names — 40+ of the 48 in the corpus, including
    every ground/character screen.
 
-4. **Whose confirmation counts, for the layout.** `_load_confirmed_layout`
-   and `_load_confirmed_profile` accept any row in state `confirmed`,
-   including `auto_confirmed` ones — the detector's own bboxes, accepted on a
-   threshold and still awaiting review. `_load_confirmed_ship_info` excludes
-   those, and the architecture note above says the trainer path is for bboxes
-   "explicitly confirmed by the user". The two readings disagree; unifying
-   them would change how much layout the trainer reuses, so it wants a
-   measurement first, not a patch.
-
-5. **Pixel evidence still cannot contradict an OCR tier.** `_infer_x_bonus`
+4. **Pixel evidence still cannot contradict an OCR tier.** `_infer_x_bonus`
    runs only when no tier was read at all, so a misread nobody corrects keeps
    its surplus rows. Letting the measured counts argue with OCR needs care:
    they are lower bounds — a row is only as full as the player left it — which

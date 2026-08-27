@@ -3109,7 +3109,7 @@ class WarpImporter:
         try:
             layout: dict[str, list] = {}
             for a in self._annotations_for(source):
-                if a.get('state') != 'confirmed': continue
+                if not self._user_confirmed(a): continue
                 slot = a.get('slot', '')
                 bbox = a.get('bbox')
                 if not slot or not bbox or slot in _NON_ICON: continue
@@ -3166,6 +3166,23 @@ class WarpImporter:
         rows = entry.get('annotations', []) if isinstance(entry, dict) else entry
         return [r for r in rows if isinstance(r, dict)]
 
+    @staticmethod
+    def _user_confirmed(a: dict) -> bool:
+        """Did the *user* say this, or did the detector accept its own answer?
+
+        `auto_confirmed` marks a row the detector took on a confidence
+        threshold. The trainer already treats those as unfinished — it draws
+        them in a different colour and indexes them as pending
+        (`training_data.py:637`) — and the flag clears the moment the user
+        accepts the row. Ground truth is the user's word, so everything the
+        importer reads back from `annotations.json` asks this question.
+
+        Measured on a maintainer's store when this filter was added: 2 of
+        2623 confirmed rows were auto-confirmed, and no screenshot lost its
+        whole layout. Cheap to be correct about.
+        """
+        return a.get('state') == 'confirmed' and not a.get('auto_confirmed')
+
     def _load_confirmed_ship_info(self, source: str) -> dict[str, str]:
         """`{'Ship Type': …, 'Ship Tier': …}` as the *user* confirmed them.
 
@@ -3179,7 +3196,7 @@ class WarpImporter:
             slot = a.get('slot', '')
             if slot not in ('Ship Type', 'Ship Tier'):
                 continue
-            if a.get('state') != 'confirmed' or a.get('auto_confirmed'):
+            if not self._user_confirmed(a):
                 continue
             name = (a.get('name') or '').strip()
             if name:
@@ -3198,7 +3215,7 @@ class WarpImporter:
         try:
             counts: dict[str, int] = {}
             for a in self._annotations_for(source):
-                if a.get('state') != 'confirmed': continue
+                if not self._user_confirmed(a): continue
                 slot = a.get('slot', '')
                 if slot and slot not in _NON_PROFILE:
                     counts[slot] = counts.get(slot, 0) + 1

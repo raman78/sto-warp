@@ -10,6 +10,16 @@ details live in the git history.
 
 ## [Unreleased]
 
+### Added
+- **Two computers can now share one set of training data.** If you run WARP
+  CORE from more than one system on the same machine, each had its own store,
+  so a screenshot reviewed on one was unreviewed on the other. A new
+  `python -m warp.tools.share_training_data` moves the store to a shared
+  folder and points the system at it; run it on each system and the second
+  one *merges* into the first rather than replacing it. It reports what it
+  would do and changes nothing until you pass `--apply`, and it never deletes
+  the old store — it renames it aside.
+
 ### Fixed
 - **In WARP CORE, a ship class or tier you have confirmed is now believed.**
   Correcting the tier in the review panel used to change nothing: your answer
