@@ -11,16 +11,6 @@
  },
  {
   "Page": "Fleet Ground Weapons",
-  "name": "Advanced Fleet Antiproton Blast Assault",
-  "type": "Ground Weapon",
-  "rarity": "Ultra Rare",
-  "mark": "Mk XII",
-  "icon_source": "Antiproton Blast Assault",
-  "section": "Advanced Fleet Ground Weapons",
-  "source": "listing-scrape"
- },
- {
-  "Page": "Fleet Ground Weapons",
   "name": "Advanced Fleet Antiproton Compression Pistol",
   "type": "Ground Weapon",
   "rarity": "Ultra Rare",
