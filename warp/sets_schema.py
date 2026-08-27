@@ -67,6 +67,27 @@ SPACE_SPECS  = frozenset({'Command', 'Intelligence', 'Miracle Worker',
 GROUND_SPECS = frozenset({'Command', 'Intelligence', 'Miracle Worker',
                           'Temporal'})
 
+# `src.constants.FACTIONS` / `SPECIES`. The faction decides nothing in a
+# build except which species the dropdown offers — but it decides that by
+# indexing `SPECIES[faction]` directly, so an unknown faction raises while
+# the build loads rather than being ignored.
+FACTIONS = frozenset({'Federation', 'Klingon', 'Romulan', 'Dominion',
+                      'TOS Federation', 'DSC Federation'})
+SPECIES: dict[str, frozenset[str]] = {
+    'Federation': frozenset({
+        'Human', 'Andorian', 'Bajoran', 'Benzite', 'Betazoid', 'Bolian',
+        'Ferengi', 'Pakled', 'Rigelian', 'Saurian', 'Tellarite', 'Trill',
+        'Joined Trill', 'Vulcan', 'Alien', 'Liberated Borg', 'Caitian',
+        'Klingon', 'Talaxian', 'Cardassian'}),
+    'Klingon': frozenset({
+        'Klingon', 'Gorn', 'Lethean', 'Nausicaan', 'Orion', 'Alien',
+        'Liberated Borg', 'Ferasan', 'Talaxian', 'Cardassian'}),
+    'Romulan': frozenset({'Romulan', 'Reman', 'Alien', 'Liberated Borg'}),
+    'Dominion': frozenset({"Jem'Hadar", "Jem'Hadar Vanguard"}),
+    'TOS Federation': frozenset({'Human', 'Andorian', 'Tellarite', 'Vulcan'}),
+    'DSC Federation': frozenset({'Human', 'Vulcan', 'Alien'}),
+}
+
 # Seat rank a BOFF ability tier unlocks at (cargo field `rank<N>rank`)
 # → BOFF slot index. The wiki spells Lieutenant Commander three ways;
 # SETS' own `constants.BOFF_RANKS` knows two of them, so an ability
@@ -356,6 +377,42 @@ def _check_captain(build: dict, out: list[Violation]) -> None:
     for key in ('career', 'faction', 'name', 'primary_spec', 'secondary_spec', 'species'):
         if not isinstance(captain.get(key), str):
             out.append(Violation(f'/captain/{key}', 'field_type', 'str', repr(captain.get(key))))
+
+    faction = captain.get('faction') if isinstance(captain.get('faction'), str) else ''
+    species = captain.get('species') if isinstance(captain.get('species'), str) else ''
+
+    # `faction_combo_callback` indexes SPECIES with the faction outright
+    # (SETS `src/buildmanager.py:1073`), so a name it does not know is not a
+    # silent mismatch — it raises while the build is loading.
+    if faction and faction not in FACTIONS:
+        out.append(Violation('/captain/faction', 'faction',
+                             'one of ' + '/'.join(sorted(FACTIONS)), repr(faction)))
+    elif species:
+        # The species dropdown is filled from the faction, and `load_build`
+        # sets it with `setCurrentText` — which a non-editable combo ignores
+        # when the string is not one of its entries. A species the faction
+        # does not offer, or any species at all with the faction blank, is
+        # dropped on load without a word.
+        if not faction:
+            out.append(Violation('/captain/species', 'species',
+                                 'a faction, so the species list is populated',
+                                 f'{species!r} with no faction'))
+        elif species not in SPECIES.get(faction, frozenset()):
+            out.append(Violation('/captain/species', 'species',
+                                 f'one the {faction} list offers', repr(species)))
+
+    # Slot 10 is the eleventh personal trait, and SETS hides it unless the
+    # captain is Alien (`src/buildmanager.py:245-247`). The trait stays in
+    # the file and vanishes from the UI, which is the failure this module
+    # exists to predict. `build_writer._apply_alien_species` sets the species
+    # from the same evidence, so reaching this means the build states a
+    # different one.
+    for environment in ('space', 'ground'):
+        eleventh = build.get(environment, {}).get('traits', [None] * 11)[10:11]
+        if eleventh and eleventh[0] and species != 'Alien':
+            out.append(Violation(f'/{environment}/traits[10]', 'alien_trait_slot',
+                                 "captain.species == 'Alien'",
+                                 f'species={species!r} — SETS hides this slot'))
 
 
 def _check_skills(build: dict, out: list[Violation]) -> None:

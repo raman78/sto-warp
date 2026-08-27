@@ -299,3 +299,59 @@ def test_an_unknown_item_is_still_unknown(clean_build):
     violations = sets_schema.validate_sets_build(build, _OverlayCache())
 
     assert [v.rule for v in violations] == ['unknown_item']
+
+
+# ── The eleventh personal trait ────────────────────────────────────────
+
+def test_an_eleventh_trait_without_an_alien_captain_is_caught(clean_build):
+    """Only an Alien captain has eleven personal trait slots. SETS hides the
+    eleventh for anyone else, so the trait sits in the file and vanishes from
+    the UI."""
+    clean_build['space']['traits'][10] = {'item': 'Astrophysicist'}
+
+    rules = {(v.path, v.rule) for v in sets_schema.validate_sets_build(clean_build)}
+
+    assert ('/space/traits[10]', 'alien_trait_slot') in rules
+
+
+def test_an_eleventh_trait_with_an_alien_captain_passes(clean_build):
+    clean_build['captain']['faction'] = 'Federation'
+    clean_build['captain']['species'] = 'Alien'
+    clean_build['space']['traits'][10] = {'item': 'Astrophysicist'}
+
+    assert sets_schema.validate_sets_build(clean_build) == []
+
+
+def test_a_species_with_no_faction_is_caught(clean_build):
+    """The species dropdown is filled from the faction; with none set it is
+    empty and the species is dropped on load without a word."""
+    clean_build['captain']['species'] = 'Alien'
+
+    rules = {(v.path, v.rule) for v in sets_schema.validate_sets_build(clean_build)}
+
+    assert ('/captain/species', 'species') in rules
+
+
+def test_a_species_the_faction_does_not_offer_is_caught(clean_build):
+    clean_build['captain']['faction'] = 'Dominion'
+    clean_build['captain']['species'] = 'Alien'
+
+    rules = {(v.path, v.rule) for v in sets_schema.validate_sets_build(clean_build)}
+
+    assert ('/captain/species', 'species') in rules
+
+
+def test_a_faction_sets_does_not_know_is_caught(clean_build):
+    """Not a silent mismatch: SETS indexes its species table with the faction
+    outright, so an unknown one raises while the build is loading."""
+    clean_build['captain']['faction'] = 'Terran Empire'
+
+    rules = {(v.path, v.rule) for v in sets_schema.validate_sets_build(clean_build)}
+
+    assert ('/captain/faction', 'faction') in rules
+
+
+def test_every_faction_offers_at_least_one_species():
+    """A faction with no species would make its captains unrepresentable."""
+    assert set(sets_schema.SPECIES) == set(sets_schema.FACTIONS)
+    assert all(sets_schema.SPECIES[f] for f in sets_schema.FACTIONS)

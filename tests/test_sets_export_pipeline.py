@@ -149,3 +149,65 @@ def test_ability_that_starts_above_a_slot_keeps_its_lowest_rank(offline_cache):
 
     assert _resolve_rank('Aceton Beam', 2, offline_cache) == 'I'
     assert _resolve_rank('Aceton Beam', 3, offline_cache) == 'III'
+
+
+def test_eleven_personal_traits_name_the_captain_alien(offline_cache):
+    """Eleven personal traits are only possible for an Alien captain, and
+    SETS needs the species said out loud or it hides the eleventh slot."""
+    from warp.build_writer import _apply_alien_species
+    from warp.data.empty_build import empty_build
+
+    build = empty_build('full')
+    for i in range(11):
+        build['space']['traits'][i] = {'item': f'Trait {i}'}
+
+    _apply_alien_species(build)
+
+    assert build['captain']['species'] == 'Alien'
+    assert build['captain']['faction'] == 'Federation'
+
+
+def test_ten_personal_traits_leave_the_species_alone(offline_cache):
+    """Ten is what an Elite Captain of any species gets."""
+    from warp.build_writer import _apply_alien_species
+    from warp.data.empty_build import empty_build
+
+    build = empty_build('full')
+    for i in range(10):
+        build['space']['traits'][i] = {'item': f'Trait {i}'}
+
+    _apply_alien_species(build)
+
+    assert build['captain']['species'] == ''
+    assert build['captain']['faction'] == ''
+
+
+def test_a_faction_already_in_the_build_is_kept(offline_cache):
+    """The faction is a placeholder only when there is nothing better."""
+    from warp.build_writer import _apply_alien_species
+    from warp.data.empty_build import empty_build
+
+    build = empty_build('full')
+    build['captain']['faction'] = 'Romulan'
+    build['ground']['traits'][10] = {'item': 'Trait'}
+
+    _apply_alien_species(build)
+
+    assert build['captain']['species'] == 'Alien'
+    assert build['captain']['faction'] == 'Romulan'
+
+
+def test_a_stated_species_is_not_overwritten(offline_cache):
+    """One-way, like the elite flag: a build that names its captain keeps
+    that name, and the export check reports the hidden slot instead."""
+    from warp.build_writer import _apply_alien_species
+    from warp.data.empty_build import empty_build
+
+    build = empty_build('full')
+    build['captain']['faction'] = 'Federation'
+    build['captain']['species'] = 'Vulcan'
+    build['space']['traits'][10] = {'item': 'Trait'}
+
+    _apply_alien_species(build)
+
+    assert build['captain']['species'] == 'Vulcan'

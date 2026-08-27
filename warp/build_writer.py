@@ -171,6 +171,7 @@ def build_from_result(result: ImportResult, cache=None) -> tuple[dict, WriteRepo
         _write_boffs(build, boff_items, ship_data, cache, is_ground, report)
 
     _apply_elite_captain(build)
+    _apply_alien_species(build)
 
     return build, report
 
@@ -198,6 +199,59 @@ def _apply_elite_captain(build: dict) -> None:
             or _filled(s['traits'][9])):
         build['captain']['elite'] = True
         log.info('build_writer: detected Elite Captain — captain.elite = True')
+
+
+# Any faction whose species list contains 'Alien' will do; SETS uses the
+# faction for nothing else (`buildmanager.faction_combo_callback` only
+# repopulates the species dropdown from it). Federation is the broadest of
+# them and the safest default for a build where the real faction is unknown.
+_ALIEN_FACTION = 'Federation'
+
+
+def _apply_alien_species(build: dict) -> None:
+    """Name the captain Alien when an 11th personal trait was recognised.
+
+    Personal trait slots are gated in three tiers, and SETS hides rather
+    than drops the ones a captain has not unlocked
+    (`buildmanager.load_build`, SETS `src/buildmanager.py:245-247` and
+    `:269-292`):
+
+        index 0-8   nine base traits, always shown
+        index 9     the 10th, shown only for an Elite Captain
+        index 10    the 11th, shown only when `captain.species == 'Alien'`
+        index 11    the species trait, a separate slot
+
+    Only an Alien captain can pick eleven, so an eleventh recognised trait
+    identifies the species. Without saying so the trait still lands in the
+    file and is invisible in the UI — the same silent loss
+    `_apply_elite_captain` exists to prevent.
+
+    The faction has to be written too. `species_combo_callback` only fires
+    when `setCurrentText('Alien')` matches an item, and the species dropdown
+    is filled from the faction: with the faction blank the dropdown is empty,
+    the call is a no-op, and the species never takes.
+
+    One-way, like the elite flag: a species already stated in the build is
+    never overwritten. When that species is not Alien the trait cannot be
+    shown, so it is reported rather than silently corrected —
+    `warp.sets_schema` raises it as a violation on export.
+    """
+    captain = build['captain']
+    if not any(build[env]['traits'][10] for env in ('space', 'ground')):
+        return
+
+    stated = captain.get('species') or ''
+    if stated and stated != 'Alien':
+        log.warning(f'build_writer: 11th personal trait recognised but the '
+                    f'build already says species={stated!r} — SETS will hide '
+                    f'that slot; leaving the stated species alone')
+        return
+
+    captain['species'] = 'Alien'
+    if not captain.get('faction'):
+        captain['faction'] = _ALIEN_FACTION
+    log.info(f'build_writer: 11 personal traits — captain.species = Alien, '
+             f'faction = {captain["faction"]!r} (needed for SETS to show the slot)')
 
 
 # ── Ship resolution ─────────────────────────────────────────────────

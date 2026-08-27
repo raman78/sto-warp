@@ -57,6 +57,26 @@ The generator lives in `warp/sets_schema.py:83` (`shape_of`) and
 `tools/sets_contract.py` imports it, so the stored snapshot and the
 runtime check cannot diverge.
 
+### Personal trait slots
+
+Twelve entries, gated in tiers rather than sized to the captain. SETS hides
+what is not unlocked instead of dropping it, so a trait written into a hidden
+slot survives in the file and is invisible on screen.
+
+| Index | Slot | Shown when |
+|---|---|---|
+| 0-8 | nine base traits | always |
+| 9 | the 10th | `captain.elite` — `build_writer._apply_elite_captain` |
+| 10 | the 11th | `captain.species == 'Alien'` — `build_writer._apply_alien_species` |
+| 11 | the species trait | always; the exporter never writes it |
+
+Both inferences are one-way: they set a field the recognised slots imply and
+never clear one the build already states. Writing the species also means
+writing a faction, because the species dropdown is populated from it and an
+empty faction leaves `setCurrentText` with nothing to match. Any faction whose
+list contains `Alien` would do; the exporter uses `Federation` when the build
+does not already name one, since SETS reads the faction for nothing else.
+
 ## Validation rules
 
 `validate_sets_build(build, cache=None)` (`warp/sets_schema.py:321`)
@@ -79,6 +99,9 @@ returns a list of `Violation(path, rule, expected, got, severity)`.
 | `not_in_sets` | the cargo row backing the name is not one SETS can read | SETS drops the entry — see below |
 | `rank_slot` | Roman rank matches the seat rank cargo says it unlocks at (`rank<N>rank`) | ability is rendered at a slot the game never offers it in |
 | `field_type`, `node_type` | captain fields and skill nodes have the right primitive types | wrong widget state on load |
+| `faction` | `captain.faction` is one SETS knows | `faction_combo_callback` indexes `SPECIES[faction]` outright (`src/buildmanager.py:1073`) — an unknown name raises while the build loads |
+| `species` | `captain.species` is offered by that faction, and a faction is set at all | the species dropdown is filled from the faction and `load_build` sets it with `setCurrentText`; a species the list does not hold is ignored in silence |
+| `alien_trait_slot` | an eleventh personal trait requires `captain.species == 'Alien'` | `load_build` hides `traits[10]` for every other species (`src/buildmanager.py:245-247`) — the trait stays in the file and disappears from the UI |
 
 Cargo rules run only when a `cache` (`warp.data.cargo.cache_view()`) is
 passed; the structural and value rules work without one.
