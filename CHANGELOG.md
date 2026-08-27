@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.33] — 2026-08-27
+
+### Fixed
+- **An eleventh personal trait now survives the export to SETS.** Only an
+  Alien captain has eleven personal trait slots, and SETS shows the eleventh
+  only when the build says which species the captain is. A recognised
+  eleventh trait used to be written into the file and then hidden in the
+  interface, with nothing to say it was there. The export now states the
+  species, together with the faction it needs alongside it — the species
+  cannot be set without one — so all eleven traits appear. The export check
+  also reports a faction or species SETS would not recognise, instead of
+  letting the build fail to load.
+
 ## [1.0.32] — 2026-08-27
 
 ### Fixed
