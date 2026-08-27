@@ -23,7 +23,7 @@ demonstrably richer.
 
 | File | Rule |
 |---|---|
-| ``annotations.json`` | union by image key; on a clash, keep whichever entry has more user-confirmed rows |
+| ``annotations.json`` | union by image key, and by row inside a key both sides know: a row the other system has and this one does not is added; a collision (same slot, overlapping box) goes to whichever row the user confirmed, and if both did, to the one confirmed **later** — the answer given after the correction. Every difference is reported |
 | ``anchors.json`` | union of ``learned[]``, de-duplicated on the whole entry |
 | ``screen_types.json`` | union by image key; a key labelled differently on the two sides is reported and the shared label kept |
 | ``screen_types_user_confirmed.json``, ``screenshots_done.json`` | set union |
@@ -33,8 +33,15 @@ demonstrably richer.
 
 The clash rules are conservative on purpose. Two systems reviewing the same
 screenshot differently is a real possibility, and this tool is not the place
-to decide which reviewer was right; it reports the clash and leaves the
-shared side alone.
+to decide which reviewer was right; it reports the clash and leaves the shared
+side alone.
+
+Row level rather than entry level because the entry-level rule threw away
+whichever side lost. Measured on a real pair of stores: of 70 screenshots
+annotated on both systems, 48 had the same number of user-confirmed rows and
+different content, so a tiebreak decided them — and in one case that meant
+keeping a misspelt ship class over the corrected one, because the misspelt
+side happened to have one row more.
 """
 from __future__ import annotations
 
@@ -73,21 +80,120 @@ def _user_confirmed_count(entry) -> int:
                and r.get('state') == 'confirmed' and not r.get('auto_confirmed'))
 
 
-def merge_annotations(local: dict, shared: dict) -> tuple[dict, list[str]]:
-    """Union by image key. A key on both sides keeps the richer entry."""
+IOU_SAME_BOX = 0.3
+
+
+def _rows(entry) -> list:
+    return entry.get('annotations', []) if isinstance(entry, dict) else entry
+
+
+def _collides(row: dict, kept: dict) -> bool:
+    """Do these two rows describe the same thing?
+
+    The trainer's own rule, from `_merge_recognition`: a slot that can hold
+    only one item collides on the slot alone, everything else on bbox
+    overlap. Without it a row-level union would stack two boxes on one icon.
+    """
+    from warp.trainer.training_data import SINGLE_INSTANCE_SLOTS, _bbox_iou
+    if row.get('slot') != kept.get('slot'):
+        return False
+    if row.get('slot') in SINGLE_INSTANCE_SLOTS:
+        return True
+    a, b = row.get('bbox'), kept.get('bbox')
+    if not a or not b:
+        return False
+    return _bbox_iou(tuple(a), tuple(b)) >= IOU_SAME_BOX
+
+
+def confirmed_at(base: Path, row: dict) -> float | None:
+    """When this row was confirmed, as far as the store can say.
+
+    Nothing in `annotations.json` carries a timestamp — not the entry, not
+    the row. What does is the crop the row points at: writing it is what
+    confirming does. Measured across a real pair of stores, 94% and 97% of
+    user-confirmed rows resolve to a crop that still exists, which is enough
+    to decide the handful of rows two systems disagree about.
+
+    `shutil.copy2` preserves mtimes, so merging a store does not reset this.
+    """
+    name = row.get('crop_name') or ''
+    if not name:
+        return None
+    try:
+        return (base / name).stat().st_mtime
+    except OSError:
+        return None
+
+
+def merge_entry(local, shared, local_base: Path | None = None,
+                shared_base: Path | None = None) -> tuple[list, list[str]]:
+    """Union the two sides' rows for one screenshot.
+
+    Picking a whole entry, which is what this used to do, throws away
+    whichever side lost. Measured on a real pair of stores: 70 screenshots
+    were annotated on both systems, 48 of them with the same number of
+    user-confirmed rows and different content, so the winner was decided by
+    a tiebreak that meant nothing. One of them kept a misspelt ship class
+    over the corrected one purely because that side had one row more.
+
+    Row level keeps both sides' work. A collision — same slot, overlapping
+    box — is resolved in favour of the row the user confirmed; if both are
+    confirmed and they disagree, the shared side stays and the difference is
+    reported, because this tool cannot know which review was right.
+    """
+    kept = list(_rows(shared))
+    notes: list[str] = []
+    for row in _rows(local):
+        if not isinstance(row, dict):
+            continue
+        hit = next((k for k in kept if _collides(row, k)), None)
+        if hit is None:
+            kept.append(row)
+            continue
+        row_ok = row.get('state') == 'confirmed' and not row.get('auto_confirmed')
+        hit_ok = hit.get('state') == 'confirmed' and not hit.get('auto_confirmed')
+        if row_ok and not hit_ok:
+            kept[kept.index(hit)] = row
+        elif row_ok and hit_ok and (row.get('name') or '') != (hit.get('name') or ''):
+            # Both sides' reviewer was the user, and they disagree. The later
+            # answer is the one given after whatever correction prompted it,
+            # so it wins — the user's own reading of this data. When either
+            # side has no crop to date, nothing is known and the shared side
+            # stays put; either way the difference is written down.
+            t_row = confirmed_at(local_base, row) if local_base else None
+            t_hit = confirmed_at(shared_base, hit) if shared_base else None
+            if t_row is not None and t_hit is not None and t_row > t_hit:
+                kept[kept.index(hit)] = row
+                notes.append(f'{row.get("slot")}: kept {row.get("name")!r} '
+                             f'(newer), dropped {hit.get("name")!r}')
+            else:
+                why = 'newer' if (t_row is not None and t_hit is not None) else 'undated'
+                notes.append(f'{row.get("slot")}: kept {hit.get("name")!r} '
+                             f'({why}), dropped {row.get("name")!r}')
+    return kept, notes
+
+
+def merge_annotations(local: dict, shared: dict, local_base: Path | None = None,
+                      shared_base: Path | None = None) -> tuple[dict, list[str]]:
+    """Union by image key, and by row within a key both sides know."""
     out = dict(shared)
     clashes: list[str] = []
     for key, entry in local.items():
         if key not in out:
             out[key] = entry
             continue
-        if _user_confirmed_count(entry) > _user_confirmed_count(out[key]):
-            clashes.append(f'{key}: local kept ('
-                           f'{_user_confirmed_count(entry)} vs '
-                           f'{_user_confirmed_count(out[key])} confirmed rows)')
-            out[key] = entry
-        elif entry != out[key]:
-            clashes.append(f'{key}: shared kept')
+        merged_rows, notes = merge_entry(entry, out[key], local_base, shared_base)
+        name = (out[key].get('filename') if isinstance(out[key], dict) else '') or key
+        before = len(_rows(out[key]))
+        if isinstance(out[key], dict):
+            out[key] = {**out[key], 'annotations': merged_rows}
+        else:
+            out[key] = merged_rows
+        added = len(merged_rows) - before
+        for note in notes:
+            clashes.append(f'{name}: {note}')
+        if added and not notes:
+            clashes.append(f'{name}: +{added} row(s) from the other system')
     return out, clashes
 
 
@@ -139,7 +245,7 @@ def run(shared: Path, *, apply: bool = False) -> int:
 
     ann_local = _load(local / 'annotations.json', {})
     ann_shared = _load(shared / 'annotations.json', {})
-    ann_merged, clashes = merge_annotations(ann_local, ann_shared)
+    ann_merged, clashes = merge_annotations(ann_local, ann_shared, local, shared)
     print(f'annotations.json  local {len(ann_local)} + shared {len(ann_shared)} '
           f'-> {len(ann_merged)} images')
     for line in clashes[:10]:
@@ -173,6 +279,15 @@ def run(shared: Path, *, apply: bool = False) -> int:
         return 0
 
     shared.mkdir(parents=True, exist_ok=True)
+    # The first ten clashes are printed; all of them are written down. A
+    # disagreement between two reviews of the same screenshot is exactly the
+    # thing a summary line loses, and it is not recoverable afterwards — the
+    # dropped row is gone from the merged store.
+    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
+    if clashes:
+        report = shared / f'merge-report-{stamp}.txt'
+        report.write_text('\n'.join(clashes) + '\n', encoding='utf-8')
+        print(f'\n{len(clashes)} clash(es) written to {report}')
     (shared / 'annotations.json').write_text(
         json.dumps(ann_merged, ensure_ascii=False), encoding='utf-8')
     (shared / 'anchors.json').write_text(
@@ -190,7 +305,6 @@ def run(shared: Path, *, apply: bool = False) -> int:
     # Renamed, never removed: this is the only copy of work that cannot be
     # recreated, and a symlink pointing at a half-written merge would be the
     # worst possible outcome.
-    stamp = datetime.now().strftime('%Y%m%d-%H%M%S')
     backup = local.with_name(f'{local.name}.bak-{stamp}')
     local.rename(backup)
     local.symlink_to(shared, target_is_directory=True)

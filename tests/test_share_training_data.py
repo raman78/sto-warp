@@ -6,6 +6,8 @@ that decide what happens when both sides know about the same screenshot.
 from __future__ import annotations
 
 import json
+import os
+from pathlib import Path
 
 import pytest
 
@@ -16,8 +18,10 @@ def _entry(*rows):
     return {'filename': 'x.png', 'annotations': list(rows)}
 
 
-def _row(slot='Fore Weapons', state='confirmed', auto=False):
-    return {'slot': slot, 'state': state, 'auto_confirmed': auto}
+def _row(slot='Fore Weapons', state='confirmed', auto=False, name='', bbox=None,
+         crop=''):
+    return {'slot': slot, 'name': name, 'state': state, 'crop_name': crop,
+            'auto_confirmed': auto, 'bbox': bbox or [0, 0, 10, 10]}
 
 
 # ── annotations.json ───────────────────────────────────────────────────
@@ -32,39 +36,59 @@ def test_entries_only_one_side_has_are_kept():
     assert clashes == []
 
 
-def test_the_richer_entry_wins_a_clash():
-    """Two systems reviewing the same screenshot: more of the user's work
-    beats less of it."""
-    local = {'aaa': _entry(_row(), _row('Deflector'))}
-    shared = {'aaa': _entry(_row())}
+def test_rows_the_other_system_has_are_added(tmp_path):
+    """Row level, not entry level: neither side's work is thrown away."""
+    local = {'aaa': _entry(_row(bbox=[0, 0, 10, 10]),
+                           _row('Deflector', bbox=[0, 50, 10, 10]))}
+    shared = {'aaa': _entry(_row(bbox=[0, 0, 10, 10]))}
 
     merged, clashes = share.merge_annotations(local, shared)
 
-    assert len(merged['aaa']['annotations']) == 2
-    assert clashes and 'local kept' in clashes[0]
+    slots = [r['slot'] for r in merged['aaa']['annotations']]
+    assert slots == ['Fore Weapons', 'Deflector']
+    assert clashes and '+1 row' in clashes[0]
 
 
-def test_a_clash_the_shared_side_wins_is_still_reported():
-    """Silence would be the wrong answer — the local rows are about to stop
-    being read, and the user should know."""
-    local = {'aaa': _entry(_row())}
-    shared = {'aaa': _entry(_row(), _row('Deflector'))}
-
-    merged, clashes = share.merge_annotations(local, shared)
-
-    assert len(merged['aaa']['annotations']) == 2
-    assert clashes and 'shared kept' in clashes[0]
-
-
-def test_auto_confirmed_rows_do_not_make_an_entry_look_richer():
-    """Same rule as the importer: the detector's own answers are not the
-    user's work."""
-    local = {'aaa': _entry(_row(auto=True), _row(auto=True), _row(auto=True))}
-    shared = {'aaa': _entry(_row())}
+def test_an_overlapping_box_is_not_added_twice():
+    """Same icon, boxes drawn a pixel apart on two systems."""
+    local = {'aaa': _entry(_row(bbox=[0, 0, 10, 10]))}
+    shared = {'aaa': _entry(_row(bbox=[1, 1, 10, 10]))}
 
     merged, _clashes = share.merge_annotations(local, shared)
 
     assert len(merged['aaa']['annotations']) == 1
+
+
+def test_a_single_instance_slot_collides_on_the_slot_alone():
+    """The ship class box moves between runs; there is still only one."""
+    local = {'aaa': _entry(_row('Ship Type', name='A', bbox=[0, 0, 200, 20]))}
+    shared = {'aaa': _entry(_row('Ship Type', name='B', bbox=[0, 0, 300, 30]))}
+
+    merged, clashes = share.merge_annotations(local, shared)
+
+    assert len(merged['aaa']['annotations']) == 1
+    assert clashes and "kept 'B'" in clashes[0] and "dropped 'A'" in clashes[0]
+
+
+def test_the_users_row_beats_one_the_detector_confirmed_for_itself():
+    local = {'aaa': _entry(_row('Ship Tier', name='T6-X'))}
+    shared = {'aaa': _entry(_row('Ship Tier', name='T6-X2', auto=True))}
+
+    merged, _clashes = share.merge_annotations(local, shared)
+
+    assert merged['aaa']['annotations'][0]['name'] == 'T6-X'
+
+
+def test_two_confirmed_rows_that_disagree_keep_the_shared_one_and_say_so():
+    """This tool cannot know which review was right, and a silent drop is
+    unrecoverable."""
+    local = {'aaa': _entry(_row('Ship Type', name='Legondary Bortasqu'))}
+    shared = {'aaa': _entry(_row('Ship Type', name='Legendary Bortasqu'))}
+
+    merged, clashes = share.merge_annotations(local, shared)
+
+    assert merged['aaa']['annotations'][0]['name'] == 'Legendary Bortasqu'
+    assert clashes and 'dropped' in clashes[0]
 
 
 # ── anchors.json ───────────────────────────────────────────────────────
@@ -150,3 +174,54 @@ def test_running_it_twice_is_harmless(store):
 
     assert share.run(shared, apply=True) == 0
     assert local.is_symlink()
+
+
+# ── Freshness ──────────────────────────────────────────────────────────
+
+def _store_with_crop(root, name: str, when: float) -> Path:
+    """A store root holding one crop file with a chosen mtime."""
+    (root / 'crops').mkdir(parents=True, exist_ok=True)
+    crop = root / 'crops' / name
+    crop.write_bytes(b'png')
+    os.utime(crop, (when, when))
+    return root
+
+
+def test_the_later_confirmation_wins_a_disagreement(tmp_path):
+    """Nothing in the store is timestamped, but the crop a row points at is:
+    writing it is what confirming does. The later answer is the one given
+    after whatever correction prompted it."""
+    lb, sb = tmp_path / 'l', tmp_path / 's'
+    _store_with_crop(lb, 'a.png', 2_000_000)       # local: newer
+    _store_with_crop(sb, 'b.png', 1_000_000)       # shared: older
+    local = {'k': _entry(_row('Ship Type', name='Corrected', crop='crops/a.png'))}
+    shared = {'k': _entry(_row('Ship Type', name='Typo', crop='crops/b.png'))}
+
+    merged, clashes = share.merge_annotations(local, shared, lb, sb)
+
+    assert merged['k']['annotations'][0]['name'] == 'Corrected'
+    assert clashes and 'newer' in clashes[0]
+
+
+def test_an_older_local_row_does_not_displace_the_shared_one(tmp_path):
+    lb, sb = tmp_path / 'l', tmp_path / 's'
+    _store_with_crop(lb, 'a.png', 1_000_000)
+    _store_with_crop(sb, 'b.png', 2_000_000)
+    local = {'k': _entry(_row('Ship Type', name='Old', crop='crops/a.png'))}
+    shared = {'k': _entry(_row('Ship Type', name='New', crop='crops/b.png'))}
+
+    merged, _clashes = share.merge_annotations(local, shared, lb, sb)
+
+    assert merged['k']['annotations'][0]['name'] == 'New'
+
+
+def test_without_a_date_on_both_sides_nothing_is_displaced(tmp_path):
+    """Guessing which review was right is worse than keeping what is there."""
+    lb, sb = tmp_path / 'l', tmp_path / 's'
+    local = {'k': _entry(_row('Ship Type', name='A'))}
+    shared = {'k': _entry(_row('Ship Type', name='B'))}
+
+    merged, clashes = share.merge_annotations(local, shared, lb, sb)
+
+    assert merged['k']['annotations'][0]['name'] == 'B'
+    assert clashes and 'undated' in clashes[0]
