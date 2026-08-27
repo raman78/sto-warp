@@ -8,35 +8,25 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [Unreleased]
-
-### Added
-- **Two computers can now share one set of training data.** If you run WARP
-  CORE from more than one system on the same machine, each had its own store,
-  so a screenshot reviewed on one was unreviewed on the other. A new
-  `python -m warp.tools.share_training_data` moves the store to a shared
-  folder and points the system at it; run it on each system and the second
-  one *merges* into the first rather than replacing it. It reports what it
-  would do and changes nothing until you pass `--apply`, and it never deletes
-  the old store — it renames it aside.
+## [1.0.32] — 2026-08-27
 
 ### Fixed
-- **In WARP CORE, a ship class or tier you have confirmed is now believed.**
-  Correcting the tier in the review panel used to change nothing: your answer
-  stayed in the list, but the next Auto-Detect still measured the screen using
-  the tier it had read itself, so the same surplus slots came back every time.
-  A confirmed class or tier is now what the detection works from, and the log
-  says which value was used and what the reading had been. Only your own
-  confirmations count — a row the program accepted on its own does not
-  promote itself to ground truth.
+- **A ship class or tier confirmed in WARP CORE is now what recognition
+  works from.** Correcting the tier in the review panel used to change
+  nothing: the correction stayed in the list, but the next Auto-Detect
+  measured the screen with the tier it had read itself, so the same surplus
+  slots came back every time. The confirmed value now drives the detection,
+  and the log records both what was used and what had been read. Only a
+  value confirmed by hand counts — a row the program accepted on its own is
+  not treated as an answer.
 - **A misread ship tier no longer invents empty slots.** When the tier badge
   came out garbled — `[T6-X]` read as `[TG-X]`, a six mistaken for a G — the
-  app could round it up to *T6-X2*, which grants two extra universal consoles,
-  devices and starship traits instead of one. The result was a row of empty
-  boxes to review that the ship never had, coming back after every re-run.
-  The tier is now matched only against badges of the same length, so a
-  mangled digit can no longer promote the ship an upgrade step. A genuinely
-  misread *T6-X2* still recovers correctly.
+  app could round it up to *T6-X2*, which grants two extra universal
+  consoles, devices and starship traits instead of one. The result was a row
+  of empty boxes to review that the ship never had, returning after every
+  re-run. Tier badges are now matched only against badges of the same
+  length, so a mangled digit can no longer promote a ship an upgrade step. A
+  genuinely misread *T6-X2* still recovers correctly.
 - **Temporal bridge officer seats now arrive correctly in SETS.** On a ship
   with a Temporal specialist seat, the exported build named that seat
   *Temporal Operative* — the spelling the wiki uses — while SETS calls it
@@ -44,11 +34,18 @@ details live in the git history.
   whatever it showed before, so a build that looked fine on export came up
   with the wrong seat type. The seat is now written the way SETS reads it,
   and the export check refuses any seat specialisation SETS would not
-  recognise. Affects 154 seats across 121 ships.
+  recognise.
+- **Items the game has but SETS cannot read are now named as such.** Some
+  ground weapon families are listed on the wiki but missing from the item
+  database SETS reads. A build containing one used to export as clean and
+  then lose the weapon on import, with nothing to explain where it went. The
+  export notice now lists which items SETS will drop and says the gap is in
+  the wiki's data rather than in the app, and it no longer offers to file a
+  bug report for them.
 - **Kit modules for the Temporal Operative specialisation show their
-  picture again.** Ten of them — *Causal Entanglement*, *Chronoplasty*,
-  *Degeneration* and the rest — had no picture in the app's reference data,
-  so their card and tooltip came up empty even though the item itself was
+  picture again.** *Causal Entanglement*, *Chronoplasty*, *Degeneration* and
+  the rest of the family had no picture in the app's reference data, so
+  their card and tooltip came up empty even though the item itself was
   recognised. The pictures are now published with the reference data and
   arrive with the normal download.
 - **Gear on 23rd-century ships is recognised again.** Some equipment is
@@ -58,10 +55,10 @@ details live in the git history.
   confidence: on a test screenshot the impulse engines read as *Advanced
   Fleet Impulse Engines*, and with no slot restriction as *Shield Array*.
   The app now knows both pictures for the same item, and reads that slot
-  as *Impulse Engines*. Affects 34 items in total, among them phaser,
-  disruptor and plasma weapons, torpedo launchers, deflectors, shields,
-  engines, a warp core and the ground kits. The extra pictures arrive with
-  the normal reference-data download, so nothing needs to be reinstalled.
+  as *Impulse Engines*. Affects phaser, disruptor and plasma weapons,
+  torpedo launchers, deflectors, shields, engines, a warp core and the
+  ground kits. The extra pictures arrive with the normal reference-data
+  download, so nothing needs to be reinstalled.
 
 ## [1.0.31] — 2026-08-22
 
