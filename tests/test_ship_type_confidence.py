@@ -22,6 +22,29 @@ import pytest
 MIN_AUTO_ACCEPT_SETTING = 0.5
 
 
+@pytest.fixture(autouse=True)
+def _isolate_user_dirs(monkeypatch, tmp_path):
+    """Keep the importer off the user's real data.
+
+    `WarpImporter.__init__` builds a cargo cache view, and `_process_image`
+    appends to the recognition history under `training_data_dir()` and writes
+    the detection log — all of which resolve through the XDG basedirs in
+    `warp.userdata`. Without redirecting every one of them, running this file
+    edits the maintainer's own `recog_history.json`.
+    """
+    monkeypatch.setenv('WARP_CACHE_DIR', str(tmp_path / 'cargo-cache'))
+    monkeypatch.setenv('XDG_DATA_HOME', str(tmp_path / 'data'))
+    monkeypatch.setenv('XDG_CACHE_HOME', str(tmp_path / 'cache'))
+    monkeypatch.setenv('XDG_CONFIG_HOME', str(tmp_path / 'config'))
+    monkeypatch.setenv('WARP_LOG_DIR', str(tmp_path / 'logs'))
+    from warp.data import cargo
+    cargo._MEMO.clear()
+    cargo._BUCKET_MEMO.clear()
+    yield
+    cargo._MEMO.clear()
+    cargo._BUCKET_MEMO.clear()
+
+
 def _resolution(strategy: str, matched: bool = True):
     from warp.warp_importer import ShipResolution
 
@@ -113,3 +136,94 @@ def test_a_named_ship_read_stays_confident(tmp_path):
 
     assert resolution.type == 'Excelsior Cruiser'
     assert ship_type_confidence(resolution) == 1.0
+
+
+# ── The call site ──────────────────────────────────────────────────────────
+#
+# Everything above tests the mapping. These drive `_process_image` itself, so
+# that reverting the emission line back to a flat 1.0 fails a test rather than
+# passing silently.
+#
+# `_process_image` normally needs a real screenshot and the OCR/ML stack. All
+# of that reaches it through lazy getters which return a pre-set attribute
+# untouched, so the collaborators can simply be assigned before the call.
+
+np = pytest.importorskip('numpy')
+
+
+_TEXT_INFO = {
+    'ship_name': '',
+    'ship_tier': 'T6',
+    'ship_type_bbox': (10, 10, 100, 20),
+    'ship_tier_bbox': (120, 10, 40, 20),
+    'build_type': 'SPACE',
+}
+
+
+class _FakeText:
+    """Stands in for TextExtractor: hands back a fixed OCR reading."""
+
+    def __init__(self, ship_type: str):
+        self._info = dict(_TEXT_INFO, ship_type=ship_type)
+
+    def extract_ship_info(self, img):
+        return dict(self._info)
+
+    def refine_ship_info(self, *args, **kwargs):
+        return dict(self._info)
+
+    def scan_image(self, img):
+        return []                      # no OCR tokens; layout stays empty
+
+
+class _FakeLayout:
+    """Stands in for LayoutDetector: finds no equipment rows.
+
+    `last_row_pixel_counts` is read as a mapping by `_infer_x_bonus`, so it
+    has to be a real dict rather than another stub method.
+    """
+
+    last_row_pixel_counts: dict = {}
+
+    def __getattr__(self, name):
+        return lambda *args, **kwargs: {}
+
+
+def _run_importer(tmp_path, ocr_ship_type: str):
+    from warp.warp_importer import ShipDB, WarpImporter
+
+    (tmp_path / 'ship_list.json').write_text(json.dumps([
+        _ship('Zahl Heavy Cruiser', 'Cruiser'),
+        _ship('Excelsior Cruiser', 'Cruiser'),
+    ]), encoding='utf-8')
+
+    importer = WarpImporter(build_type='SPACE', from_trainer=False)
+    importer._text = _FakeText(ocr_ship_type)
+    importer._shipdb = ShipDB(tmp_path)
+    importer._layout = _FakeLayout()
+    importer._classify_screen = lambda img: ('SPACE_EQ', 0.99)
+
+    result = importer._process_image(
+        np.zeros((600, 700, 3), dtype=np.uint8), 'test.png')
+    return {item.slot: item for item in result.items}
+
+
+def test_emitted_class_only_ship_type_is_not_auto_acceptable(tmp_path):
+    """The l1.png failure, at the point where confidence is actually set."""
+    items = _run_importer(tmp_path, 'Cruiser')
+
+    assert items['Ship Type'].confidence < MIN_AUTO_ACCEPT_SETTING
+
+
+def test_emitted_named_ship_type_keeps_full_confidence(tmp_path):
+    items = _run_importer(tmp_path, 'Excelsior Cruiser')
+
+    assert items['Ship Type'].name == 'Excelsior Cruiser'
+    assert items['Ship Type'].confidence == 1.0
+
+
+def test_emitted_ship_tier_is_unaffected(tmp_path):
+    """Tier comes off the badge via OCR and never consults ShipDB."""
+    items = _run_importer(tmp_path, 'Cruiser')
+
+    assert items['Ship Tier'].confidence == 1.0
