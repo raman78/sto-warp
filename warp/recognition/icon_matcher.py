@@ -599,30 +599,6 @@ class SETSIconMatcher:
         crop64 = cv2.resize(patch_bgr, (MATCH_SIZE, MATCH_SIZE), interpolation=cv2.INTER_AREA)
         return self._classify_ml(crop64)
 
-    def classify_ml_batch(
-        self,
-        thumbnails: list    # list[QImage | None]
-    ) -> tuple[list[str], list[float]]:
-        """Stage 3 batch classifier (ONNX EfficientNet-B0)."""
-        session = self._get_ml_session()
-        if session is None:
-            return [''] * len(thumbnails), [0.0] * len(thumbnails)
-
-        import cv2
-        names, confs = [], []
-        for thumb in thumbnails:
-            arr = self._qimage_to_bgr(thumb)
-            if arr is None:
-                names.append(''); confs.append(0.0)
-                continue
-            name, conf = self._classify_ml(
-                cv2.resize(arr, (MATCH_SIZE, MATCH_SIZE))
-            )
-            names.append(name)
-            confs.append(conf)
-
-        return names, confs
-
     # ── Index building ──────────────────────────────────────────────────────────
 
     def _build_index(self):
@@ -1316,19 +1292,6 @@ class SETSIconMatcher:
             h, w = rgb.shape[:2]
             return QImage(rgb.data, w, h, 3 * w,
                           QImage.Format.Format_RGB888).copy()
-        except Exception:
-            return None
-
-    def _qimage_to_bgr(self, qimg) -> np.ndarray | None:
-        if qimg is None:
-            return None
-        try:
-            import cv2
-            from PySide6.QtGui import QImage
-            q   = qimg.convertToFormat(QImage.Format.Format_RGB888)
-            w, h = q.width(), q.height()
-            arr  = np.frombuffer(q.bits(), dtype=np.uint8).reshape((h, w, 3)).copy()
-            return cv2.cvtColor(arr, cv2.COLOR_RGB2BGR)
         except Exception:
             return None
 
