@@ -154,6 +154,21 @@ SHIP_INFO_ROI = (0.0, 0.0, 0.34, 0.28)
 # corrected), so the middle of that plateau is used.
 _COL_PAD_ANCHOR_CAP = 150
 
+# Anchor 1c — how far apart two OCR tokens may sit and still be considered
+# halves of one split tier badge. A badge cut mid-bracket leaves its halves
+# touching or slightly overlapping (measured: -5 px on a 694 px screenshot),
+# while a real word gap is about a space wide, so the cap is deliberately
+# below one space: 0.3 × token height, with a small floor for tiny text.
+_TIER_FRAG_GAP_RATIO = 0.3
+_TIER_FRAG_MIN_GAP = 6
+
+# How far an OCR box may overrun the tier anchor's left edge and still count as
+# a token to its left. EasyOCR boxes for neighbouring glyph runs routinely
+# overlap by a few px; the old flat 2 px allowance dropped the class line of a
+# ship whose name box ran 5 px past the badge. Scaled to the anchor's height so
+# it tracks the text size rather than one screenshot's resolution.
+_LEFT_OVERLAP_RATIO = 0.5
+
 # ── Keyword sets per screen type ──────────────────────────────────────────────
 # Checked against lowercase OCR text of scan regions.
 # More specific keywords are listed first (longer matches win).
@@ -740,6 +755,94 @@ class TextExtractor:
                     if tier_tok:
                         break
 
+            # ── Anchor 1c: tier badge split across two or three tokens ───────
+            # The badge is small and low-contrast, so OCR sometimes cuts it in
+            # the middle instead of returning it whole: `[T6-X2]` came back as
+            # `'[Te-'` (conf 0.27) plus `'X2]'` (conf 0.49), 5 px apart. Neither
+            # half carries a closed bracket, so 1b sees nothing, and neither
+            # half satisfies RE_TIER_LOOSE — `'Te-'` has no digit — so 1 sees
+            # nothing either. The screenshot then falls through to the
+            # anchorless path, where ship_type is whatever single OCR token
+            # happened to win the ShipDB lookup and the tier is not read at all.
+            #
+            # Re-join runs of 2-3 tokens that sit side by side in one row and
+            # re-test the result. Two things keep this from inventing tiers:
+            # the joined text still has to contain a closed `[...]` block and
+            # still has to fuzzy-snap to a real tier, and the fragments have to
+            # be visually adjacent — the gap cap is a fraction of the row's own
+            # token height, so words separated by normal spacing never merge.
+            #
+            # Shortest run wins. Sweeping by start index instead would let a
+            # long class-name token join a badge it merely abuts and hand the
+            # tier a box covering both: here the triple
+            # 'exington Dreadnought Cruiser' + '[Te-' + 'X2]' snaps to the same
+            # T6-X2 as the pair does, but boxes 280 px instead of 65.
+            if tier_tok is None:
+                for span in (2, 3):
+                    for r in rows:
+                        ts = r['tokens']            # sorted by x
+                        for i in range(len(ts) - span + 1):
+                            frags = ts[i:i + span]
+                            gaps = [frags[k + 1]['x']
+                                    - (frags[k]['x'] + frags[k]['w'])
+                                    for k in range(span - 1)]
+                            if any(g > max(_TIER_FRAG_MIN_GAP,
+                                           frags[0]['h'] * _TIER_FRAG_GAP_RATIO)
+                                   for g in gaps):
+                                continue
+                            joined = ''.join(t['text'] for t in frags)
+                            m_br = re.search(
+                                r'\[([A-Za-z0-9\- ]{2,8})\]', joined)
+                            if not m_br:
+                                continue
+                            snapped = _fuzzy_tier(
+                                m_br.group(1).upper().replace(' ', ''))
+                            if not snapped:
+                                continue
+                            # A synthetic token standing for the whole badge:
+                            # everything downstream treats it like any other
+                            # tier token, and its bbox is the union of the
+                            # fragments — the badge, and nothing but the badge.
+                            bb = self._union_xywh(
+                                *((t['x'], t['y'], t['w'], t['h'])
+                                  for t in frags))
+                            tier_tok = {
+                                'x': bb[0], 'y': bb[1], 'w': bb[2], 'h': bb[3],
+                                'text': joined,
+                                'conf': min(t['conf'] for t in frags),
+                                'dark': any(t['dark'] for t in frags),
+                                'cy': float(np.mean([t['cy'] for t in frags])),
+                            }
+                            tier_row = r
+                            result['ship_tier'] = snapped
+                            result['ship_tier_bbox'] = bb
+                            # Anything before the bracket belongs to the class
+                            # line. Only the fragments that end before it are
+                            # boxed, so the type box does not swallow the badge.
+                            n_pre = 0
+                            consumed = 0
+                            for t in frags:
+                                if consumed + len(t['text']) > m_br.start():
+                                    break
+                                consumed += len(t['text'])
+                                n_pre += 1
+                            prefix = joined[:m_br.start()].strip().rstrip(' [')
+                            if (n_pre and len(prefix) > 4
+                                    and not _is_blacklisted(prefix)):
+                                result['ship_type'] = prefix
+                                result['ship_type_bbox'] = self._union_xywh(
+                                    *((t['x'], t['y'], t['w'], t['h'])
+                                      for t in frags[:n_pre]))
+                            _slog.info(
+                                f'TextExtractor: split-bracket tier '
+                                f'{[t["text"] for t in frags]} → {joined!r} '
+                                f'→ {snapped!r} bbox={bb}')
+                            break
+                        if tier_tok:
+                            break
+                    if tier_tok:
+                        break
+
             anchor_kind = ''
             anchor_x = anchor_y = anchor_w = anchor_h = None
 
@@ -796,7 +899,9 @@ class TextExtractor:
                 def _row_in_column(row) -> bool:
                     return any(_in_column(t) for t in row['tokens'])
 
-                def _valid_type_tok(tok) -> bool:
+                def _valid_type_tok_nearby(tok) -> bool:
+                    """Everything `_valid_type_tok` checks except the column
+                    window — for callers that establish locality themselves."""
                     # Dark-bg is NOT required here — column window + HUD
                     # blacklist already separate ship_* labels from UI overlays,
                     # and Status-tab panels can have light gradients.
@@ -808,9 +913,10 @@ class TextExtractor:
                         return False
                     if _registry_token(tok['text']):
                         return False
-                    if not _in_column(tok):
-                        return False
                     return True
+
+                def _valid_type_tok(tok) -> bool:
+                    return _valid_type_tok_nearby(tok) and _in_column(tok)
 
                 # Determine which row(s) hold the ship_type.
                 # Strategy:
@@ -852,9 +958,22 @@ class TextExtractor:
                     # same y-band but far in x must NOT leak in.
                     def _adjacent_left_of(row, target_tok, max_gap_ratio=4.0):
                         """Pick tokens to the LEFT of target_tok, contiguous in x.
-                        Stop at a horizontal gap > max_gap_ratio × target height."""
+                        Stop at a horizontal gap > max_gap_ratio × target height.
+
+                        The column window is deliberately NOT applied here. It
+                        exists to reject text that shares the anchor's y-band
+                        but sits far away in x, and the gap rule below already
+                        does that — strictly, and on this row only. Applying
+                        both cut the class line short instead: the window's pad
+                        comes from the anchor's own width, so a narrow tier
+                        badge produced a window that stopped before the start of
+                        the very line it was meant to bound (measured: 'Terran'
+                        at x=36 fell outside a window opening at x=188).
+                        """
+                        overlap = max(2.0, target_tok['h'] * _LEFT_OVERLAP_RATIO)
                         left = [t for t in row['tokens']
-                                if t['x'] + t['w'] <= target_tok['x'] + 2]
+                                if t['x'] < target_tok['x']
+                                and t['x'] + t['w'] <= target_tok['x'] + overlap]
                         left.sort(key=lambda t: t['x'], reverse=True)
                         gap_thr = max(40.0, target_tok['h'] * max_gap_ratio)
                         kept = []
@@ -863,7 +982,7 @@ class TextExtractor:
                             gap = prev_left - (t['x'] + t['w'])
                             if gap > gap_thr:
                                 break
-                            if not _valid_type_tok(t):
+                            if not _valid_type_tok_nearby(t):
                                 # Allow it to break adjacency only if it is a
                                 # name-like token (likely the ship name to the
                                 # left). For invalid HUD/blacklist tokens, stop.
@@ -892,6 +1011,14 @@ class TextExtractor:
 
                     # Extend up by 1 row when it contains the ship class name
                     # (Constitution, Chronos, Yamaguchi, Augur, Negh'Var, …).
+                    # This is for the case where OCR wrapped the class onto the
+                    # line above the badge, so it only applies when the badge's
+                    # own row held nothing: once the class line has been read
+                    # off that row, whatever sits above it is something else,
+                    # and prepending it corrupts the type. On the screenshot
+                    # that prompted this, the row above was the FPS watermark
+                    # plus a 'Fore' column header, neither of which the
+                    # blacklist rejects.
                     # Guard: if any token is an ALL-CAPS proper noun that is
                     # not a known class name, the row is the ship NAME, not
                     # the type — skip.
@@ -912,7 +1039,7 @@ class TextExtractor:
                                     return True
                         return False
 
-                    if anchor_row_idx >= 1:
+                    if anchor_row_idx >= 1 and not same_text:
                         r_above = rows[anchor_row_idx - 1]
                         if (_row_in_column(r_above)
                                 and not _row_is_name_row(r_above)

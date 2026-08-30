@@ -52,17 +52,26 @@ against that anchor.
 
 ## 1. Anchor strategies
 
-Two, tried in order, both inside `extract_ship_info`:
+Four passes, tried in order, all inside `extract_ship_info`. The first three
+look for a tier badge and share the `tier` anchor kind; the fourth falls back
+to the ship-name line:
 
-| Kind | Trigger | Anchor token | Set at |
+| Pass | Trigger | Anchor token | At |
 |---|---|---|---|
-| `tier` | A `[T5]`/`[T6-X2]`-style bracket found by `RE_TIER_LOOSE` | the token carrying the bracket | `:729` |
-| `name` | A token that looks like a ship-name line, per `_is_name_prefix_token` (`:62`) | that token | `:747` |
+| 1 — loose | `RE_TIER_LOOSE` matches, or one token holds a snappable `[...]` | the token carrying it | `:674` |
+| 1b — fused | A whole `Name [TB-X2]` line came back as one token | that token | `:724` |
+| 1c — split | Two or three x-adjacent tokens in one row **join** into a closed `[...]` that snaps | a synthetic token spanning the fragments | `:758` |
+| 2 — name | A token that looks like a ship-name line, per `_is_name_prefix_token` (`:62`) | that token | `:854` |
 
-With a tier anchor the class is assembled from the tier row and the row above
-it; with a name anchor, from the row below the name. No anchor means no ship
-info at all (`:971`) — the extractor emits `anchorless_candidates` instead and
-`ShipDB.find_class_by_candidates_ex` gets a last-resort attempt.
+With a tier anchor the class is assembled from the tier row, or from the row
+above when that row held nothing; with a name anchor, from the row below the
+name. No anchor means no ship info at all (`:1118`) — the extractor emits
+`anchorless_candidates` instead and `ShipDB.find_class_by_candidates_ex` gets
+a last-resort attempt.
+
+Pass 1c exists because OCR sometimes cuts the badge itself rather than the line
+around it, and neither half is then recognisable: see
+[Decision 2026-08-30](#decision-2026-08-30-a-tier-badge-cut-in-half-is-still-a-tier-badge).
 
 `_is_name_prefix_token` is misleadingly named: it does not require a prefix.
 `U.S.S. ENTERPRISE` matches, and so does a bare `Henrik Lindstrom`, which is
@@ -103,9 +112,14 @@ cap costs nothing (see [Measured baseline](#measured-baseline)).
 
 | Step | Function | Rule |
 |---|---|---|
-| Same row | `_adjacent_left_of` (`:833`) | tokens left of the tier token, contiguous in x; stops at a gap > `max(40, 4 × token height)` |
-| Row above | `_row_to_type` (`:816`) | whole row, if it is in the column, is not a name row, and holds no ALL-CAPS proper noun |
-| Token filter | `_valid_type_tok` (`:779`) | length > 2, not in `_HUD_BLACKLIST` (`:85`), not a section header, not a registry number, inside the column |
+| Same row | `_adjacent_left_of` (`:959`) | tokens left of the tier token, contiguous in x; stops at a gap > `max(40, 4 × token height)`. A token may overrun the anchor's left edge by `_LEFT_OVERLAP_RATIO × anchor height` (`:170`) and still count — EasyOCR boxes for neighbouring glyph runs overlap |
+| Row above | `_row_to_type` (`:942`) | whole row, **only when the tier's own row yielded nothing**, and if it is in the column, is not a name row, and holds no ALL-CAPS proper noun |
+| Token filter | `_valid_type_tok` (`:918`) | `_valid_type_tok_nearby` (`:902`) — length > 2, not in `_HUD_BLACKLIST` (`:85`), not a section header, not a registry number — **plus** inside the column |
+
+`_adjacent_left_of` calls `_valid_type_tok_nearby`, i.e. it deliberately skips
+the column window. The window rejects text that shares the anchor's y-band but
+sits far away in x, and the gap rule already does that, strictly and on one row
+— applying both cut the class line short instead. See the decision below.
 
 `_HUD_BLACKLIST` gates the class only. Name assembly does not consult it,
 which is how `Kit Modules` and `Starship Selection Dry Dock` survive as
@@ -132,6 +146,7 @@ pulled `Legendary Dreadnought Cruiser` towards
 |---|---|---|
 | `type='<junk> <real class>'` | a token from another panel entered the column | `_valid_type_tok` / column window, §2 |
 | `ship_type_bbox` far wider than the class line | same cause — the bbox is the union of what got in (S1) | §2 |
+| `ship_type_bbox` *narrower* than the class line, `Ship Tier` sharing it | no anchor fired, so the box is one rescue token and the tier borrowed it | §1 pass 1c, and `no anchor` in the log |
 | `[name anchor]` on a screen with no ship | `RE_NAME_PREFIX` (`:39`) matches a plain word: dots are optional and the separator class accepts a space, so `Die E` matches | §Open questions, item 2 |
 | `no anchor, ship info unset` | no tier bracket and no name-shaped token | expected on ground/BOFF/skills screens |
 | Class resolves to a different ship of the same family | fuzzy lookup fed a polluted string | §4, and `last_match_strategy` in the log |
@@ -308,6 +323,78 @@ after the cap across 10 folders: 18 meta bboxes, **0** overlapping a detected
 slot bbox in 2-D. Before the cap, `Ragna/Untitled.png` had `Ship Type` over 10
 slots. The rule would currently be dead code; a warning log would be worth
 more than silent clamping, since the bbox also feeds crops (S2).
+
+### Decision 2026-08-30: a tier badge cut in half is still a tier badge
+
+**Change.** Anchor pass 1c (`warp/recognition/text_extractor.py:758`) re-joins
+runs of two or three x-adjacent tokens in one OCR row and re-tests the result
+for a closed `[...]` that `_fuzzy_tier` can snap. Two supporting changes make
+the class line come out right once the badge anchors: `_adjacent_left_of` no
+longer applies the column window and tolerates an overlapping neighbour, and
+the row-above extension only runs when the tier's own row yielded nothing.
+
+**Why.** On `l1.png` (694×622) OCR cut the badge itself:
+
+```
+x  36– 94  'Terran'                        conf 1.00
+x 103–323  'exington Dreadnought Cruiser'  conf 0.79   ← dropped 'L'
+x 318–353  '[Te-'                          conf 0.27   ← '[T6-'
+x 351–383  'X2]'                           conf 0.49
+```
+
+Neither half carries a closed bracket, so pass 1b saw nothing; `'Te-'` has no
+digit, so `RE_TIER_LOOSE` saw nothing either. The screenshot fell through to
+the anchorless path, where `ship_type` became whichever single token won the
+ShipDB lookup — `ship_type_bbox` was `(103, 37, 220, 18)`, missing `Terran` and
+the whole badge — and `Ship Tier`, having no box of its own, borrowed that same
+wrong one (`warp_importer.py:2014`). Joined, `'[Te-' + 'X2]'` → `'[Te-X2]'` →
+`T6-X2`, boxed at `(318, 30, 65, 25)`.
+
+**Shortest run wins.** Sweeping by start index instead lets a long class-name
+token join a badge it merely abuts: the triple
+`'exington Dreadnought Cruiser' + '[Te-' + 'X2]'` snaps to the same `T6-X2` but
+boxes 280 px instead of 65.
+
+**Why the column window had to go from `_adjacent_left_of`.** `col_pad` is
+derived from the anchor's own width (§2), which is right for a *wide* anchor
+and useless for a narrow one: a 65 px badge opens the window at x=188, and the
+class line it is meant to bound starts at x=36. `Terran` fell outside and the
+class came back as one word short. The gap rule is the stronger locality test
+anyway — same row, contiguous in x — so the window is now applied only where
+it was designed to help.
+
+**Why the row-above rule became conditional.** With the class line read off the
+badge's own row, whatever sits above it is something else. Here it was the FPS
+watermark `1.5.5. Pure Immersion` plus the `Fore` column header — neither is in
+`_HUD_BLACKLIST` — and prepending them would have produced
+`'1.5.5. Pure Immersion Fore Terran exington Dreadnought Cruiser'`. The rule is
+for a class that OCR wrapped onto two lines, which is exactly the case where
+the badge's row comes back empty.
+
+**Measured.** Full OCR pass over 451 screenshots (`dev/shipinfo_corpus_run.py`,
+`dev/shipinfo_corpus_diff.py`), before and after:
+
+| | changed | gained | lost |
+|---|---|---|---|
+| `ship_type` | 1 | 1 | 0 |
+| `ship_tier` | 1 | 1 | 0 |
+| `ship_name` | 0 | — | — |
+| `ship_*_bbox` | 2 | 2 (`None` → correct) | 0 |
+
+The one screenshot that changed is `l1.png`. Nothing else in the corpus moves,
+because the failure needs OCR to cut inside the bracket.
+
+**A consequence, not a regression.** Filling in `ship_type` stops the screenshot
+from taking the anchorless path, so it reaches `ShipDB.get_profile` — which
+promptly returned the wrong ship, because the fuzzy match against the generic
+`type` field ran ahead of the one against real class names. That is a separate,
+pre-existing bug, fixed in `cf63086`; without it this change trades a bad box
+for a bad ship.
+
+**How to revert.** Delete the 1c block; the two supporting changes are then
+unreachable for split badges but still apply to passes 1 and 1b, so revert them
+too if the corpus is re-measured. `tests/test_tier_badge_split.py` holds the
+real token dump for the case.
 
 ## Open questions
 
