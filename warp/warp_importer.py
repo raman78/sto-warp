@@ -1338,6 +1338,41 @@ class ShipResolution:
     rescue_token: str = ''
 
 
+# Strategies that only ever identify a *class*, never a ship. All four read
+# `ShipDB._by_type`, which is keyed on the generic `type` field: 797 ships
+# collapse into 38 dict slots, so the entry under a key is whichever ship the
+# load loop happened to write last. Measured over the roster, the profile of
+# that arbitrary member is wrong on 4.9 of 11 slots for the ship actually on
+# screen — and a class consensus, the best any redesign of that index could
+# do, still misses 4.1. The information simply is not in a class name.
+_CLASS_ONLY_STRATEGIES = frozenset({
+    'exact-type', 'word-subset', 'word-subset-best', 'fuzzy-type',
+})
+
+# Ship Type confidence by what the lookup actually established. This feeds
+# WARP CORE's auto-accept, whose threshold the user sets between 0.50 and
+# 1.00 — so anything that must never be auto-accepted has to sit below 0.50
+# rather than at it.
+#
+# Before this, Ship Type was emitted at a flat 1.0 whatever the strategy. A
+# class-only match therefore presented an arbitrary ship as certain and was
+# auto-confirmed into the training data, which is how a dropped letter in
+# 'Lexington' put 'Universe Temporal Heavy Dreadnought Cruiser' into
+# annotations as ground truth.
+SHIP_TYPE_CONF_IDENTIFIED = 1.0     # a specific ship in ship_list.json
+SHIP_TYPE_CONF_CLASS_ONLY = 0.45    # right class, arbitrary member
+SHIP_TYPE_CONF_UNVERIFIED = 0.30    # raw OCR, no DB entry behind it
+
+
+def ship_type_confidence(resolution: 'ShipResolution | None') -> float:
+    """Confidence for an emitted Ship Type, from how it was resolved."""
+    if resolution is None or not resolution.matched:
+        return SHIP_TYPE_CONF_UNVERIFIED
+    if resolution.strategy in _CLASS_ONLY_STRATEGIES:
+        return SHIP_TYPE_CONF_CLASS_ONLY
+    return SHIP_TYPE_CONF_IDENTIFIED
+
+
 # Canonical slot order for the detection-log table. Slots present in the
 # resolved profile with count > 0 are listed in this order; anything left
 # over (defensive — should not happen) is appended at the end.
@@ -2057,13 +2092,17 @@ class WarpImporter:
                 layout[_slot] = [_bb_t]
                 if _slot == 'Ship Type':
                     _val = ship_type
+                    # Ship Tier is read straight off the badge by OCR and does
+                    # not go through ShipDB, so only the type is graded here.
+                    _conf = ship_type_confidence(resolution) if _val else 0.0
                 else:
                     _val = text_info.get(_valkey, '') or _inferred_tier
+                    _conf = 1.0 if _val else 0.0
                 result.items.append(RecognisedItem(
                     slot        = _slot,
                     slot_index  = 0,
                     name        = _val,
-                    confidence  = 1.0 if _val else 0.0,
+                    confidence  = _conf,
                     thumbnail   = None,
                     source_file = source,
                     bbox        = _bb_t,
