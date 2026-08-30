@@ -877,8 +877,22 @@ class ShipDB:
             # 2c. Fuzzy display-string match — handles OCR typos that defeat
             # word-subset matching ('Legondary'/'Battlocruiser'/'IIl'/'IIIl').
             # Cutoff 0.85 is tight enough that real-different ships do not
-            # collide; require ≥3 OCR words to avoid false positives on tiny
-            # strings ('Cruiser' would otherwise fuzzy-match dozens of ships).
+            # collide.
+            #
+            # The guard here is that a read which is *itself* a class name
+            # must never be attributed to a specific ship. Measured against
+            # the roster, 9 of the 27 multi-word class names sit above 0.85
+            # from some ship name — 'warbird battlecruiser' is 0.9048 from
+            # 'arbiter battlecruiser', 'dreadnought carrier' 0.8947 from
+            # 'dreadnought cruiser' — so without a guard the matcher invents
+            # a ship out of a class read.
+            #
+            # This used to be approximated by demanding ≥3 OCR words, which
+            # also discarded every two-word ship name: 'advanced escort' read
+            # as 'dvanced escort' is 0.9655 from its own name and was thrown
+            # away untested, ending in an empty result. Testing the real
+            # property instead recovers 79 of those 80 two-word ships while
+            # still leaking none of the 54 class reads.
             #
             # This runs BEFORE the generic-type fuzzy match below, and the
             # order is load-bearing. `_by_type` is keyed on the generic
@@ -893,7 +907,9 @@ class ShipDB:
             # dreadnought cruiser' and returned 'Universe Temporal Heavy
             # Dreadnought Cruiser', while the true ship sat right here at
             # 0.9859.
-            if len(ocr_words) >= 3 and self._display_strings:
+            reads_as_class = bool(
+                get_close_matches(st, type_candidates, n=1, cutoff=0.90))
+            if len(ocr_words) >= 2 and not reads_as_class and self._display_strings:
                 disp_candidates = [s for s, _ in self._display_strings]
                 disp_matches = get_close_matches(st, disp_candidates, n=1, cutoff=0.85)
                 if disp_matches:

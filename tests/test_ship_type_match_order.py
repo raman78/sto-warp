@@ -38,13 +38,24 @@ def _ship(name: str, stype: str, fore: str = '4') -> dict:
 _TARGET = _ship('Terran Lexington Dreadnought Cruiser', 'Heavy Dreadnought Cruiser')
 _DECOY = _ship('Universe Temporal Heavy Dreadnought Cruiser', 'Heavy Dreadnought Cruiser')
 
+# A two-word ship name, the shape the old ≥3-word guard discarded outright.
+_SHORT = _ship('Advanced Escort', 'Escort')
+
+# The collision the class-read guard exists for, taken from the real roster:
+# 'warbird battlecruiser' is a generic class *and* sits 0.9048 from the ship
+# name 'arbiter battlecruiser'. Reading the class must not name the ship.
+_COLLIDER = _ship('Arbiter Battlecruiser', 'Battlecruiser')
+_COLLIDER_CLASS = _ship('Vastam Tactical Command Warbird', 'Warbird Battlecruiser')
+
+_ROSTER = [_TARGET, _DECOY, _SHORT, _COLLIDER, _COLLIDER_CLASS]
+
 
 @pytest.fixture
 def shipdb(tmp_path):
     from warp.warp_importer import ShipDB
 
     (tmp_path / 'ship_list.json').write_text(
-        json.dumps([_TARGET, _DECOY]), encoding='utf-8')
+        json.dumps(_ROSTER), encoding='utf-8')
     return ShipDB(tmp_path)
 
 
@@ -69,13 +80,33 @@ def test_dropped_letter_still_resolves_to_the_right_ship(shipdb):
 
 
 def test_a_bare_class_read_does_not_claim_a_specific_ship(shipdb):
-    """The reason the name matcher requires >=3 OCR words.
+    """A read that is itself a class name must not be attributed to a ship.
 
-    A two-word generic read must not fuzzy-match a ship name: measured
-    against the real roster, 'warbird battlecruiser' otherwise resolves to
-    'arbiter battlecruiser' at 0.9048. It may fall through to the class
-    match, but it must not be attributed to a name.
+    'warbird battlecruiser' is a generic class and sits 0.9048 from the ship
+    name 'arbiter battlecruiser', so the name matcher would happily claim it.
+    Falling through to the class match is fine; naming a ship is not.
     """
-    shipdb.get_profile('', 'Dreadnought Cruiser', 'T6')
+    shipdb.get_profile('', 'Warbird Battlecruiser', 'T6')
 
     assert shipdb.last_match_strategy != 'fuzzy-display'
+    assert (shipdb.last_match or {}).get('name') != 'Arbiter Battlecruiser'
+
+
+def test_a_damaged_class_read_is_also_rejected(shipdb):
+    """The guard is fuzzy, so OCR damage does not smuggle a class read past
+    it: 'arbird battlecruiser' is still recognisably the class."""
+    shipdb.get_profile('', 'arbird Battlecruiser', 'T6')
+
+    assert (shipdb.last_match or {}).get('name') != 'Arbiter Battlecruiser'
+
+
+def test_two_word_ship_name_survives_a_dropped_letter(shipdb):
+    """What the old ≥3-word guard threw away.
+
+    'dvanced escort' is 0.9655 from its own name, but the word count alone
+    disqualified it and the read ended up unmatched.
+    """
+    shipdb.get_profile('', 'dvanced Escort', 'T6')
+
+    assert shipdb.last_match['name'] == 'Advanced Escort'
+    assert shipdb.last_match_strategy == 'fuzzy-display'
