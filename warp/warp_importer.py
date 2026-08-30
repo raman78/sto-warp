@@ -874,19 +874,25 @@ class ShipDB:
                 self.last_match, self.last_match_strategy = best[2], 'display-name-best'
                 return self._entry_to_profile(best[2], ship_tier)
 
-            # 2c. Standard fuzzy match as fallback
-            type_matches = get_close_matches(st, type_candidates, n=1, cutoff=0.68)
-            if type_matches:
-                entry = self._by_type[type_matches[0]]
-                log.debug(f'ShipDB fuzzy type: {ship_type!r} → {type_matches[0]!r}')
-                self.last_match, self.last_match_strategy = entry, 'fuzzy-type'
-                return self._entry_to_profile(entry, ship_tier)
-
-            # 2d. Fuzzy display-string match — handles OCR typos that defeat
+            # 2c. Fuzzy display-string match — handles OCR typos that defeat
             # word-subset matching ('Legondary'/'Battlocruiser'/'IIl'/'IIIl').
             # Cutoff 0.85 is tight enough that real-different ships do not
             # collide; require ≥3 OCR words to avoid false positives on tiny
             # strings ('Cruiser' would otherwise fuzzy-match dozens of ships).
+            #
+            # This runs BEFORE the generic-type fuzzy match below, and the
+            # order is load-bearing. `_by_type` is keyed on the generic
+            # `type` field — 38 keys like 'heavy dreadnought cruiser', each
+            # holding whichever ship the load loop wrote last, since many
+            # ships share a type. Matching there identifies a *class*, not a
+            # ship, and then hands back an arbitrary member of it. A ≥0.85
+            # hit on a real ship name is strictly better evidence than a
+            # ≥0.68 hit on a class name, so it has to be consulted first.
+            # Measured: OCR 'terran exington dreadnought cruiser' (one
+            # dropped letter) scored 0.7333 against the class 'heavy
+            # dreadnought cruiser' and returned 'Universe Temporal Heavy
+            # Dreadnought Cruiser', while the true ship sat right here at
+            # 0.9859.
             if len(ocr_words) >= 3 and self._display_strings:
                 disp_candidates = [s for s, _ in self._display_strings]
                 disp_matches = get_close_matches(st, disp_candidates, n=1, cutoff=0.85)
@@ -898,6 +904,16 @@ class ShipDB:
                             self.last_match = ship
                             self.last_match_strategy = 'fuzzy-display'
                             return self._entry_to_profile(ship, ship_tier)
+
+            # 2d. Generic-type fuzzy match as fallback. Only reached when no
+            # ship name resembled the OCR text closely enough, so the best
+            # available answer is the class and a representative of it.
+            type_matches = get_close_matches(st, type_candidates, n=1, cutoff=0.68)
+            if type_matches:
+                entry = self._by_type[type_matches[0]]
+                log.debug(f'ShipDB fuzzy type: {ship_type!r} → {type_matches[0]!r}')
+                self.last_match, self.last_match_strategy = entry, 'fuzzy-type'
+                return self._entry_to_profile(entry, ship_tier)
 
         # 2e. Token-overlap fallback — handles OCR contaminated by ship_name
         # or junk tokens (e.g. '1.8.8. Midgardsormr Personal Styx Terran
