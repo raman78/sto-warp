@@ -921,20 +921,12 @@ class ShipDB:
                             self.last_match_strategy = 'fuzzy-display'
                             return self._entry_to_profile(ship, ship_tier)
 
-            # 2d. Generic-type fuzzy match as fallback. Only reached when no
-            # ship name resembled the OCR text closely enough, so the best
-            # available answer is the class and a representative of it.
-            type_matches = get_close_matches(st, type_candidates, n=1, cutoff=0.68)
-            if type_matches:
-                entry = self._by_type[type_matches[0]]
-                log.debug(f'ShipDB fuzzy type: {ship_type!r} → {type_matches[0]!r}')
-                self.last_match, self.last_match_strategy = entry, 'fuzzy-type'
-                return self._entry_to_profile(entry, ship_tier)
-
-        # 2e. Token-overlap fallback — handles OCR contaminated by ship_name
-        # or junk tokens (e.g. '1.8.8. Midgardsormr Personal Styx Terran
-        # Dreadnought Cruiser') where neither ocr⊆db nor db⊆ocr holds, but
-        # the tail of the OCR string still strongly identifies a class.
+        # 2d. Token-overlap — handles OCR contaminated by ship_name or junk
+        # tokens (e.g. '1.8.8. Midgardsormr Personal Styx Terran Dreadnought
+        # Cruiser', or the 'Details' button glued to the class line) where
+        # neither ocr⊆db nor db⊆ocr holds, but the tail of the OCR string
+        # still strongly identifies a class. Scores real ship entries, so
+        # like every stage above it names a ship rather than a class.
         overlap_hit = self.find_class_by_token_overlap(st, ship_tier)
         if overlap_hit:
             entry, score, matched = overlap_hit
@@ -944,6 +936,25 @@ class ShipDB:
             self.last_match = entry
             self.last_match_strategy = 'token-overlap'
             return self._entry_to_profile(entry, ship_tier)
+
+        # 2e. Generic-type fuzzy match — the last resort before giving up.
+        #
+        # It sits below token-overlap for the same reason the name matcher
+        # sits above it: this is the only stage that answers with a *class*
+        # and then hands back an arbitrary member of it, so every stage that
+        # can name an actual ship must get its turn first. Measured, a junk
+        # token prefixed to the class line ('Decails Legendary Dreadnought
+        # Cruiser') scored 0.7 against a class name here and returned
+        # 'Universe Temporal Heavy Dreadnought Cruiser', while token-overlap
+        # — which never ran — scored the right ship at 10.5.
+        if st and self._by_type:
+            type_matches = get_close_matches(
+                st, list(self._by_type.keys()), n=1, cutoff=0.68)
+            if type_matches:
+                entry = self._by_type[type_matches[0]]
+                log.debug(f'ShipDB fuzzy type: {ship_type!r} → {type_matches[0]!r}')
+                self.last_match, self.last_match_strategy = entry, 'fuzzy-type'
+                return self._entry_to_profile(entry, ship_tier)
 
         # 3. Keyword fallback from type string
         log.debug(f'ShipDB: type {ship_type!r} not found — using keyword fallback')

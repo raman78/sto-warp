@@ -59,6 +59,24 @@ def shipdb(tmp_path):
     return ShipDB(tmp_path)
 
 
+@pytest.fixture
+def baseline_shipdb():
+    """The full committed roster — 797 ships, 38 class keys.
+
+    Some collisions only exist at that scale. `warp/data/baseline/` is source
+    checked into the repo, so this stays offline and deterministic.
+    """
+    from pathlib import Path
+
+    from warp.warp_importer import ShipDB
+
+    baseline = Path(__file__).resolve().parent.parent / 'warp' / 'data' / 'baseline'
+    db = ShipDB(baseline)
+    if not db._ships:
+        pytest.skip('baseline ship_list.json unavailable')
+    return db
+
+
 def test_decoy_owns_the_generic_type_key(shipdb):
     """Guards the premise: the wrong ship really is what the class key holds."""
     entry = shipdb._by_type['heavy dreadnought cruiser']
@@ -98,6 +116,29 @@ def test_a_damaged_class_read_is_also_rejected(shipdb):
     shipdb.get_profile('', 'arbird Battlecruiser', 'T6')
 
     assert (shipdb.last_match or {}).get('name') != 'Arbiter Battlecruiser'
+
+
+def test_a_junk_token_reaches_the_token_scorer(baseline_shipdb):
+    """OCR picking up a neighbouring button and gluing it to the class line.
+
+    Recorded in `docs/SHIP_INFO_DETECTION.md`: on Screenshot_96.png the OCR of
+    the **Details** button entered the class line as 'Decails'. Neither
+    word-subset nor the name matcher survives the extra token, so the read has
+    to reach the weighted token-overlap scorer — which scores the right ship
+    at 10.5. While the generic class matcher ran first it answered instead, at
+    cutoff 0.68, with an arbitrary member of a class the string only loosely
+    resembled.
+
+    This needs the real roster: the collision is between 797 ships and 38
+    class keys, and no hand-made fixture of a few ships reproduces it. The
+    committed baseline gives that without touching the network or the user's
+    cache.
+    """
+    baseline_shipdb.get_profile('', 'Decails Legendary Dreadnought Cruiser', 'T6')
+
+    assert baseline_shipdb.last_match_strategy == 'token-overlap'
+    assert (baseline_shipdb.last_match['name']
+            == 'Legendary Galaxy Dreadnought Cruiser')
 
 
 def test_two_word_ship_name_survives_a_dropped_letter(shipdb):
