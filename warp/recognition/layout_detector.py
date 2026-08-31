@@ -374,6 +374,7 @@ class LayoutDetector:
         # profile, and the panel geometry does not depend on the profile.
         self._eq_geom_cache: dict[str, EQGeometry | None] = {}
         self._ground_eq_geom_cache: dict[str, GroundEQGeometry | None] = {}
+        self._ocr_labels_cache: dict[str, dict] = {}
         self._img_key_memo: tuple = (None, '')
         # slot → icons actually counted in that row by pixel analysis, for
         # the last detect() call. A row's bboxes come from the ship profile,
@@ -486,7 +487,8 @@ class LayoutDetector:
         # image, and the importer re-enters `detect()` on the same screenshot
         # once the pixel counts refine the ship profile. Bounded to a handful
         # of screenshots so a folder run does not accumulate them.
-        for _cache in (self._eq_geom_cache, self._ground_eq_geom_cache):
+        for _cache in (self._eq_geom_cache, self._ground_eq_geom_cache,
+                       self._ocr_labels_cache):
             while len(_cache) > 3:
                 _cache.pop(next(iter(_cache)))
         self.last_row_pixel_counts = {}
@@ -2481,12 +2483,22 @@ class LayoutDetector:
     def _ocr_section_labels(self, img) -> dict[str, tuple[float, float]]:
         """Run full-image OCR, return {slot_name: (center_x, center_y)} for each found label.
 
+        Cached on pixel content for the same reason as the panel geometry: the
+        importer re-enters `detect()` once the pixel counts refine the ship
+        profile, and label positions do not depend on the profile. Measured at
+        6.1-6.9 s per call on a 2563x1841 screenshot, which was most of what
+        the second pass still cost.
+
         STO stacks multi-word labels vertically in narrow sidebars (e.g. "Fore" and
         "Weapons" on separate lines), so EasyOCR returns them as two fragments. A
         single word like "Weapons" fuzzy-matches to 'Aft Weapons' / 'Fore Weapons'
         and picks the first alphabetically → phantom 'Aft Weapons' detections.
         Merge vertically-stacked fragments (same cx, small cy gap) before matching.
         """
+        key = self._img_key(img)
+        if key in self._ocr_labels_cache:
+            return self._ocr_labels_cache[key]
+
         try:
             results = self._get_ocr().readtext(img)
         except Exception:
@@ -2547,6 +2559,7 @@ class LayoutDetector:
             if tlen > best_text_len.get(slot, -1):
                 labels[slot] = (cx, cy)
                 best_text_len[slot] = tlen
+        self._ocr_labels_cache[key] = labels
         return labels
 
     def _detect_via_full_scan(self, img: np.ndarray, build_type: str,
