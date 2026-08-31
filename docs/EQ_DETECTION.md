@@ -1,8 +1,8 @@
 # Equipment panel detection
 
 Production modules: `warp/recognition/eq_geometry.py` (panel geometry),
-`warp/recognition/layout_detector.py:2205` (`_detect_via_pixel_analysis` —
-row → slot labelling and bbox emission), `warp/warp_importer.py` (slot
+`warp/recognition/layout_detector.py` (`LayoutDetector._detect_via_pixel_analysis`
+— row → slot labelling and bbox emission), `warp/warp_importer.py` (slot
 profile). The detector locates the 6-cell × N-row equipment matrix on a
 SPACE / SPACE_MIXED screenshot, decides which slot each row is, and emits
 one bbox per slot the ship owns.
@@ -50,8 +50,8 @@ substituting for the other.
 
 ## 1. Panel geometry — `eq_geometry.detect_eq_geometry`
 
-`warp/recognition/eq_geometry.py:526`. Returns an `EQGeometry`
-(`eq_geometry.py:205`) or `None` when OCR yields no usable labels.
+`detect_eq_geometry` in `warp/recognition/eq_geometry.py`. Returns an `EQGeometry`
+(`EQGeometry` in `eq_geometry.py`) or `None` when OCR yields no usable labels.
 
 | Field | Meaning |
 |---|---|
@@ -64,21 +64,21 @@ substituting for the other.
 | `mode` | `v8` when the right edge landed on real icons, else `MATH_FALLBACK` |
 
 The module docstring carries the full step list and the derivation of
-`DX_RATIO = 0.725` (`eq_geometry.py:73`). Two steps matter for correctness
+`DX_RATIO = 0.725` in `eq_geometry.py`. Two steps matter for correctness
 beyond what the code states:
 
 ### Every keyword hit survives to the column filter
 
-`_collect_single_hits` (`eq_geometry.py:364`) returns **all** single-line
+`_collect_single_hits` (`eq_geometry.py`) returns **all** single-line
 keyword hits, including several for the same row name. `_cluster_by_x1`
-(`eq_geometry.py:417`, tolerance `X_CLUSTER_TOL = 30`) then keeps the
+(`_cluster_by_x1` in `eq_geometry.py`, tolerance `X_CLUSTER_TOL = 30`) then keeps the
 largest x-cluster as the label column, which is what discards off-panel
 text.
 
 Collapsing to one hit per row name *before* that filter violates **EQ-3**
 and loses rows outright. Observed failure: the tooltip word `Field`
 fuzzy-matches the `Shields` keyword at 0.727, above `_FUZZY_CUTOFF = 0.65`
-(`eq_geometry.py:195`). Both it and the real `Shields` label read at OCR
+(`_FUZZY_CUTOFF` in `eq_geometry.py`). Both it and the real `Shields` label read at OCR
 confidence 1.00, so a confidence-ranked collapse kept whichever came first
 in OCR order — the tooltip — and the column filter then dropped that as
 off-panel. The Shields row ended with no anchor at all.
@@ -89,7 +89,7 @@ for another on noisy OCR, while the geometry already carries the answer.
 ### Duplicate canonical indices
 
 When two hits in the label column map to the same canonical index
-(`STD_ORDER`, `eq_geometry.py:82`), `detect_eq_geometry` averages their
+(`STD_ORDER` in `eq_geometry.py`), `detect_eq_geometry` averages their
 `cy` only if they are co-located — no further apart than the taller
 label's own height. Further apart they are different rows, and averaging
 would place the row where no row exists; the more confident hit wins
@@ -97,7 +97,7 @@ instead.
 
 ## 2. Row → slot labelling — `_detect_via_pixel_analysis`
 
-`warp/recognition/layout_detector.py:2205`.
+`LayoutDetector._detect_via_pixel_analysis` in `warp/recognition/layout_detector.py`.
 
 ```
 for each cy in geom.row_cys:
@@ -110,37 +110,38 @@ for each cy in geom.row_cys:
     emit `count` bboxes right-to-left from panel_right
 ```
 
-- `cy_to_slot` (`layout_detector.py:2234`) is built from
+- `cy_to_slot` (`layout_detector.py`) is built from
   `geom.eq_label_cys` through `_STD_IDX_TO_PROD_SLOT`
-  (`layout_detector.py:43`), which maps the geometry module's canonical
+  (`layout_detector.py`), which maps the geometry module's canonical
   names to production slot names (`Shields` → `Shield`).
-- `extended_order` (`layout_detector.py:2252`) starts from
-  `SPACE_SLOT_ORDER_STANDARD` (`layout_detector.py:57`), drops slots the
+- `extended_order` (`layout_detector.py`) starts from
+  `SPACE_SLOT_ORDER_STANDARD` (`layout_detector.py`), drops slots the
   profile counts as 0, and inserts optional ones (`Sec-Def` after
   `Deflector`; `Experimental` / `Hangars` after `Aft Weapons`).
-- The collision guard (`layout_detector.py:2285`) enforces **EQ-1**.
+- The collision guard (`LayoutDetector._detect_via_pixel_analysis` in `layout_detector.py`) enforces **EQ-1**.
   Without it, `result[slot_name] = bboxes` replaced an OCR-anchored row's
   bboxes with a guessed row's, and the anchored row was left with nothing
   to confirm.
 
-`self.last_row_pixel_counts` (`layout_detector.py:379`, reset at
-`:467`, written at `:2296`) records what `_count_icons_in_row`
-(`layout_detector.py:2136`) measured per row. It is written **before** the
+`self.last_row_pixel_counts` (`layout_detector.py`, reset at
+reset in `LayoutDetector.detect`, written in `_detect_via_pixel_analysis`)
+records what `_count_icons_in_row`
+(`LayoutDetector._count_icons_in_row` in `layout_detector.py`) measured per row. It is written **before** the
 profile decides what to emit, so rows the profile counts as 0 — and
 therefore skips — still leave their measurement behind. That is the input
 to §4.
 
 ## 3. Slot profile — `ShipDB._entry_to_profile`
 
-`warp/warp_importer.py:1133`, then `_apply_ship_and_tier_bonuses`
-(`warp_importer.py:674`).
+`ShipDB.resolve` in `warp/warp_importer.py`, then `_apply_ship_and_tier_bonuses`
+(`_apply_ship_and_tier_bonuses` in `warp_importer.py`).
 
 Cargo stores slot fields as **strings**, so truthiness tests are wrong on
 them: `bool('0')` is `True`. That gave 652 of 797 ships a phantom
 `Sec-Def` and 568 a phantom `Experimental`. The phantom shifted
 `extended_order` by one position, so every row below `Deflector` whose
 label OCR missed took the name of the row above it. Slot presence now goes
-through the same `_int()` conversion as every other count, and profile
+through the same `_int` conversion as every other count, and profile
 totals match cargo exactly (145 `Sec-Def`, 229 `Experimental`).
 
 Bonuses applied on top of the cargo entry:
@@ -161,7 +162,7 @@ applied, and `Universal Consoles` falls to 0. A row counted as 0 is skipped
 entirely (§2), so the slot disappears from the output rather than appearing
 empty; `Devices` and `Starship Traits` come up short by as much as 2.
 
-`_infer_x_bonus` (`warp_importer.py:605`) recovers the upgrade level from
+`_infer_x_bonus` (`warp_importer.py`) recovers the upgrade level from
 three measurements the same run already produced:
 
 | Evidence | Source |
@@ -189,13 +190,13 @@ Evidence outside `0..2` is discarded rather than clamped: the game grants
 at most +2, so a larger reading means the measurement is wrong and must not
 size a row.
 
-`_compose_inferred_tier` (`warp_importer.py:648`) turns the level into a
+`_compose_inferred_tier` (`warp_importer.py`) turns the level into a
 tier string. Slot evidence measures the **upgrade**, not the tier — `T5-X2`
 and `T6-X2` both grant +2 — so the base number comes from cargo's `tier`
 field, which is populated for all 797 ships. The result is validated
-against `SHIP_TIER_VALUES` (`warp/recognition/text_extractor.py:96`).
+against `SHIP_TIER_VALUES` (`warp/recognition/text_extractor.py`).
 
-The call site (`warp_importer.py:1910`) runs only when OCR found no tier at
+The call site (`WarpImporter._process_image` in `warp_importer.py`) runs only when OCR found no tier at
 all, only for `SPACE` / `SPACE_MIXED`, and re-runs detection so the
 recovered rows get bboxes. A tier OCR did read stays authoritative.
 
@@ -206,7 +207,7 @@ assert their absence, and `_compose_inferred_tier` returns `''` for 0 so no
 tier is claimed.
 
 Downstream, the recovered tier is indistinguishable from a read one
-(`ImportResult.ship_tier`, so `warp/build_writer.py:211` stops writing a
+(`ImportResult.ship_tier`, so `_apply_alien_species` in `warp/build_writer.py` stops writing a
 plain `T6` for an upgraded ship). The one difference is
 `RecognisedItem.src == 'inferred'`, which the trainer renders as an
 `Inferred` row status — see the user manual,
@@ -217,10 +218,10 @@ plain `T6` for an upgraded ship). The one difference is
 | Symptom in logs | Cause | Where to look |
 |---|---|---|
 | `row N [Slot] … kept 0 within grid` absent for a visible row | `profile[slot] == 0`; row skipped before any bbox is projected | §3, §4 |
-| `positional guess 'X' already anchored by OCR on another row` | OCR missed a label; the guess collided. Row left unlabelled by design | `layout_detector.py:2285` |
+| `positional guess 'X' already anchored by OCR on another row` | OCR missed a label; the guess collided. Row left unlabelled by design | `LayoutDetector._detect_via_pixel_analysis` |
 | `pixel_count=N profile=M` with `N > M` | profile under-counts — usually a missing tier bonus | §4 |
-| Two slots emitted on one row cy | pre-`EQ-1` regression | `layout_detector.py:2285` |
-| `mode=MATH_FALLBACK` | no single-slot icon right edge found; `panel_right` extrapolated | `eq_geometry.py:526` |
+| Two slots emitted on one row cy | pre-`EQ-1` regression | `LayoutDetector._detect_via_pixel_analysis` |
+| `mode=MATH_FALLBACK` | no single-slot icon right edge found; `panel_right` extrapolated | `detect_eq_geometry` |
 
 ## Measured baseline
 

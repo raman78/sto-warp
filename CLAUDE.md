@@ -48,6 +48,19 @@ English.
 4. Make every task and code change you do as simple as possible yet not naive. We want to avoid making any massive or complex changes. Every change should impact as little code as possible. Everything is about simplicity.
 5. Maintain a documentation file that describes how the architecture of the app works inside and out.
 6. Maintain documentation files in the project. Recognize which are technical and which are more human-readable (manual, program description, readme).
+6a. Docs are checked against the **running program**, not the source. Describe
+    the process, the idea behind it, and the logic each step follows, so a
+    reader can predict what WARP will do and confirm it by using it. `docs/`
+    is technical (technologies chosen and why); `README.md` / `MANUAL.md` are
+    plain prose. Code is the reader's last resort, for when behaviour and doc
+    disagree.
+6b. **No line numbers in documentation** — not `warp_importer.py:927`, not
+    `` `:155` ``. Name the construct (`ShipDB.get_profile`,
+    `_COL_PAD_ANCHOR_CAP`); for an unnamed block quote its section comment
+    (`# ── Anchor 1c: tier badge split ──`). Measured 2026-08-31: 27% of the
+    line references in `docs/` pointed at the wrong construct. A stale name
+    fails loudly under grep; a stale line number lands on plausible code and
+    misleads silently.
 7. Never speculate about code you have not opened. If the user references a specific file, you MUST read the file before answering. Make sure to investigate and read relevant files BEFORE answering questions about the codebase. Never make any claims about code before investigating unless you are certain of the correct answer — give grounded and hallucination-free answers.
 8. Never use workarounds. Especially never change existing code just to fix your freshly made problem. Only recent changes are supposed to be fixed. If situation requires fixing existing code it requires user one-time approval.
 9. NEVER EVER USE -Force or -f (force attribute) in terminal commands. It is strictly forbidden! If there is no other way you NEED to ask the user to run the command in terminal themselves providing justification.

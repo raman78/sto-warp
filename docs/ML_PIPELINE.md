@@ -42,8 +42,8 @@ OCR text (any lang)  ──►  ui_translations.py  ──►  English canonical
 | Translation CSV | `warp/data/ui_translations.csv` | Admin-editable table. Each row maps `(category, canonical_en, language, translation)`. Categories: `space_slot`, `ground_slot`, `eq_word_single`, `eq_word_first`, `eq_word_second`, `screen_header`, `spec_name`, `ship_type_word`. |
 | Translation loader | `warp/recognition/ui_translations.py` | Parses the CSV once on first access. Exposes `normalize_map()`, `synonyms()`, `augment_substring_phrases()`, `translate_ship_type()`, `ocr_languages()`. |
 | EasyOCR language list | `ui_translations.ocr_languages()` | Derived from CSV contents — language codes in the CSV automatically add to the EasyOCR reader's language list (e.g. `['en', 'de']`). |
-| Ship-type translation | `text_extractor.py:1036` | After OCR reads a ship type, `translate_ship_type()` splits the string on hyphens/spaces and replaces each token using the `ship_type_word` category (longest match first, up to 3-token phrases). |
-| Screen-type detection | `text_extractor.py:149` | `_TRAIT_SPACE_HEADERS`, `_SPACE_EQ_LABELS` and similar tuples are expanded via `augment_substring_phrases()` so localized header text triggers the same screen-type classification. |
+| Ship-type translation | `TextExtractor.extract_ship_info` | After OCR reads a ship type, `translate_ship_type()` splits the string on hyphens/spaces and replaces each token using the `ship_type_word` category (longest match first, up to 3-token phrases). |
+| Screen-type detection | `_fuzzy_tier` | `_TRAIT_SPACE_HEADERS`, `_SPACE_EQ_LABELS` and similar tuples are expanded via `augment_substring_phrases()` so localized header text triggers the same screen-type classification. |
 
 To add a language: append rows to the CSV with the appropriate ISO 639-1
 code. No Python edits needed. German (`de`) is the first supported
@@ -285,7 +285,7 @@ allows them through its poison filter (see
 filter's current policy); the central trainer treats them as ordinary
 classes.
 
-The pHash override path in `icon_matcher.py:48` independently suppresses
+The pHash override path in `VIRTUAL_OVERRIDE_CONF` in `icon_matcher.py` independently suppresses
 virtual names (`name.startswith('__') → suppress=True`), so even if the
 k-NN returns `__inactive__`, it is never written to `knowledge.json` as a
 hard override. The gallery classes are defensive — they exist so the

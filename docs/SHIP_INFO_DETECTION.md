@@ -1,10 +1,10 @@
 # Ship info detection
 
 Production module: `warp/recognition/text_extractor.py`, entry point
-`TextExtractor.extract_ship_info` (`warp/recognition/text_extractor.py:508`).
+`TextExtractor.extract_ship_info` (`warp/recognition/text_extractor.py`).
 It reads three fields off the top band of a space screenshot — ship **name**,
 ship **class** (called `ship_type` throughout the code) and **tier** — plus a
-bounding box for each. `ShipDB.resolve` (`warp/warp_importer.py:1126`) then
+bounding box for each. `ShipDB.resolve` (`warp/warp_importer.py`) then
 turns the OCR'd class string into a canonical entry from the ship database,
 which decides the slot profile for the whole build.
 
@@ -26,8 +26,8 @@ The ship-info block has no fixed position: UI scale, resolution and window
 mode all move it, and on a merged (`SPACE_MIXED`) screenshot it shares the top
 band with the traits panel legend, the active-duty header and whatever tooltip
 was open at capture time. Cropping a fixed ROI is therefore unreliable —
-`SHIP_INFO_ROI` (`:148`) exists but is only used by the re-OCR fallback in
-`refine_ship_info` (`:1288`).
+`SHIP_INFO_ROI` exists but is only used by the re-OCR fallback in
+`refine_ship_info`.
 
 Instead the extractor finds one token it can trust (the **anchor**) and reads
 the rest of the block relative to it. Everything downstream — which tokens may
@@ -39,16 +39,18 @@ against that anchor.
 - **S1** — A `ship_*_bbox` is the union of exactly the tokens that went into
   the corresponding string. Nothing is added for padding, nothing is dropped.
   A bbox that spans emptiness therefore means the string is wrong too.
-- **S2** — The bboxes are consumed, not merely displayed: `warp_importer.py:2087`
-  emits `Ship Type` and `Ship Tier` as review items with those bboxes, the
-  trainer uploads the corresponding image strips as text crops
-  (`warp/trainer/sync.py:117`), and `refine_ship_info` re-OCRs from them. A
-  wrong bbox is a wrong training sample, not just a cosmetic defect.
-- **S3** — `Ship Name` is anchor-internal. It is never emitted as a slot
-  (`warp_importer.py:2083`), because it identifies the player, not the build.
+- **S2** — The bboxes are consumed, not merely displayed. The meta-slot
+  block at the end of `WarpImporter._process_image` emits `Ship Type` and
+  `Ship Tier` as review items carrying them, the trainer uploads the
+  matching image strips as text crops (`_TEXT_CROP_PREFIXES` in
+  `warp/trainer/sync.py`), and `refine_ship_info` re-OCRs from them. A wrong
+  bbox is a wrong training sample, not just a cosmetic defect.
+- **S3** — `Ship Name` is anchor-internal. It is never emitted as a slot —
+  the comment guarding that same block says why — because it identifies the
+  player, not the build.
 - **S4** — A non-empty `ShipResolution.type` does **not** mean the class was
   recognised. When nothing matched, the OCR string is echoed back;
-  `ShipResolution.matched` (`warp_importer.py:1344`) is the only honest signal.
+  `ShipResolution.matched` is the only honest signal.
 
 ## 1. Anchor strategies
 
@@ -56,16 +58,17 @@ Four passes, tried in order, all inside `extract_ship_info`. The first three
 look for a tier badge and share the `tier` anchor kind; the fourth falls back
 to the ship-name line:
 
-| Pass | Trigger | Anchor token | At |
+| Pass | Trigger | Anchor token | Section comment |
 |---|---|---|---|
-| 1 — loose | `RE_TIER_LOOSE` matches, or one token holds a snappable `[...]` | the token carrying it | `:674` |
-| 1b — fused | A whole `Name [TB-X2]` line came back as one token | that token | `:724` |
-| 1c — split | Two or three x-adjacent tokens in one row **join** into a closed `[...]` that snaps | a synthetic token spanning the fragments | `:758` |
-| 2 — name | A token that looks like a ship-name line, per `_is_name_prefix_token` (`:62`) | that token | `:854` |
+| 1 — loose | `RE_TIER_LOOSE` matches, or one token holds a snappable `[...]` | the token carrying it | `Anchor 1` |
+| 1b — fused | A whole `Name [TB-X2]` line came back as one token | that token | `Anchor 1b` |
+| 1c — split | Two or three x-adjacent tokens in one row **join** into a closed `[...]` that snaps | a synthetic token spanning the fragments | `Anchor 1c` |
+| 2 — name | A token that looks like a ship-name line, per `_is_name_prefix_token` | that token | `Anchor 2` |
 
 With a tier anchor the class is assembled from the tier row, or from the row
 above when that row held nothing; with a name anchor, from the row below the
-name. No anchor means no ship info at all (`:1118`) — the extractor emits
+name. No anchor means no ship info at all — the log says
+`TextExtractor: no anchor, ship info unset` — and the extractor emits
 `anchorless_candidates` instead and `ShipDB.find_class_by_candidates_ex` gets
 a last-resort attempt.
 
@@ -82,7 +85,7 @@ corpus, 48 screenshots have a `ship_name` with no `U.S.S.`-style prefix.
 
 The HUD stacks name / class / registry in one left-aligned column, so the
 extractor only accepts tokens inside a horizontal band around the anchor
-(`:892`):
+computed inside `extract_ship_info`:
 
 ```python
 # warp/recognition/text_extractor.py
@@ -91,7 +94,7 @@ col_lo  = anchor_x - col_pad
 col_hi  = anchor_x + anchor_w + col_pad
 ```
 
-`_COL_PAD_ANCHOR_CAP = 150` (`:155`) is the part worth explaining. The pad used
+`_COL_PAD_ANCHOR_CAP = 150` is the part worth explaining. The pad used
 to be `anchor_w * 2.0` uncapped, which is fine while the anchor is a short
 `U.S.S.` token (~80 px → ±160 px) but collapses when OCR returns a whole class
 line as one token:
@@ -112,9 +115,9 @@ cap costs nothing (see [Measured baseline](#measured-baseline)).
 
 | Step | Function | Rule |
 |---|---|---|
-| Same row | `_adjacent_left_of` (`:959`) | tokens left of the tier token, contiguous in x; stops at a gap > `max(40, 4 × token height)`. A token may overrun the anchor's left edge by `_LEFT_OVERLAP_RATIO × anchor height` (`:170`) and still count — EasyOCR boxes for neighbouring glyph runs overlap |
-| Row above | `_row_to_type` (`:942`) | whole row, **only when the tier's own row yielded nothing**, and if it is in the column, is not a name row, and holds no ALL-CAPS proper noun |
-| Token filter | `_valid_type_tok` (`:918`) | `_valid_type_tok_nearby` (`:902`) — length > 2, not in `_HUD_BLACKLIST` (`:85`), not a section header, not a registry number — **plus** inside the column |
+| Same row | `_adjacent_left_of` | tokens left of the tier token, contiguous in x; stops at a gap > `max(40, 4 × token height)`. A token may overrun the anchor's left edge by `_LEFT_OVERLAP_RATIO × anchor height` and still count — EasyOCR boxes for neighbouring glyph runs overlap |
+| Row above | `_row_to_type` | whole row, **only when the tier's own row yielded nothing**, and if it is in the column, is not a name row, and holds no ALL-CAPS proper noun |
+| Token filter | `_valid_type_tok` | `_valid_type_tok_nearby` — length > 2, not in `_HUD_BLACKLIST`, not a section header, not a registry number — **plus** inside the column |
 
 `_adjacent_left_of` calls `_valid_type_tok_nearby`, i.e. it deliberately skips
 the column window. The window rejects text that shares the anchor's y-band but
@@ -130,7 +133,7 @@ which is how `Kit Modules` and `Starship Selection Dry Dock` survive as
 `ShipDB.resolve` runs a ladder of strategies and promotes the canonical class
 string from the DB over the OCR string whenever a real entry was found. The
 strategy that won is reported in `last_match_strategy`
-(`warp_importer.py:800`-`961`), in the order tried:
+— all of it inside `ShipDB.get_profile` — in the order tried:
 
 | # | Strategy | Index it searches | Identifies |
 |---|---|---|---|
@@ -183,7 +186,7 @@ class reads correctly *not* attributed to a ship.
 
 ### Confidence reflects which column won
 
-`ship_type_confidence` (`warp_importer.py:1378`) grades the emitted `Ship Type`
+`ship_type_confidence` grades the emitted `Ship Type`
 item by strategy: 1.0 when a ship was identified, 0.45 when only the class
 was, 0.30 when nothing matched. WARP CORE's auto-accept threshold is
 user-settable between 0.50 and 1.00, so the two low bands can never be
@@ -202,7 +205,7 @@ overstates its errors.
 | `type='<junk> <real class>'` | a token from another panel entered the column | `_valid_type_tok` / column window, §2 |
 | `ship_type_bbox` far wider than the class line | same cause — the bbox is the union of what got in (S1) | §2 |
 | `ship_type_bbox` *narrower* than the class line, `Ship Tier` sharing it | no anchor fired, so the box is one rescue token and the tier borrowed it | §1 pass 1c, and `no anchor` in the log |
-| `[name anchor]` on a screen with no ship | `RE_NAME_PREFIX` (`:39`) matches a plain word: dots are optional and the separator class accepts a space, so `Die E` matches | §Open questions, item 2 |
+| `[name anchor]` on a screen with no ship | `RE_NAME_PREFIX` matches a plain word: dots are optional and the separator class accepts a space, so `Die E` matches | §Open questions, item 2 |
 | `no anchor, ship info unset` | no tier bracket and no name-shaped token | expected on ground/BOFF/skills screens |
 | Class resolves to a different ship of the same family | fuzzy lookup fed a polluted string | §4, and `last_match_strategy` in the log |
 
@@ -227,7 +230,7 @@ remainder are genuinely long class names (41–48 %) plus `doff.png`.
 
 ### Decision 2026-08-26: the tier tiebreaker is confined to equal-length candidates
 
-**Change.** `_fuzzy_tier` (`warp/recognition/text_extractor.py:102`) picks the
+**Change.** `_fuzzy_tier` picks the
 canonical tier with the highest list index among candidates scoring within
 0.10 of the best ratio. That pool is now filtered to candidates of the **same
 length as the OCR token**, falling back to the unfiltered pool when nothing
@@ -246,7 +249,7 @@ the `-X2` variants entered the pool and "prefer higher" promoted the token two
 steps to `T6-X2`.
 
 The cost is not cosmetic. `_apply_ship_and_tier_bonuses`
-(`warp/warp_importer.py:665`) grants +1 Universal Console, Device and Starship
+grants +1 Universal Console, Device and Starship
 Trait for `-X`, +2 for `-X2`, so the layout asked for rows the ship does not
 have — measured on that screenshot, 2 Universal Consoles where the pixels
 showed 1, and 5 Devices where they showed 4. Under `T6-X` the profile matches
@@ -381,7 +384,7 @@ more than silent clamping, since the bbox also feeds crops (S2).
 
 ### Decision 2026-08-30: a tier badge cut in half is still a tier badge
 
-**Change.** Anchor pass 1c (`warp/recognition/text_extractor.py:758`) re-joins
+**Change.** Anchor pass 1c re-joins
 runs of two or three x-adjacent tokens in one OCR row and re-tests the result
 for a closed `[...]` that `_fuzzy_tier` can snap. Two supporting changes make
 the class line come out right once the badge anchors: `_adjacent_left_of` no
@@ -402,7 +405,8 @@ digit, so `RE_TIER_LOOSE` saw nothing either. The screenshot fell through to
 the anchorless path, where `ship_type` became whichever single token won the
 ShipDB lookup — `ship_type_bbox` was `(103, 37, 220, 18)`, missing `Terran` and
 the whole badge — and `Ship Tier`, having no box of its own, borrowed that same
-wrong one (`warp_importer.py:2014`). Joined, `'[Te-' + 'X2]'` → `'[Te-X2]'` →
+wrong one — see the `no badge on screen` comment in `_infer_x_bonus`'s
+caller. Joined, `'[Te-' + 'X2]'` → `'[Te-X2]'` →
 `T6-X2`, boxed at `(318, 30, 65, 25)`.
 
 **Shortest run wins.** Sweeping by start index instead lets a long class-name

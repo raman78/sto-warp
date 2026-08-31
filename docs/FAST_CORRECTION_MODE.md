@@ -234,7 +234,7 @@ Two problems existed prior to 1.0.18 around near-overlapping bounding boxes
 
 ### Fix 1 — IoU-based dedup in `add_annotation`
 
-`_bbox_iou()` (`warp/trainer/training_data.py:82`) computes
+`_bbox_iou` in `warp/trainer/training_data.py` computes
 Intersection-over-Union for two `(x, y, w, h)` tuples. Step 2 of
 `add_annotation()` (line 329) now:
 
@@ -248,7 +248,7 @@ Intersection-over-Union for two `(x, y, w, h)` tuples. Step 2 of
 
 ### Fix 2 — disk removal for pending items
 
-`WarpCoreWindow._on_remove_item()` (`warp/trainer/trainer_window.py:2371`)
+`WarpCoreWindow._on_remove_item()` (`WarpCoreWindow._populate_review_item` in `warp/trainer/trainer_window.py`)
 now runs the disk-removal block unconditionally (not gated behind
 `state == 'confirmed'`). It searches disk annotations with the same
 IoU fallback (exact match first, then IoU ≥ 0.5) so a shifted bbox

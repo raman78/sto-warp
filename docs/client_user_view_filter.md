@@ -86,19 +86,19 @@ filter MUSI zatrzymać go na tym poziomie.
 
 | Plik:linia | Co robi |
 |---|---|
-| `warp_importer.py:58` | `VIRTUAL_ITEM_NAMES = frozenset({'__empty__', '__inactive__'})` |
+| `VIRTUAL_ITEM_NAMES` | `VIRTUAL_ITEM_NAMES = frozenset({'__empty__', '__inactive__'})` |
 | `warp_importer.py:182-184` | Confidence weighting: virtual przy low-conf liczy się jako 0.5× — depriorytetyzacja |
-| `warp_importer.py:2073` | Mapping `cell_state` ('empty'/'inactive') → vname (`__empty__`/`__inactive__`) — translation layer |
-| `warp_importer.py:2261` | `if name not in ('__empty__', '__inactive__')` — skip virtual w jakiejś agregacji |
+| `WarpImporter._process_image` | Mapping `cell_state` ('empty'/'inactive') → vname (`__empty__`/`__inactive__`) — translation layer |
+| `WarpImporter._process_image` | `if name not in ('__empty__', '__inactive__')` — skip virtual w jakiejś agregacji |
 | `warp_importer.py:2576-2598` | BOFF profession resolution: virtual → seat's typed profession (label transform) |
-| `warp_importer.py:2968` | `names_set.update(VIRTUAL_ITEM_NAMES)` — virtual jako legalne w kontekście możliwych nazw |
-| `warp_importer.py:2979` | `if item_name in VIRTUAL_ITEM_NAMES: ...` — handling virtual w slot |
-| `build_writer.py:39` | `VIRTUAL_ITEM_NAMES = frozenset({'__empty__', '__inactive__'})` |
-| `build_writer.py:231` | `if not ri.name or ri.name in VIRTUAL_ITEM_NAMES: continue` — SKIP zapis do build |
-| `build_writer.py:455` | Count „active" slots: `if ri.name and ri.name not in VIRTUAL_ITEM_NAMES` |
-| `build_writer.py:573` | BOFF slot handling: virtual = empty slot dla rank check |
+| `WarpImporter._remap_boff_seat_slots` | `names_set.update(VIRTUAL_ITEM_NAMES)` — virtual jako legalne w kontekście możliwych nazw |
+| `WarpImporter._remap_boff_seat_slots` | `if item_name in VIRTUAL_ITEM_NAMES: ...` — handling virtual w slot |
+| `VIRTUAL_ITEM_NAMES` | `VIRTUAL_ITEM_NAMES = frozenset({'__empty__', '__inactive__'})` |
+| `_apply_alien_species` | `if not ri.name or ri.name in VIRTUAL_ITEM_NAMES: continue` — SKIP zapis do build |
+| `_write_seat_specs` | Count „active" slots: `if ri.name and ri.name not in VIRTUAL_ITEM_NAMES` |
+| `_match_clusters_to_seats` | BOFF slot handling: virtual = empty slot dla rank check |
 
-**Kluczowy:** `build_writer.py:231` — to jest **ostateczny filter dla build
+**Kluczowy:** `_apply_alien_species` in `build_writer.py` — to jest **ostateczny filter dla build
 output**. Virtual nigdy nie trafia jako nazwa itemu do build planner.
 
 ### 2.4 TRAINER UI RENDER — `trainer/trainer_window.py`
@@ -149,7 +149,7 @@ Linie 417, 2212, 2890: handle `__empty__` jako expected outcome (informational).
 
 Ten filter NIE chroni usera; chroni `knowledge.json` przed virtual hard-override.
 Po **D-A.1** chcemy żeby `__*` mogło trafić do `knowledge.json` jako legalne,
-a Stage 0 (`icon_matcher.py:244`) ma **defense-in-depth** który je tam i tak
+a Stage 0 (`SETSIconMatcher.__init__` in `icon_matcher.py`) ma **defense-in-depth** który je tam i tak
 odrzuci jako hard-override. Zatem `sync_client.py:434-436` jest **redundantny**.
 
 ### 2.8 SCRUB / CONFLICT REVIEW TOOLS — maintainer tools
@@ -173,13 +173,13 @@ Te tools są **maintainer-only**, nie wpływają na user view runtime.
    — trzy reguły suppress virtual w final recognition result.
 3. **Seed poison guard** (`icon_matcher.py:907, 996`)
    — chroni session pool przed self-match na poisoned crops.
-4. **`_thumb_for_name` None dla virtual** (`icon_matcher.py:404`)
+4. **`_thumb_for_name` None dla virtual** (`SETSIconMatcher.match` in `icon_matcher.py`)
    — UI nie pokazuje thumbnail virtual.
 5. **`build_writer.py:231, 455, 573`**
    — virtual nie ląduje w build planner.
 6. **`warp_importer.py:182, 2576-2598`**
    — confidence weighting + BOFF profession resolution.
-7. **`boff_keys.py:190`**
+7. **`_seat_label_from_items` in `boff_keys.py`**
    — BOFF ability sheet pomija virtual.
 8. **Trainer UI render** (`trainer_window.py:1998-2019`)
    — human-friendly '[empty slot]' zamiast `__empty__`.
@@ -187,9 +187,9 @@ Te tools są **maintainer-only**, nie wpływają na user view runtime.
 **Filtry NIE-USER-VIEW** (do likwidacji per D-B.3 lub legalnie internal):
 
 - `sync_client.py:434-436` — input filter dla knowledge contribution, redundantny.
-- `trainer/training_data.py:88`, `trainer/embedder_trainer.py:102` — ML training data, virtual LEGALNE per D-A.1.
+- `_bbox_iou` in `trainer/training_data.py`, `_load_real_crops` in `trainer/embedder_trainer.py` — ML training data, virtual LEGALNE per D-A.1.
 - `layout_detector.py:288, 305, 2436` — PRODUKCJA `__boff_*` labels, internal.
-- `tools/scrub_training_data.py`, `tools/conflict_reviewer.py` — maintainer-only.
+- `warp/tools/scrub_training_data.py`, `warp/tools/conflict_reviewer.py` — maintainer-only.
 
 ---
 
@@ -198,7 +198,7 @@ Te tools są **maintainer-only**, nie wpływają na user view runtime.
 | # | Decyzja | Notatka |
 |---|---------|---------|
 | Z5-C.1 | **Wielowarstwowa obrona Z5 od strony wyjścia istnieje i jest wystarczająca.** 8 punktów filtra wymienionych w §3 zapewnia że żaden `__*` nie dotrze do build plannera (build_writer.py:231), thumbnail UI (icon_matcher.py:404), BOFF sheet (boff_keys.py:190) ani recognition result na real-looking icon (icon_matcher.py:321-356 anti-virtual-bias). | Z5 zamknięte od wyjścia. |
-| Z5-C.2 | **`sync_client.py:434-436` może być bezpiecznie zakomentowany (D-B.3).** Defense-in-depth Stage 0 (`icon_matcher.py:244`) złapie `__*` z `knowledge.json` jako hard-override suppression — nawet jeśli backend wpisze tam virtual. Redundancja jest zamierzona (D-A.1 spec). | Odblokowanie D-B.3. |
+| Z5-C.2 | **`sync_client.py:434-436` może być bezpiecznie zakomentowany (D-B.3).** Defense-in-depth Stage 0 (`SETSIconMatcher.__init__`) złapie `__*` z `knowledge.json` jako hard-override suppression — nawet jeśli backend wpisze tam virtual. Redundancja jest zamierzona (D-A.1 spec). | Odblokowanie D-B.3. |
 | Z5-C.3 | **Komentowanie filtra w `sync_client.py` musi być symetryczne z komentowaniem w backendzie (D-A.1 + D-G.1).** Nie wolno wyłączyć tylko jednego — albo oba (klient + backend), albo żaden. Rollback jednoczesny. | Spójność rollback. |
 | Z5-C.4 | **Anti-virtual-bias thresholds nie powinny być modyfikowane bez evidence z combat testów.** VIRTUAL_OVERRIDE_CONF=0.40, POISON_GUARD_ML_MIN=0.15, SESSION_PIXEL_PERFECT=0.95, VIRTUAL_SEED_BRIGHT_RATIO=0.15, VIRTUAL_SEED_RICH_RATIO=0.15 — kalibrowane na tactical-console / Kentari-launcher (icon_matcher.py:55). VIRTUAL_SEED_* podniesione z 0.07 → 0.15 dnia 2026-07-17 po wizualnym przeglądzie 20 community-mirror crops (`dev/diag_view_community_poison.py`): genuine empty/inactive BOFF slots sięgają ~12% bright/rich, realne mislabeled icons ≥ 19%. Wszelka zmiana wymaga re-kalibracji. | Frozen calibration. |
 | Z5-C.5 | **Trainer UI '[empty slot]' / '[inactive slot]' render zostaje.** To jest UX, nie filter. User MUSI widzieć i móc oznaczać empty/inactive — bez tego brak labeling-do-treningu klasy `__empty__`/`__inactive__`. | Nie ruszać. |
@@ -228,7 +228,7 @@ Następujące obszary celowo nie są w tym audycie:
 
 - **Anti-virtual-bias re-tuning** — frozen calibration per Z5-C.4.
 - **Recognition pipeline refactor** — Stage 0/1/2/3 architecture niezmienna.
-- **BOFF keys algorithm** — `_VIRTUAL_NAMES` filter w `boff_keys.py:190` zostaje.
+- **BOFF keys algorithm** — `_VIRTUAL_NAMES` filter w `_seat_label_from_items` in `boff_keys.py` zostaje.
 
 ---
 

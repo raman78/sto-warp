@@ -17,16 +17,16 @@ reads the frozen JSON.
 
 ## Why two artefacts
 
-`buildhelpers.empty_build()` gives the container skeleton but not the
+`buildhelpers.empty_build` gives the container skeleton but not the
 rules. Its own `boff_specs[5]` is `['Tactical', None]`, yet
-`BuildManager.load_boff_stations` (SETS `src/buildmanager.py:869`)
+`BuildManager.load_boff_stations` (SETS `src/buildmanager.py`)
 compares `boff_spec[1] == ''` and interpolates both entries into the seat
 label, so a `None` renders as the literal `"None"`. Rules like that live
 in SETS' *reading* code, which cannot be derived mechanically.
 
 The contract therefore also stores a sha256 of every SETS function whose
 behaviour `warp/sets_schema.py` reproduces (`CONSUMERS`,
-`tools/sets_contract.py:49`). A changed hash is not a failure by itself —
+`CONSUMERS` in `tools/sets_contract.py`). A changed hash is not a failure by itself —
 it is a prompt to re-read that function against the mirrored rule.
 
 ## Contract file
@@ -55,7 +55,7 @@ it is a prompt to re-read that function against the mirrored rule.
 `shape` records containers only; scalar leaves are omitted deliberately.
 A default of `''` says nothing about what a filled build carries — the
 `traits` list defaults to `''` entries but holds item dicts in practice.
-The generator lives in `warp/sets_schema.py:83` (`shape_of`) and
+The generator lives in `warp/sets_schema.py` (`shape_of`) and
 `tools/sets_contract.py` imports it, so the stored snapshot and the
 runtime check cannot diverge.
 
@@ -107,7 +107,7 @@ Two guards, in different places, because either alone lets the copies drift:
 
 ## Validation rules
 
-`validate_sets_build(build, cache=None)` (`warp/sets_schema.py:321`)
+`validate_sets_build(build, cache=None)` (`_check_boff_abilities` in `warp/sets_schema.py`)
 returns a list of `Violation(path, rule, expected, got, severity)`.
 
 | Severity | Meaning |
@@ -119,19 +119,19 @@ returns a list of `Violation(path, rule, expected, got, severity)`.
 |---|---|---|
 | `missing`, `shape` | every contract path present, same list length / key set | `merge_build` keeps the wrong-sized list; slots shift or vanish |
 | `build_version` | `_version` equals the contract's | `load_build_file` takes the migration branch |
-| `seat_profession`, `seat_specialisation` | `space.boff_specs[i]` is `[str, str]`, ground specs non-empty `str`, both specs from SETS' own vocabulary | seat label reads `"None / None"`; `ExportWindow.get_build_markdown` (`src/exportwindow.py:306`) guards with `if any(specs)` and drops the whole station; an unknown spec is worse than either — `load_boff_stations` hands it to `QComboBox.setCurrentText`, which a non-editable combo ignores in silence |
-| `slot_type`, `item_keys`, `item_name`, `rarity`, `modifiers` | equipment dicts carry `item`/`rarity`/`mark`/`modifiers`, rarity from SETS' six | `slot_equipment_item` does `getattr(overlays, rarity.lower()...)` (`src/buildmanager.py:726`) and raises on anything else |
+| `seat_profession`, `seat_specialisation` | `space.boff_specs[i]` is `[str, str]`, ground specs non-empty `str`, both specs from SETS' own vocabulary | seat label reads `"None / None"`; `ExportWindow.get_build_markdown` (`src/exportwindow.py`) guards with `if any(specs)` and drops the whole station; an unknown spec is worse than either — `load_boff_stations` hands it to `QComboBox.setCurrentText`, which a non-editable combo ignores in silence |
+| `slot_type`, `item_keys`, `item_name`, `rarity`, `modifiers` | equipment dicts carry `item`/`rarity`/`mark`/`modifiers`, rarity from SETS' six | `slot_equipment_item` does `getattr(overlays, rarity.lower...)` (`src/buildmanager.py`) and raises on anything else |
 | `trait_type` | trait slots are `None`, `''`, or `{'item': name}` | `slot_trait_item` raises on a missing `item` |
-| `ability_type`, `ability_name`, `ability_rank` | BOFF dicts carry a base name and a Roman rank | `load_boff_stations` indexes `boff_abilities['all'][item][rank]` (`src/buildmanager.py:878`) |
-| `unknown_item`, `unknown_trait`, `unknown_ability` | name exists in the matching cargo bucket | `remove_invalid_build_items` (`src/buildloader.py:257`) deletes it without a message |
+| `ability_type`, `ability_name`, `ability_rank` | BOFF dicts carry a base name and a Roman rank | `load_boff_stations` indexes `boff_abilities['all'][item][rank]` (`src/buildmanager.py`) |
+| `unknown_item`, `unknown_trait`, `unknown_ability` | name exists in the matching cargo bucket | `remove_invalid_build_items` (`src/buildloader.py`) deletes it without a message |
 | `not_in_sets` | the cargo row backing the name is not one SETS can read | SETS drops the entry — see below |
 | `rank_slot` | Roman rank matches the seat rank cargo says it unlocks at (`rank<N>rank`) | ability is rendered at a slot the game never offers it in |
 | `field_type`, `node_type` | captain fields and skill nodes have the right primitive types | wrong widget state on load |
-| `faction` | `captain.faction` is one SETS knows | `faction_combo_callback` indexes `SPECIES[faction]` outright (`src/buildmanager.py:1073`) — an unknown name raises while the build loads |
+| `faction` | `captain.faction` is one SETS knows | `faction_combo_callback` indexes `SPECIES[faction]` outright (`src/buildmanager.py`) — an unknown name raises while the build loads |
 | `species` | `captain.species` is offered by that faction, and a faction is set at all | the species dropdown is filled from the faction and `load_build` sets it with `setCurrentText`; a species the list does not hold is ignored in silence |
 | `alien_trait_slot` | an eleventh personal trait requires `captain.species == 'Alien'` | `load_build` hides `traits[10]` for every other species (`src/buildmanager.py:245-247`) — the trait stays in the file and disappears from the UI |
 
-Cargo rules run only when a `cache` (`warp.data.cargo.cache_view()`) is
+Cargo rules run only when a `cache` (`warp.data.cargo.cache_view`) is
 passed; the structural and value rules work without one.
 
 ### Invariants
@@ -140,12 +140,12 @@ passed; the structural and value rules work without one.
   with the identical token. Extra paths are legal: they are what a filled
   slot looks like.
 - **F2** — A violation never blocks the write. A user who asked for an
-  export gets a file (`warp/sets_export.py:109`).
+  export gets a file (`_normalise_boffs` in `warp/sets_export.py`).
 - **F3** — `WARP_STRICT_EXPORT=1` turns `error`-severity violations into
   a `ValueError` before the file is written. CI and bridges set it;
   interactive runs do not.
 - **F4** — Nothing leaves the machine automatically. `issue_url`
-  (`warp/sets_schema.py:357`) builds a link; the user submits the form.
+  (`_check_boff_abilities` in `warp/sets_schema.py`) builds a link; the user submits the form.
 
 ## Flow
 

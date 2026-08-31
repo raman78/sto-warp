@@ -244,7 +244,7 @@ correct label.
 
 The ML classifier's inactive/empty confusion (above) is bypassed
 entirely in production by a fast HSV heuristic that runs **before** icon
-matching.  `warp/warp_importer.py:2219` checks **every** projected cell —
+matching.  `WarpImporter._process_image` in `warp/warp_importer.py` checks **every** projected cell —
 BOFF seats, equipment rows, and trait slots alike:
 
 ```python
@@ -263,7 +263,7 @@ near-black background) and unequipped positions that `_detect_via_pixel_analysis
 projects from the ship profile count.
 
 `LayoutDetector._classify_cell(crop_bgr)`
-(`warp/recognition/layout_detector.py:2051`) samples the **inner 60%**
+(`LayoutDetector._detect_spec` in `warp/recognition/layout_detector.py`) samples the **inner 60%**
 of the crop (20% margin on each side to avoid border contamination) and
 computes four HSV statistics:
 
@@ -312,7 +312,7 @@ For BOFF cells classified as `active`, a debug-level log line emits the
 four HSV statistics (`mean_v`, `std_v`, `mean_s`, `mean_h`) so false
 negatives — inactive cells that slip through as active — can be
 diagnosed without modifying thresholds
-(`warp/warp_importer.py:2240`).
+(`WarpImporter._process_image` in `warp/warp_importer.py`).
 
 ## Visualisation
 
@@ -379,7 +379,7 @@ When wired into `warp/recognition/layout_detector.py`:
 
 ## Display ordering — `order_items_for_display`
 
-`warp/recognition/boff_keys.py:317` `order_items_for_display()` is the
+`order_items_for_display` in `warp/recognition/boff_keys.py` is the
 single source of truth for item ordering in both the WARP Results tree and
 the WARP CORE review panel. Items within each slot group are sorted by:
 
@@ -399,7 +399,7 @@ sort last.
 ### Parent reordering — `_resort_parents_canonical`
 
 `WarpCoreWindow._resort_parents_canonical()`
-(`warp/trainer/trainer_window.py:2871`) reorders tree parent rows after
+(`WarpCoreWindow.eventFilter` in `warp/trainer/trainer_window.py`) reorders tree parent rows after
 any structural change (manual bbox add, slot change, group type change).
 Without it a freshly created parent lands at the bottom of the tree
 (the adapter's `_get_or_create_parent` always appends).
@@ -426,7 +426,7 @@ coordinates.
 
 ## Universal seat profession vote
 
-`warp/warp_importer.py:2105` votes on the profession of Universal BOFF
+`WarpImporter._process_image` in `warp/warp_importer.py` votes on the profession of Universal BOFF
 seats by classifying each cell's border colour via
 `LayoutDetector._classify_boff_profession()`. The vote runs **before**
 the icon-matching loop, so `_classify_cell` has not yet run on these
@@ -435,14 +435,14 @@ vote — and since `_classify_boff_profession` classifies "no accent
 colour" as Science (the default), three inactive cells can outvote one
 real Tactical icon.
 
-Fix (`warp/warp_importer.py:2125`): each cell is passed through
+Fix (`WarpImporter._process_image` in `warp/warp_importer.py`): each cell is passed through
 `_classify_cell` inside the vote loop. Cells that return `'inactive'` or
 `'empty'` are skipped before `_classify_boff_profession` runs.
 
 ## BOFF group type change
 
 `WarpCoreWindow._show_review_context_menu()`
-(`warp/trainer/trainer_window.py:2304`) adds a right-click context menu
+(`WarpCoreWindow._slot_ordinal` in `warp/trainer/trainer_window.py`) adds a right-click context menu
 on BOFF group headers in the review tree. When the user picks a new type,
 `_change_boff_group_type()` (line 2341) runs:
 
@@ -478,14 +478,14 @@ right-click "Boff Science #2"
      + renumber sibling groups by position (see below)
 ```
 
-**Merge prevention** (`trainer_window.py:2422`). When the target label
+**Merge prevention** (`WarpCoreWindow` in `trainer_window.py`). When the target label
 already exists in `_slot_parents` (e.g. renaming Universal → Tactical
 while a Tactical group already exists), the reparent key gets a `#N`
 suffix instead of merging items into the existing group. This preserves
 the physical seat boundary — items from different marker-keyed seats
 remain in separate groups even when they share a profession label.
 
-**Sibling renumbering** (`trainer_window.py:2437`). When `old_label`
+**Sibling renumbering** (`WarpCoreWindow._show_review_context_menu` in `trainer_window.py`). When `old_label`
 matches `r'^(.+?)\s*#\d+$'`, the method scans `_slot_parents` for
 remaining siblings with the same base label. If exactly one survives, its
 `#N` suffix is stripped from:
@@ -501,7 +501,7 @@ Science" when the second Science seat is reclassified.
 ### Position-based renumbering in `_resort_parents_canonical`
 
 After sorting BOFF groups by children's min-Y position,
-`_resort_parents_canonical()` (`trainer_window.py:2959`) renumbers
+`_resort_parents_canonical()` (`WarpCoreWindow._on_remove_item` in `trainer_window.py`) renumbers
 sibling groups that share the same base name. Groups are enumerated in
 position order: the first gets the bare label (e.g. "Boff Tactical"),
 subsequent ones get `#2`, `#3`, etc.
