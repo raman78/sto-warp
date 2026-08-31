@@ -2983,6 +2983,9 @@ class WarpCoreWindow(QMainWindow):
             self._review_list.setCurrentRow(new_row)
             self._on_review_row_changed(new_row)
         self._ann_widget.set_review_items(self._recognition_items)
+        # Removing a row can remove the last unconfirmed one, which is exactly
+        # when Mark Done should become available.
+        self._refresh_mark_done_btn()
         self._update_progress()
         # Restore removed NON_ICON_SLOT back to combo if it was confirmed
         if self._current_idx >= 0:
@@ -3649,6 +3652,10 @@ class WarpCoreWindow(QMainWindow):
             self._data_mgr.save()
         self._add_review_row(name, slot, conf, confirmed=_auto, cross_check_failed=_cross_check,
                              auto_confirmed=_auto_conf_flag)
+        # A freshly drawn box starts unconfirmed, so Mark Done must go
+        # back to greyed — the button is derived from the item list and
+        # Qt does not recompute it on its own.
+        self._refresh_mark_done_btn()
         # Spatial sort within the group so the freshly-added bbox slides
         # into L→R / T→B position instead of always landing at the end.
         # The sort also permutes `_recognition_items` so we must re-fetch
@@ -5132,6 +5139,14 @@ class WarpCoreWindow(QMainWindow):
 
         Also updates the review summary with how many items remain to
         confirm before Mark Done un-greys.
+
+        **Call this after anything that changes `_recognition_items` or a
+        row's confirmation state.** The button is a pure function of that
+        list, but Qt will not recompute it on its own, so a path that adds,
+        removes or re-confirms a row and forgets this leaves the button
+        showing the previous answer until the screenshot is reopened — which
+        is what `_populate_review_panel` does, and why the stale state looks
+        like it fixes itself on navigating away and back.
         """
         # Strip any prior Mark Done tail before recomputing — every
         # caller of setText writes a fresh base string, so we manage
