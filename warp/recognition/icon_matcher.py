@@ -45,6 +45,28 @@ TEMPLATE_THRESHOLD  = 0.55   # min TM_CCOEFF_NORMED score to accept a match
 HIST_WEIGHT         = 0.20   # weight of histogram score when blending with template
 HIST_THRESHOLD      = 0.50   # min histogram correlation to contribute
 ML_PRIMARY_THRESHOLD= 0.50   # ML conf >= this → ML is the source of truth
+# Gallery entries enrolled from clean wiki art rather than from a confirmed
+# in-game crop. The shipped `embedding_index.npz` covers 2963 names while the
+# icon library holds 4406, so a third of the library has no entry at all and
+# the embedder cannot return those names at any confidence. Worse, it does not
+# fall silent on them: measured over 1500 crops with their own item hidden, it
+# answers with the nearest thing it does know at mean similarity 0.484, and
+# 29.5% of those wrong answers clear ML_PRIMARY_THRESHOLD and take the slot
+# from the template stage, which had the right answer all along.
+#
+# Enrolling the wiki PNG gives it something correct to point at. No training
+# is involved — the embedder is a function, so the clean art is simply run
+# through it and appended to the gallery.
+#
+# Art sits further from an in-game crop than a real crop of the same item
+# does: measured, 0.549 against 0.881, a 0.332 penalty from the domain gap.
+# Left uncorrected, art entries lose to real crops *of other items* — 97% of
+# the residual errors. The offset compensates. It is deliberately small: a
+# sweep of the trade-off showed +0.10 lifts unknown items from 0% to 74.9%
+# while known items move +0.1 pp (96.9 → 97.0), and every larger value buys
+# unknown-item accuracy with the 99% case (+0.30 costs 1.2 pp, +0.50 costs
+# 5.3 pp). Re-measure both columns before changing it, never just one.
+ART_SIM_OFFSET      = 0.10
 VIRTUAL_OVERRIDE_CONF = 0.40 # when ML returns a real icon with conf >= this,
                              # suppress virtual (__empty__/__inactive__)
                              # session/template candidates
@@ -220,6 +242,10 @@ class SETSIconMatcher:
         self._ml_kind: str = ''        # 'embedder' | 'classifier' | ''
         self._gallery_emb = None       # np.ndarray (N, D) float32, L2-normed
         self._gallery_lbl = None       # np.ndarray (N,) int32 — indices into _label_map
+        # True for gallery rows enrolled from wiki art rather than from a
+        # confirmed crop. Drives ART_SIM_OFFSET and the 'art' match source.
+        self._gallery_is_art = None    # np.ndarray (N,) bool
+        self._last_embed_was_art = False
         # Diagnostic: source of the most recent match() decision.
         # Values: 'ml' (embedder/classifier), 'template' (wiki PNG histogram),
         # 'session' (confirmed training crop), 'knowledge' (pHash override),
@@ -538,7 +564,9 @@ class SETSIconMatcher:
         # Disambiguate ML source by model kind so logs distinguish the
         # ArcFace embedder from the legacy softmax classifier.
         if src == 'ml' and self._ml_kind == 'embedder':
-            self._last_match_src = 'embed'
+            # 'art' when the winning gallery row came from a wiki PNG rather
+            # than a confirmed crop, so the two can be told apart in the logs.
+            self._last_match_src = 'art' if self._last_embed_was_art else 'embed'
         elif src == 'ml':
             self._last_match_src = 'soft'
         else:
@@ -757,6 +785,156 @@ class SETSIconMatcher:
             log.debug(f'WARP: ML classify error: {e}')
             return '', 0.0
 
+    def _enroll_wiki_art(self, models_dir: Path) -> None:
+        """Give the embedder a reference for every icon the gallery lacks.
+
+        The gallery ships pre-built from confirmed crops, so an item nobody
+        has ever confirmed is unreachable — see ART_SIM_OFFSET for what the
+        embedder does instead of staying quiet. The wiki PNG for that item is
+        already on disk, and the embedder is just a function, so a usable
+        reference costs one forward pass and no training at all.
+
+        Vectors are cached next to the gallery: the first run pays ~7 ms per
+        icon, later runs only embed art that has appeared since. The cache is
+        keyed by the embedder's own file hash, so a new model invalidates it
+        rather than mixing vectors from two different embedding spaces —
+        which would be silent and would poison every comparison.
+
+        Never raises. Failing to enrol leaves the shipped gallery exactly as
+        it was, which is the previous behaviour.
+        """
+        import cv2
+
+        try:
+            images_dir = self._get_images_dir()
+            if images_dir is None or not images_dir.exists():
+                return
+
+            # Fold era-variant art onto the item it depicts, exactly as
+            # `_build_index` does. 34 PNGs are named 'X (23c)' for the same
+            # item as 'X'; enrolled under the raw stem they would be labels
+            # cargo has never heard of — unreachable as slot candidates, and
+            # able to win the unrestricted top-1 with a name nothing
+            # downstream can resolve.
+            try:
+                from warp.data.cargo import canonical_names
+                known_names = canonical_names()
+            except Exception as exc:
+                log.warning(f'WARP: art enrolment has no cargo names ({exc!r}) — '
+                            'era-variant art will not be folded')
+                known_names = set()
+
+            known = {self._label_map.get(int(l), '') for l in self._gallery_lbl}
+            png_by_name: dict[str, Path] = {}
+            for png in images_dir.glob('*.png'):
+                name = _base_item_name(unquote_plus(png.stem), known_names)
+                png_by_name.setdefault(name, png)
+            missing = sorted(n for n in png_by_name if n and n not in known)
+            if not missing:
+                return
+
+            # Key the cache on the embedder's *contents*. Size will not do:
+            # the file is 17.6 MB because of the architecture (360 tensors,
+            # 4.4 M parameters), so a retrained model of the same shape is
+            # byte-for-byte the same length with entirely different weights.
+            # Reusing art vectors across that boundary is meaningless — they
+            # would live in the previous embedding space — and nothing would
+            # report an error, only worse matches. `model_updater` copies new
+            # models in without deleting anything, so a stale cache does
+            # survive an update and has to be detected here.
+            emb_path = models_dir / 'icon_embedder.pt'
+            import hashlib
+            digest = hashlib.sha256(emb_path.read_bytes()).hexdigest()[:16]
+            fingerprint = f'{digest}-{self._gallery_emb.shape[1]}'
+            cache_path = models_dir / 'art_index.npz'
+            cached: dict[str, np.ndarray] = {}
+            if cache_path.exists():
+                try:
+                    blob = np.load(str(cache_path), allow_pickle=False)
+                    if str(blob['fingerprint']) == fingerprint:
+                        cached = dict(zip((str(n) for n in blob['names']),
+                                          blob['embeddings'].astype(np.float32)))
+                except Exception as exc:
+                    log.debug(f'WARP: art cache unreadable ({exc}) — rebuilding')
+
+            todo = [n for n in missing if n not in cached]
+            if todo:
+                import time
+                t0 = time.time()
+                for name in todo:
+                    img = cv2.imread(str(png_by_name[name]))
+                    if img is None:
+                        continue
+                    crop64 = cv2.resize(img, (MATCH_SIZE, MATCH_SIZE),
+                                        interpolation=cv2.INTER_AREA)
+                    vec = self._embed_crop(crop64)
+                    if vec is not None:
+                        cached[name] = vec
+                log.info(f'WARP: embedded {len(todo)} wiki icons for the gallery '
+                         f'in {time.time() - t0:.1f}s')
+                try:
+                    names = sorted(cached)
+                    np.savez_compressed(
+                        str(cache_path), fingerprint=fingerprint,
+                        names=np.array(names),
+                        embeddings=np.stack([cached[n] for n in names]))
+                except Exception as exc:
+                    log.warning(f'WARP: could not cache art vectors: {exc}')
+
+            usable = [n for n in missing if n in cached]
+            if not usable:
+                return
+
+            next_id = (max(self._label_map) + 1) if self._label_map else 0
+            new_ids = []
+            for name in usable:
+                self._label_map[next_id] = name
+                new_ids.append(next_id)
+                next_id += 1
+
+            self._gallery_emb = np.concatenate(
+                [self._gallery_emb, np.stack([cached[n] for n in usable])])
+            self._gallery_lbl = np.concatenate(
+                [self._gallery_lbl, np.array(new_ids, dtype=np.int32)])
+            self._gallery_is_art = np.concatenate(
+                [self._gallery_is_art, np.ones(len(usable), dtype=bool)])
+            # Some icon filenames are outside cargo's vocabulary: skill-tree
+            # nodes, traits carrying an environment suffix the cargo row does
+            # not ('Adaptive Defense (ground)'), and a few items cargo simply
+            # lacks. They can never satisfy `candidate_names`, so they are
+            # inert on the slot-driven path. The template index already
+            # carries every one of them, so this mirrors existing behaviour
+            # rather than adding a new failure — but it is counted here so it
+            # stays visible instead of being discovered later.
+            outside = len([n for n in usable if known_names and n not in known_names])
+            log.info(f'WARP: gallery + {len(usable)} icons enrolled from wiki art '
+                     f'({len(known)} from confirmed crops'
+                     + (f', {outside} outside cargo' if outside else '') + ')')
+        except Exception as exc:
+            log.warning(f'WARP: wiki-art enrolment skipped ({exc})')
+
+    def _embed_crop(self, crop64: 'np.ndarray'):
+        """Run one 64x64 BGR crop through the embedder. None on any failure.
+
+        Shares the exact preprocessing of `_classify_ml_embed`; the two must
+        not drift, or enrolled art would land in a different part of the
+        space than the queries it is meant to answer.
+        """
+        import cv2
+        try:
+            import torch
+            rgb = cv2.cvtColor(cv2.resize(crop64, (224, 224)), cv2.COLOR_BGR2RGB)
+            inp = rgb.astype(np.float32) / 255.0
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            inp = (inp - mean) / std
+            inp = np.expand_dims(np.transpose(inp, (2, 0, 1)), axis=0)
+            with torch.no_grad():
+                return self._ml_session(torch.from_numpy(inp)).numpy()[0]
+        except Exception as exc:
+            log.debug(f'WARP: art embed failed: {exc}')
+            return None
+
     def _classify_ml_embed(
         self,
         crop64: np.ndarray,
@@ -789,7 +967,20 @@ class SETSIconMatcher:
             t = torch.from_numpy(inp)
             with torch.no_grad():
                 emb = self._ml_session(t).numpy()[0]    # (D,) already L2-normed
-            sims = self._gallery_emb @ emb              # (N,) cosine similarity
+            raw_sims = self._gallery_emb @ emb         # (N,) cosine similarity
+            # The offset compensates the domain gap so art entries can win the
+            # *contest* against confirmed crops — see ART_SIM_OFFSET. It must
+            # not travel into the reported confidence: clamped to [0, 1], an
+            # art row at raw 0.92 would report 1.00, claiming the certainty of
+            # a pixel-perfect confirmed crop on weaker evidence, and feeding
+            # ML_PRIMARY_THRESHOLD, VIRTUAL_OVERRIDE_CONF and WARP CORE's
+            # auto-accept. That is reachable, not theoretical: 30.8% of art
+            # rows sit within 0.95 of another art row.
+            #
+            # So rank on the adjusted score, report the raw one.
+            sims = raw_sims
+            if self._gallery_is_art is not None and self._gallery_is_art.any():
+                sims = raw_sims + ART_SIM_OFFSET * self._gallery_is_art
             if candidate_names is not None:
                 # Split gallery into real-candidate and virtual partitions, so
                 # the caller can compare best-real vs best-virtual similarity
@@ -803,10 +994,17 @@ class SETSIconMatcher:
                     dtype=bool,
                 )
                 virtual_mask = np.array([n in VIRTUAL_LABELS for n in labels], dtype=bool)
+                # Raw scores on both sides. These two feed a different
+                # question from the one the offset answers: not "which item is
+                # this?" but "is there an item here at all?". Virtual entries
+                # (__empty__/__inactive__) come from real crops and have no
+                # art counterpart, so boosting only the real side would tilt
+                # an empty slot towards being called occupied — a false item,
+                # not merely a wrong name.
                 if real_mask.any():
-                    self._last_embed_sim_real = float(sims[real_mask].max())
+                    self._last_embed_sim_real = float(raw_sims[real_mask].max())
                 if virtual_mask.any():
-                    self._last_embed_sim_virtual = float(sims[virtual_mask].max())
+                    self._last_embed_sim_virtual = float(raw_sims[virtual_mask].max())
                 allowed_mask = real_mask | virtual_mask
                 if allowed_mask.any():
                     masked = np.where(allowed_mask, sims, -np.inf)
@@ -816,7 +1014,12 @@ class SETSIconMatcher:
             else:
                 top = int(np.argmax(sims))
             best_lbl = int(self._gallery_lbl[top])
-            conf = float(max(0.0, min(1.0, sims[top])))
+            conf = float(max(0.0, min(1.0, raw_sims[top])))
+            # Recorded so the match summary and recog_runs.jsonl can separate
+            # answers backed by a confirmed crop from ones backed only by wiki
+            # art — the whole point of enrolling is to be able to measure it.
+            self._last_embed_was_art = bool(
+                self._gallery_is_art is not None and self._gallery_is_art[top])
             return self._label_map.get(best_lbl, ''), conf
         except Exception as e:
             log.debug(f'WARP: ML embed error: {e}')
@@ -870,6 +1073,8 @@ class SETSIconMatcher:
                 self._ml_kind = 'embedder'
                 self._gallery_emb = gallery['embeddings'].astype(np.float32)
                 self._gallery_lbl = gallery['labels'].astype(np.int32)
+                self._gallery_is_art = np.zeros(len(self._gallery_lbl), dtype=bool)
+                self._enroll_wiki_art(models_dir)
                 log.info(f'WARP: metric-learning embedder loaded '
                          f'({len(self._label_map)} classes, '
                          f'gallery={len(self._gallery_emb)}, dim={embed_dim})')
