@@ -1087,10 +1087,39 @@ class WarpCoreWindow(QMainWindow):
                     self._file_list.blockSignals(False)
                     item.setForeground(self._file_item_color(p))
                 if row == 0 and self._current_idx < 0:
-                    self._file_list.setCurrentRow(0)
+                    # Mid-scan is exactly when the user is most likely to be
+                    # scrolling, and this fired on the very first result. The
+                    # `_current_idx` test stays so the helper's reload branch
+                    # cannot run here — that would re-load the open screenshot
+                    # on every progress callback.
+                    self._select_first_unless_user_moved()
                 break
         if self._detect_dlg:
             _push_status(stype)
+
+    def _select_first_unless_user_moved(self) -> None:
+        """Settle the selection once screen-type detection finishes.
+
+        Picking the first screenshot is right when the user has not started
+        reading yet, and wrong the moment they have. `_current_idx < 0` does
+        not tell those apart: scrolling the list selects nothing, so someone
+        who scrolled down while detection ran still looked untouched, and
+        `setCurrentRow(0)` — which scrolls as well as selects — yanked the
+        view back to the top under them.
+
+        The scrollbar is the honest signal. Nothing moves it programmatically
+        before the first selection, so a non-zero position means the user did.
+        """
+        if not self._screenshots:
+            return
+        if self._current_idx >= 0:
+            # Already reading something: re-load it, since detection may have
+            # changed its screen type.
+            self._load_screenshot(self._current_idx)
+            return
+        if self._file_list.verticalScrollBar().value() != 0:
+            return
+        self._file_list.setCurrentRow(0)
 
     def _on_detect_finished(self, results: dict):
         """
@@ -1178,11 +1207,7 @@ class WarpCoreWindow(QMainWindow):
             self._detect_dlg = None
             self._set_toolbar_actions_enabled(True)
             self.statusBar().showMessage(f'Screen-type detection done — {reason}.')
-            if self._screenshots:
-                if self._current_idx < 0:
-                    self._file_list.setCurrentRow(0)
-                else:
-                    self._load_screenshot(self._current_idx)
+            self._select_first_unless_user_moved()
             self._update_progress()
             return
 
@@ -1192,11 +1217,7 @@ class WarpCoreWindow(QMainWindow):
             self._set_toolbar_actions_enabled(True)
             self.statusBar().showMessage('Screen-type detection done.')
         self._detect_worker = None
-        if self._screenshots:
-            if self._current_idx < 0:
-                self._file_list.setCurrentRow(0)
-            else:
-                self._load_screenshot(self._current_idx)
+        self._select_first_unless_user_moved()
         self._update_progress()
 
     def _on_detect_cancelled(self):
@@ -1207,8 +1228,10 @@ class WarpCoreWindow(QMainWindow):
         self._detect_dlg = None
         self._set_toolbar_actions_enabled(True)
         self.statusBar().showMessage('Screen-type detection cancelled.')
-        if self._screenshots:
-            self._file_list.setCurrentRow(0)
+        # Cancelling is a reason to stop working, not to move the user: this
+        # jumped to the top even when they had scrolled away or had a
+        # screenshot open.
+        self._select_first_unless_user_moved()
         self._update_progress()
 
     def _cancel_active_run(self):
