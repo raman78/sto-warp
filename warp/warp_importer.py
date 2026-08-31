@@ -2024,8 +2024,27 @@ class WarpImporter:
         # small and never too large. Measuring less than the badge claims is
         # therefore no evidence at all — it is what an unfilled slot looks
         # like — and can never lower a tier the OCR read.
+        # Only when a ship was actually identified. Every reading here is a
+        # surplus *over the profile*, which is sound while the profile is a
+        # real ship's base and meaningless when it is the keyword fallback:
+        # that fallback carries `Universal Consoles = 0`, meaning "no ship, so
+        # unknown", not "this ship has none. Measure two universal consoles
+        # against it and the surplus reads +2, inventing a T6-X2 upgrade out
+        # of nothing.
+        #
+        # That is what happened on a cropped SPACE_EQ screenshot with no ship
+        # header: evidence came out [Devices 5-4 = +1, Universal Consoles
+        # 2-0 = +2], the max promoted the ship to -X2, Devices grew 4 -> 6,
+        # and the row detector padded a sixth slot in front of five real ones.
+        # The phantom then matched as `__inactive__` at confidence 1.00 and
+        # was auto-accepted.
+        #
+        # `ShipResolution.matched` is the honest signal for this, and is
+        # documented as such in docs/SHIP_INFO_DETECTION.md (invariant S4).
+        _ship_identified = resolution is not None and resolution.matched
         _inferred_tier = ''
-        if not _is_ground and profile and build_type in ('SPACE', 'SPACE_MIXED'):
+        if (not _is_ground and profile and _ship_identified
+                and build_type in ('SPACE', 'SPACE_MIXED')):
             _ocr_x = 2 if '-X2' in ship_tier else 1 if '-X' in ship_tier else 0
             # `_infer_x_bonus` subtracts the profile, which already carries
             # whatever bonus the OCR tier granted — so what comes back is the
