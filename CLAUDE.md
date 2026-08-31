@@ -233,14 +233,34 @@ each source and diffing all 47 buckets. An ETag is only replayed against
 the source that issued it, so a fallback cannot answer 304 with the other
 mirror's bytes.
 
-They are **not** typed the same way. `ship_list.json` from our mirror is
-the raw `Special:CargoExport` output — every field a string, list columns
-comma-joined — while SETS-Data and `warp/data/baseline/` serve lists and
-numbers. `cargo._normalise_ship` coerces both into the typed shape, and
-every reader of that file must apply it (`cargo._build_ships`,
-`warp_importer.ShipDB._load`). Never assume a cargo field's type from one
-source alone; check a live cache and the baseline. See
-`docs/CARGO_DATA_PLAN.md`.
+Both currently serve **typed** `ship_list.json` — `tier` and `fore` as
+ints, `hullmod` as a float, `type` and `boffs` as lists (measured
+2026-08-31 by fetching both mirrors and hashing ours against the local
+cache, which stores raw downloaded bytes and matched byte for byte).
+
+Our mirror did once serve the raw `Special:CargoExport` shape with every
+field a string, which emptied the BOFF profile of all 797 ships on any
+mirror-fed install. That was fixed in `warp-cargo-bay`'s publisher on
+2026-08-21 and the corrected file is now published; this section described
+the pre-fix state until 2026-08-31. When a mirror-side fix lands, correct
+this file in the same pass — a stale premise here invites coercion code
+written for a shape nothing produces.
+
+The one field that differs is `faction`: our mirror comma-joins it into a
+string, SETS-Data omits it entirely. Nothing in `warp/` reads it, so this
+costs nothing today — the `faction` hits in the tree are the *captain's*
+faction in a SETS build, an unrelated field.
+
+`cargo._normalise_ship` stays regardless. It is idempotent, so it is free
+against already-typed input, and it is what keeps a source regressing to
+the untyped shape from silently emptying every BOFF profile. Every reader
+of that file must still apply it (`cargo._build_ships`,
+`warp_importer.ShipDB._load`). Note it only splits `boffs`, `type` and
+`abilities` (`_SHIP_LIST_FIELDS`) — `faction` is not in that tuple, which
+is why it stays joined even after normalisation.
+
+Never assume a cargo field's type from one source alone; check a live
+cache and the baseline. See `docs/CARGO_DATA_PLAN.md`.
 
 | File | Purpose |
 |---|---|

@@ -1,10 +1,10 @@
 # Ship info detection
 
 Production module: `warp/recognition/text_extractor.py`, entry point
-`TextExtractor.extract_ship_info` (`warp/recognition/text_extractor.py:473`).
+`TextExtractor.extract_ship_info` (`warp/recognition/text_extractor.py:508`).
 It reads three fields off the top band of a space screenshot — ship **name**,
 ship **class** (called `ship_type` throughout the code) and **tier** — plus a
-bounding box for each. `ShipDB.resolve` (`warp/warp_importer.py:1085`) then
+bounding box for each. `ShipDB.resolve` (`warp/warp_importer.py:1126`) then
 turns the OCR'd class string into a canonical entry from the ship database,
 which decides the slot profile for the whole build.
 
@@ -26,8 +26,8 @@ The ship-info block has no fixed position: UI scale, resolution and window
 mode all move it, and on a merged (`SPACE_MIXED`) screenshot it shares the top
 band with the traits panel legend, the active-duty header and whatever tooltip
 was open at capture time. Cropping a fixed ROI is therefore unreliable —
-`SHIP_INFO_ROI` (`:128`) exists but is only used by the re-OCR fallback in
-`refine_ship_info` (`:1141`).
+`SHIP_INFO_ROI` (`:148`) exists but is only used by the re-OCR fallback in
+`refine_ship_info` (`:1288`).
 
 Instead the extractor finds one token it can trust (the **anchor**) and reads
 the rest of the block relative to it. Everything downstream — which tokens may
@@ -39,16 +39,16 @@ against that anchor.
 - **S1** — A `ship_*_bbox` is the union of exactly the tokens that went into
   the corresponding string. Nothing is added for padding, nothing is dropped.
   A bbox that spans emptiness therefore means the string is wrong too.
-- **S2** — The bboxes are consumed, not merely displayed: `warp_importer.py:1951`
+- **S2** — The bboxes are consumed, not merely displayed: `warp_importer.py:2087`
   emits `Ship Type` and `Ship Tier` as review items with those bboxes, the
   trainer uploads the corresponding image strips as text crops
   (`warp/trainer/sync.py:117`), and `refine_ship_info` re-OCRs from them. A
   wrong bbox is a wrong training sample, not just a cosmetic defect.
 - **S3** — `Ship Name` is anchor-internal. It is never emitted as a slot
-  (`warp_importer.py:1948`), because it identifies the player, not the build.
+  (`warp_importer.py:2083`), because it identifies the player, not the build.
 - **S4** — A non-empty `ShipResolution.type` does **not** mean the class was
   recognised. When nothing matched, the OCR string is echoed back;
-  `ShipResolution.matched` (`warp_importer.py:1303`) is the only honest signal.
+  `ShipResolution.matched` (`warp_importer.py:1344`) is the only honest signal.
 
 ## 1. Anchor strategies
 
@@ -82,7 +82,7 @@ corpus, 48 screenshots have a `ship_name` with no `U.S.S.`-style prefix.
 
 The HUD stacks name / class / registry in one left-aligned column, so the
 extractor only accepts tokens inside a horizontal band around the anchor
-(`:769`):
+(`:892`):
 
 ```python
 # warp/recognition/text_extractor.py
@@ -91,7 +91,7 @@ col_lo  = anchor_x - col_pad
 col_hi  = anchor_x + anchor_w + col_pad
 ```
 
-`_COL_PAD_ANCHOR_CAP = 150` (`:135`) is the part worth explaining. The pad used
+`_COL_PAD_ANCHOR_CAP = 150` (`:155`) is the part worth explaining. The pad used
 to be `anchor_w * 2.0` uncapped, which is fine while the anchor is a short
 `U.S.S.` token (~80 px → ±160 px) but collapses when OCR returns a whole class
 line as one token:
@@ -127,18 +127,73 @@ which is how `Kit Modules` and `Starship Selection Dry Dock` survive as
 
 ## 4. Resolution against the ship database
 
-`ShipDB.resolve` runs a four-strategy lookup and promotes the canonical class
+`ShipDB.resolve` runs a ladder of strategies and promotes the canonical class
 string from the DB over the OCR string whenever a real entry was found. The
-strategy that won is reported in `last_match_strategy` — `exact-type`,
-`word-subset`, `display-name`, `fuzzy-type`, `fuzzy-display`, `token-overlap`,
-or `keyword-fallback` for "nothing matched" (`warp_importer.py:828`-`920`).
+strategy that won is reported in `last_match_strategy`
+(`warp_importer.py:800`-`961`), in the order tried:
+
+| # | Strategy | Index it searches | Identifies |
+|---|---|---|---|
+| 1 | `exact-type` | `_by_type` | class |
+| 2a | `word-subset`, `word-subset-best` | `_by_type` keys | class |
+| 2b | `display-name`, `display-name-best` | `_display_index` + tier | **ship** |
+| 2c | `fuzzy-display` | `_display_strings` (names) | **ship** |
+| 2d | `token-overlap` | `_display_index`, weighted | **ship** |
+| 2e | `fuzzy-type` | `_by_type` | class |
+| 3 | `keyword-fallback` | — | nothing |
+
+`anchorless-rescue` is reported in place of whichever strategy won when
+`resolve` first recovered the class string from loose OCR candidates.
+
+### Class-only strategies come last, on purpose
+
+The **Identifies** column is the thing to keep in view. `_by_type` is keyed on
+the generic `type` field, so 797 ships collapse into 38 dict slots and the
+entry under a key is whichever ship the load loop wrote last — `cruiser` holds
+one of 93, `battlecruiser` one of 91. A hit there names a *class* and then
+returns an arbitrary member of it. Measured over the roster, that member's
+slot profile is wrong on 4.9 of 11 slots for the ship actually on screen; a
+class consensus, the best any redesign of the index could manage, still misses
+4.1. The information is not in a class name.
+
+So every strategy that can name a real ship is tried before either class-only
+stage that could pre-empt it. Two failures came from getting that order wrong:
+
+- `fuzzy-type` (cutoff 0.68) used to sit above `fuzzy-display` (cutoff 0.85).
+  A single dropped letter — `Lexington` read as `exington` — scored 0.7333
+  against the class `heavy dreadnought cruiser` and answered
+  `Universe Temporal Heavy Dreadnought Cruiser`, while the true ship sat one
+  stage below at 0.9859.
+- `fuzzy-type` also used to sit above `token-overlap`. On `Screenshot_96.png`
+  the junk token `Decails` (OCR of the **Details** button) entered the class
+  line; `token-overlap` scores the right ship at 10.5, but `fuzzy-type`
+  answered first with the same wrong dreadnought.
+
+`fuzzy-display` is additionally guarded against the opposite error. A read
+that is *itself* a class name must not be attributed to a ship — 9 of the 27
+multi-word class names sit above 0.85 from some ship name, e.g.
+`warbird battlecruiser` is 0.9048 from `arbiter battlecruiser`. The guard
+tests that property directly (a ≥0.90 match against the class index), rather
+than the old proxy of demanding ≥3 OCR words, which also discarded every
+two-word ship name.
+
+Measured over all 797 ships after both reorderings: 790/797 clean names,
+745/746 with one letter dropped, 792/797 with a junk token prefixed, and 65/65
+class reads correctly *not* attributed to a ship.
+
+### Confidence reflects which column won
+
+`ship_type_confidence` (`warp_importer.py:1378`) grades the emitted `Ship Type`
+item by strategy: 1.0 when a ship was identified, 0.45 when only the class
+was, 0.30 when nothing matched. WARP CORE's auto-accept threshold is
+user-settable between 0.50 and 1.00, so the two low bands can never be
+auto-confirmed at any setting. Before this, `Ship Type` was emitted at a flat
+1.0 and a class-only guess was written into `annotations.json` as ground truth
+without the user seeing it.
 
 This layer is forgiving by design, which is why a polluted class string often
 still resolves correctly, and why measuring the extractor by string equality
-overstates its errors. It is also why it can resolve to the *wrong* ship: on
-`Screenshot_96.png` the junk token `Decails` (OCR of the **Details** button)
-pulled `Legendary Dreadnought Cruiser` towards
-`Universe Temporal Heavy Dreadnought Cruiser`.
+overstates its errors.
 
 ## Failure modes
 
@@ -191,7 +246,7 @@ the `-X2` variants entered the pool and "prefer higher" promoted the token two
 steps to `T6-X2`.
 
 The cost is not cosmetic. `_apply_ship_and_tier_bonuses`
-(`warp/warp_importer.py:699`) grants +1 Universal Console, Device and Starship
+(`warp/warp_importer.py:665`) grants +1 Universal Console, Device and Starship
 Trait for `-X`, +2 for `-X2`, so the layout asked for rows the ship does not
 have — measured on that screenshot, 2 Universal Consoles where the pixels
 showed 1, and 5 Devices where they showed 4. Under `T6-X` the profile matches
