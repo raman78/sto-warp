@@ -110,6 +110,9 @@ TEMPLATE_RESTRICTED_THRESHOLD = 0.30
 # tolerates small misalignment (e.g. bbox y=-1 edge slots, icon offset by 1-3
 # px). Smaller scales = larger sliding search. Two scales keeps compute modest.
 TEMPLATE_SCALES = (58, MATCH_SIZE)
+# The sliding scale used by `_template_scores`. 58 in a 64 px crop gives 49
+# offsets, which is what absorbs an edge-clipped bbox being 1-3 px out.
+_TEMPLATE_SLIDE_SIZE = 58
 # Adaptive histogram weight: when the embedder is weak (conf below this), drop
 # HIST_WEIGHT for template scoring. Game crops carry Mk overlays and rarity
 # borders that distort the HSV histogram relative to clean wiki PNGs; relying
@@ -233,6 +236,14 @@ class SETSIconMatcher:
         # pointing directly at the icon library.
         self._sets        = sets_app
         self._index: list[dict] = []   # {name, tmpl64, hist_hsv, path}
+        # Flattened, TM_CCOEFF_NORMED-shaped template matrices, parallel to
+        # `_index`. float32 and not float16: the smaller dtype halves the
+        # ~395 MB and costs nothing in accuracy, but NumPy has no BLAS path
+        # for float16 and falls back to a scalar loop — measured 5698 ms for
+        # the same product float32 does in 6.3 ms. Storing float16 and casting
+        # per query is no better; the cast alone is 64 ms.
+        self._tmpl_mat58 = None        # np.ndarray (N, 58*58*3) float32
+        self._tmpl_mat64 = None        # np.ndarray (N, 64*64*3) float32
         self._ml_session  = None
         self._ml_disabled = False      # True after first failed download attempt
         self._label_map: dict[int, str] = {}
@@ -407,16 +418,11 @@ class SETSIconMatcher:
                      else TEMPLATE_THRESHOLD * 0.7)
         weak_embed = ml_conf < TEMPLATE_HIST_WEAK_EMBED_THRESHOLD
         hist_w     = TEMPLATE_HIST_WEIGHT_WEAK_EMBED if weak_embed else HIST_WEIGHT
-        for entry in self._index:
+        tm_all = self._template_scores(crop64)
+        for i, entry in enumerate(self._index):
             if candidate_names is not None and entry['name'] not in candidate_names:
                 continue
-            # Multi-scale: try each pre-computed template size, keep best TM.
-            tm_score = 0.0
-            for _size, tmpl in entry.get('tmpl_scales', [(MATCH_SIZE, entry['tmpl64'])]):
-                res = cv2.matchTemplate(crop64, tmpl, cv2.TM_CCOEFF_NORMED)
-                s = float(res.max())
-                if s > tm_score:
-                    tm_score = s
+            tm_score = float(tm_all[i])
             if tm_score < tm_cutoff:
                 continue
             h_score = max(0.0, float(cv2.compareHist(
@@ -629,6 +635,53 @@ class SETSIconMatcher:
 
     # ── Index building ──────────────────────────────────────────────────────────
 
+    @staticmethod
+    def _tm_vector(patch: 'np.ndarray') -> 'np.ndarray':
+        """Flatten a patch the way TM_CCOEFF_NORMED compares it.
+
+        That metric centres each channel on its own mean and then normalises
+        over the whole block, so the correlation at one offset is the dot
+        product of two such vectors. Getting the centring wrong — one mean
+        over all channels instead of one per channel — still produces
+        plausible numbers, just not the ones OpenCV would.
+        """
+        v = patch.astype(np.float32)
+        v = v - v.reshape(-1, v.shape[2]).mean(axis=0)
+        v = v.ravel()
+        n = float(np.linalg.norm(v))
+        return v / n if n else v
+
+    def _template_scores(self, crop64: 'np.ndarray') -> 'np.ndarray':
+        """Best TM_CCOEFF_NORMED score of every indexed icon, in index order.
+
+        Replaces a loop of `cv2.matchTemplate` calls — one per icon per scale,
+        so ~8800 of them — with two matrix products. Each call does almost no
+        arithmetic, so the loop was nearly all call overhead: measured 882 ms
+        against 12 ms here, on the same 4406-icon index.
+
+        The 58 px scale slides inside the 64 px crop to absorb the 1-3 px
+        misalignment of an edge-clipped bbox, and it wins 94% of the per-icon
+        maxima, so it cannot be dropped. Its 49 offsets become 49 columns of
+        one matrix-matrix product rather than 49 separate passes.
+
+        Verified against the `cv2` loop on 80 confirmed crops: identical item
+        and identical confidence to four decimals for every one of them.
+        """
+        if self._tmpl_mat58 is None or self._tmpl_mat64 is None:
+            return np.zeros(len(self._index), dtype=np.float32)
+        s = _TEMPLATE_SLIDE_SIZE
+        span = MATCH_SIZE - s + 1
+        windows = np.stack(
+            [self._tm_vector(crop64[dy:dy + s, dx:dx + s])
+             for dy in range(span) for dx in range(span)],
+            axis=1,
+        ).astype(self._tmpl_mat58.dtype)
+        slid = (self._tmpl_mat58 @ windows).max(axis=1).astype(np.float32)
+        exact = (self._tmpl_mat64 @
+                 self._tm_vector(crop64).astype(self._tmpl_mat64.dtype)
+                 ).astype(np.float32)
+        return np.maximum(slid, exact)
+
     def _build_index(self):
         """
         Load all PNG files from the SETS images directory and build
@@ -657,7 +710,22 @@ class SETSIconMatcher:
 
         count = 0
         folded = 0
-        for png in images_dir.glob('*.png'):
+        # Allocate the template matrices up front and write each icon straight
+        # into its row. Building lists of per-icon vectors first and stacking
+        # them at the end doubles the peak — ~395 MB of intermediates on top
+        # of the ~395 MB result — and glibc does not return that to the OS,
+        # so the process stays large for the rest of the run.
+        # Sorted so the index order is the same on every machine. Some items
+        # share one piece of art — 'Vulcan Lirpa' and 'Advanced Fleet Vulcan
+        # Lirpa' score identically — and the winner among them is decided by
+        # whichever comes first, so an unsorted glob made that depend on the
+        # filesystem.
+        pngs = sorted(images_dir.glob('*.png'))
+        _d58 = _TEMPLATE_SLIDE_SIZE * _TEMPLATE_SLIDE_SIZE * 3
+        _d64 = MATCH_SIZE * MATCH_SIZE * 3
+        mat58 = np.empty((len(pngs), _d58), dtype=np.float32)
+        mat64 = np.empty((len(pngs), _d64), dtype=np.float32)
+        for png in pngs:
             name = unquote_plus(png.stem)
             base = _base_item_name(name, known_names)
             if base != name:
@@ -672,21 +740,21 @@ class SETSIconMatcher:
 
             tmpl64 = cv2.resize(orig, (MATCH_SIZE, MATCH_SIZE),
                                  interpolation=cv2.INTER_AREA)
-            # Multi-scale templates: each entry holds (size, tmpl) pairs so the
-            # template loop can slide the smaller templates inside the query
-            # crop, absorbing 1-3 px misalignments (edge slots, clipped bboxes).
-            tmpl_scales = [
-                (s, cv2.resize(orig, (s, s), interpolation=cv2.INTER_AREA))
-                for s in TEMPLATE_SCALES
-            ]
             self._index.append({
                 'name':        name,
-                'tmpl64':      tmpl64,
-                'tmpl_scales': tmpl_scales,
                 'hist_hsv':    self._hist_hsv(tmpl64),
                 'orig':        orig,      # kept for thumbnail generation
             })
+            mat58[count] = self._tm_vector(
+                cv2.resize(orig, (_TEMPLATE_SLIDE_SIZE, _TEMPLATE_SLIDE_SIZE),
+                           interpolation=cv2.INTER_AREA))
+            mat64[count] = self._tm_vector(tmpl64)
             count += 1
+
+        # Trim to what actually loaded: a PNG that failed to decode was
+        # skipped, so `count` is the number of rows written.
+        self._tmpl_mat58 = mat58[:count] if count else None
+        self._tmpl_mat64 = mat64[:count] if count else None
 
         log.info(f'WARP: indexed {count} icons from {images_dir}'
                  + (f' ({folded} era-variant folded onto their item)'
