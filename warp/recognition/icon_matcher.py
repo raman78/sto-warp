@@ -263,6 +263,11 @@ class SETSIconMatcher:
         # 'none' (no signal above threshold), '' (no match attempted).
         # Read by warp_importer to expose match source in autodetect logs.
         self._last_match_src: str = ''
+        # Filename of the art actually shown, when it is one of the 34
+        # era-variant pictures folded onto a shared cargo name. Empty when the
+        # picture is the item's only one — which is the usual case, so an
+        # empty value must read as "nothing to say", not "unknown".
+        self._last_match_variant: str = ''
         # When _last_match_src == 'session', this carries the winning entry's
         # `origin` tag ('user', 'community', 'trainer_td', or 'session'). Lets
         # warp_importer tag user-aided matches as [USER] in autodetect logs so
@@ -318,6 +323,7 @@ class SETSIconMatcher:
         """
         if crop_bgr is None or crop_bgr.size == 0:
             self._last_match_src = ''
+            self._last_match_variant = ''
             self._last_match_origin = ''
             self._last_stage_scores = {'embed': 0.0, 'soft': 0.0,
                                        'session': 0.0, 'template': 0.0,
@@ -326,6 +332,7 @@ class SETSIconMatcher:
 
         import cv2
         self._last_match_src = ''
+        self._last_match_variant = ''
         self._last_match_origin = ''
         self._last_stage_scores = {'embed': 0.0, 'soft': 0.0,
                                    'session': 0.0, 'template': 0.0,
@@ -580,6 +587,9 @@ class SETSIconMatcher:
         if src == 'session' and entry is not None:
             self._last_match_origin = entry.get('origin', 'session')
         if entry is not None:
+            # Session examples carry no 'variant' — they are confirmed crops,
+            # not wiki art — so this is empty for them, correctly.
+            self._last_match_variant = entry.get('variant', '') or ''
             thumb = self._bgr_to_qimage(entry.get('orig'))
         else:
             thumb = self._thumb_for_name(name, tm_all)
@@ -616,6 +626,7 @@ class SETSIconMatcher:
             best = max(rows, key=lambda i: float(tm_scores[i]))
         else:
             best = rows[0]
+        self._last_match_variant = self._index[best].get('variant', '') or ''
         return self._bgr_to_qimage(self._index[best].get('orig'))
 
     def _best_session_match(
@@ -749,6 +760,7 @@ class SETSIconMatcher:
         mat64 = np.empty((len(pngs), _d64), dtype=np.float32)
         for png in pngs:
             name = unquote_plus(png.stem)
+            raw_name = name
             base = _base_item_name(name, known_names)
             if base != name:
                 # Two entries now answer to the same item name, one per era.
@@ -764,6 +776,11 @@ class SETSIconMatcher:
                                  interpolation=cv2.INTER_AREA)
             self._index.append({
                 'name':        name,
+                # The filename this art came from, when era folding renamed
+                # it. 34 items have both base and 23rd-century art under one
+                # cargo name, so 'which picture' is real information the name
+                # alone cannot carry — see `_last_match_variant`.
+                'variant':     raw_name if raw_name != name else '',
                 'hist_hsv':    self._hist_hsv(tmpl64),
                 'orig':        orig,      # kept for thumbnail generation
             })
