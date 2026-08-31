@@ -907,9 +907,18 @@ class SETSIconMatcher:
             # rather than adding a new failure — but it is counted here so it
             # stays visible instead of being discovered later.
             outside = len([n for n in usable if known_names and n not in known_names])
-            log.info(f'WARP: gallery + {len(usable)} icons enrolled from wiki art '
-                     f'({len(known)} from confirmed crops'
-                     + (f', {outside} outside cargo' if outside else '') + ')')
+            summary = (f'gallery + {len(usable)} icons enrolled from wiki art '
+                       f'({len(known)} from confirmed crops'
+                       + (f', {outside} outside cargo' if outside else '') + ')')
+            log.info(f'WARP: {summary}')
+            # Also to the system channel. `log` resolves whichever detection
+            # channel is active, so this line lands in warp_detection.log when
+            # WARP ran and warp_detection_core.log when WARP CORE did — and
+            # what the gallery contained is a fact about the *model*, not
+            # about one recognition. Mirroring it next to the model updates
+            # gives one continuous record of which gallery produced which
+            # results, which is what comparing runs over weeks needs.
+            syslog.info(f'WARP: {summary}')
         except Exception as exc:
             log.warning(f'WARP: wiki-art enrolment skipped ({exc})')
 
