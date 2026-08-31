@@ -1287,6 +1287,11 @@ class RecognisedItem:
     # apply src-aware policy (e.g. block auto-accept of virtual labels
     # that came from session — the self-poisoning vector).
     src:         str   = ''
+    # Icon filename this match's picture came from, when it is one of the 34
+    # era-variant pictures folded onto a shared cargo name. Empty otherwise.
+    # Display only — the name stays the cargo name, which is what the build
+    # writer and SETS understand.
+    variant:     str   = ''
     # When `src == 'session'`, the origin of the winning entry:
     # 'user' (live-seeded from WARP CORE Accept this process),
     # 'community' (HF-mirrored approved truth), 'trainer_td' (bulk seed
@@ -2716,6 +2721,7 @@ class WarpImporter:
                     source_file  = source,
                     bbox         = bbox,
                     src          = getattr(matcher, '_last_match_src', '') or '',
+                    variant      = getattr(matcher, '_last_match_variant', '') or '',
                     match_origin = getattr(matcher, '_last_match_origin', '') or '',
                 )
                 result.items.append(_new_item)

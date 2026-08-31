@@ -942,6 +942,7 @@ class WarpCoreWindow(QMainWindow):
                 # orders slots L→R / by seat, matching what WARP results
                 # showed. Without these the trainer falls back to insertion
                 # order, which collapses group structure.
+                'variant':     getattr(it, 'variant', '') or '',
                 'seat_key':    getattr(it, 'seat_key', '') or '',
                 'slot_index':  int(getattr(it, 'slot_index', -1) if getattr(it, 'slot_index', None) is not None else -1),
             })
@@ -3798,7 +3799,8 @@ class WarpCoreWindow(QMainWindow):
                 return
 
             ri.update({'name': name, 'conf': conf, 'thumb': thumb, 'crop_bgr': crop,
-                       'cross_check_failed': _cross_check, 'src': src})
+                       'cross_check_failed': _cross_check, 'src': src,
+                       'variant': getattr(_matcher, '_last_match_variant', '')})
             self._name_edit.setText(name)
             litem = self._review_list.item(row)
             if litem:

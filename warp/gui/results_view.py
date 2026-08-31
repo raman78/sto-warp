@@ -344,6 +344,7 @@ class _InteractiveCanvas(QWidget):
             it.confidence or 0.0,
             confirmed=getattr(it, 'match_origin', '') == 'user',
             thumb=it.thumbnail,
+            variant=getattr(it, 'variant', ''),
             env=env_for_slot(it.slot or ''),
         )
 

@@ -674,6 +674,7 @@ class AnnotationWidget(QWidget):
             auto_confirmed=bool(ri.get('auto_confirmed')),
             orig_name=ri.get('orig_name', ''),
             thumb=ri.get('thumb'),
+            variant=ri.get('variant', ''),
             env=env_for_slot(ri.get('slot', ''), getattr(self, '_build_type', '')),
         )
 

@@ -70,9 +70,30 @@ def _tooltip_icon_html(thumb, name: str, size: int = 48,
     return f'<img src="data:image/png;base64,{b64}" width="{img.width()}" height="{img.height()}"/>'
 
 
+def _variant_note(name: str, variant: str) -> str:
+    """'art: 23c' for the 34 items the wiki draws twice, else ''.
+
+    Cargo has one row for such an item and the wiki has two pictures, so the
+    variant is not a different item and must never reach the name — that goes
+    to the build writer and on to SETS, which knows only the cargo name.
+    It is worth saying out loud all the same: a player who wants the exact
+    weapon in the screenshot needs to know they are looking for the
+    23rd-century version of it.
+
+    *variant* is the icon filename the match came from, e.g.
+    'Phaser Dual Heavy Cannons (23c)'. Only the part that distinguishes it
+    from *name* is shown; the rest is the name again.
+    """
+    if not variant or not name or variant == name:
+        return ''
+    tag = variant[len(name):].strip() if variant.startswith(name) else variant
+    tag = tag.strip('()') or variant
+    return f'<span style="color:#888">art: {tag}</span>'
+
+
 def slot_tooltip_html(slot: str, name: str, conf: float, *,
                       confirmed: bool = False, auto_confirmed: bool = False,
-                      orig_name: str = '', thumb=None,
+                      orig_name: str = '', thumb=None, variant: str = '',
                       env: str | None = None) -> str:
     """Compose the canvas tooltip card for one recognised slot.
 
@@ -106,6 +127,10 @@ def slot_tooltip_html(slot: str, name: str, conf: float, *,
     else:
         info_html = (f'<b>{slot_disp}</b><br>{name_disp}'
                      f'<br>Confidence: <span style="color:{colour}">{conf:.1%}</span>')
+
+    note = _variant_note(name, variant)
+    if note:
+        info_html += f'<br>{note}'
 
     return _tooltip_html(None if confirmed else thumb, name, info_html, env=env)
 
