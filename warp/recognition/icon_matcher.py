@@ -582,19 +582,41 @@ class SETSIconMatcher:
         if entry is not None:
             thumb = self._bgr_to_qimage(entry.get('orig'))
         else:
-            thumb = self._thumb_for_name(name)
+            thumb = self._thumb_for_name(name, tm_all)
         return name, score, thumb, (src == 'session')
 
-    def _thumb_for_name(self, name: str) -> object:
-        """Return a QImage thumbnail for an item name by looking it up in the
-        wiki PNG index. Returns None for virtual items (__empty__/__inactive__)
-        or when the name is not in the index."""
+    def _thumb_for_name(self, name: str, tm_scores=None) -> object:
+        """Return a QImage thumbnail for an item name, from the wiki PNG index.
+
+        Used when the winner carries no entry of its own — an embedder match
+        names an item without saying which picture of it was seen, because the
+        gallery is keyed on names and knows nothing of variants.
+
+        34 items have two pictures: the base art and a 23rd-century one, folded
+        onto the same name by `_base_item_name` so the variant is recognisable
+        at all. Returning the first of them is a coin toss, and it lands wrong
+        often enough to notice: on the reported screenshot the two entries for
+        'Phaser Dual Heavy Cannons' scored 0.443 and 0.574 against the crop,
+        and the tooltip showed the 0.443 one — a visibly different weapon from
+        the one on screen, under the right name.
+
+        `tm_scores` is the per-entry template score `match()` has already
+        computed for this crop, so picking the picture that actually matches
+        costs nothing. Without it the old first-hit behaviour stands.
+
+        Returns None for virtual items (__empty__/__inactive__) or when the
+        name is not in the index.
+        """
         if not name or name.startswith('__'):
             return None
-        for entry in self._index:
-            if entry['name'] == name:
-                return self._bgr_to_qimage(entry.get('orig'))
-        return None
+        rows = [i for i, entry in enumerate(self._index) if entry['name'] == name]
+        if not rows:
+            return None
+        if tm_scores is not None and len(rows) > 1:
+            best = max(rows, key=lambda i: float(tm_scores[i]))
+        else:
+            best = rows[0]
+        return self._bgr_to_qimage(self._index[best].get('orig'))
 
     def _best_session_match(
         self,
