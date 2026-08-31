@@ -410,6 +410,65 @@ def _save_recog_history(hist: dict) -> None:
         pass
 
 
+# `recog_history.json` keeps one entry per image and replaces it on every run,
+# which is what the Δ column needs and the opposite of what measuring a change
+# over weeks needs: re-running a screenshot destroys the state it is being
+# compared against. This file is append-only, so each run leaves the previous
+# ones intact and a before/after question can still be answered later.
+#
+# One JSON object per recognised slot. Written next to the history so
+# `share_training_data` and the usual backups pick it up.
+_RECOG_RUNS_PATH = userdata.training_data_dir() / 'recog_runs.jsonl'
+
+# A full folder pass writes a few thousand lines (~200 B each), so the file
+# grows by roughly a megabyte per pass. Rotate to `.bak` past this, keeping one
+# generation — same shape as the log rotation in `warp.debug`.
+_RECOG_RUNS_MAX_BYTES = 32 * 1024 * 1024
+
+
+def _model_fingerprint() -> str:
+    """Which model produced these rows, so a jump can be attributed.
+
+    Without it a change in the numbers is ambiguous between "the gallery
+    gained entries" and "a new model shipped".
+    """
+    try:
+        import json
+        meta = userdata.models_dir() / 'model_version.json'
+        if meta.exists():
+            data = json.loads(meta.read_text(encoding='utf-8'))
+            if isinstance(data, dict):
+                return str(data.get('version') or data.get('trained_at') or '')
+    except Exception:
+        pass
+    return ''
+
+
+def _append_recog_run(image_name: str, rows: list[dict]) -> None:
+    """Append this run's per-slot outcomes. Never raises — telemetry must not
+    break recognition."""
+    if not rows:
+        return
+    try:
+        import json
+        from datetime import datetime, timezone
+
+        path = _RECOG_RUNS_PATH
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if path.exists() and path.stat().st_size > _RECOG_RUNS_MAX_BYTES:
+            path.replace(path.with_suffix('.jsonl.bak'))
+
+        ts = datetime.now(timezone.utc).isoformat(timespec='seconds')
+        model = _model_fingerprint()
+        with path.open('a', encoding='utf-8') as fh:
+            for row in rows:
+                fh.write(json.dumps({'ts': ts, 'image': image_name,
+                                     'model': model, **row},
+                                    ensure_ascii=False) + '\n')
+    except Exception:
+        pass
+
+
 def _log_match_summary(image_name: str, match_log: list[dict]) -> None:
     """
     Render the per-image match summary table and update recog_history.json.
@@ -424,6 +483,7 @@ def _log_match_summary(image_name: str, match_log: list[dict]) -> None:
     hist  = _load_recog_history()
     prev  = hist.get(image_name, {})
     curr: dict[str, dict] = {}
+    run_rows: list[dict] = []
     totals: dict[str, int] = {}
 
     header = (f'{"slot":<28} {"name":<32} {"win":<6} '
@@ -460,6 +520,15 @@ def _log_match_summary(image_name: str, match_log: list[dict]) -> None:
         totals[src] = totals.get(src, 0) + 1
         curr[key] = {'name': name, 'conf': float(entry.get('conf', 0.0)),
                      'src':  src}
+        run_rows.append({
+            'slot': key, 'name': name, 'src': src,
+            'conf': round(float(entry.get('conf', 0.0)), 4),
+            # Per-stage scores, so a later question like "how often did the
+            # template stage already have the answer ML got wrong?" can be
+            # answered from the file instead of re-running the corpus.
+            'embed': round(e, 4), 'soft': round(f, 4), 'session': round(s, 4),
+            'template': round(t, 4), 'knowledge': round(k, 4),
+        })
 
     totals_str = '  '.join(f'{src or "?"}={cnt}'
                             for src, cnt in sorted(totals.items()))
@@ -470,6 +539,7 @@ def _log_match_summary(image_name: str, match_log: list[dict]) -> None:
 
     hist[image_name] = curr
     _save_recog_history(hist)
+    _append_recog_run(image_name, run_rows)
 
 
 # ── Dot icons (green = user confirmed, yellow = ML auto) ───────────────
