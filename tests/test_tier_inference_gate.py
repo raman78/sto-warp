@@ -69,13 +69,23 @@ class _FakeText:
 
 
 class _FakeLayout:
-    """Reports the measured counts the tier inference reads."""
+    """Stands in for the row detector.
+
+    `last_row_pixel_counts` is what it measured off the panel;
+    `detect` returns the boxes it emitted, which follow the profile it was
+    given — that asymmetry is the whole subject of these tests.
+    """
 
     def __init__(self):
         self.last_row_pixel_counts = dict(_MEASURED)
 
-    def detect(self, *a, **k):
-        return {}
+    def detect(self, img, build_type, profile=None, **k):
+        profile = profile or {}
+        return {
+            slot: [(0, 0, 10, 10)] * profile.get(slot, 0)
+            for slot in _MEASURED
+            if profile.get(slot, 0) > 0
+        }
 
     def __getattr__(self, name):
         return lambda *a, **k: {}
@@ -106,6 +116,10 @@ def test_devices_are_not_padded_past_what_was_measured(tmp_path):
 
     Five devices on screen, no ship identified, so nothing may push the row
     past five and invent a slot in front of them.
+
+    Devices is the slot that tells the two states apart. Universal Consoles
+    ends up at two either way — as a fabricated tier bonus before, as an
+    honest measurement now — so it cannot serve as the discriminator.
     """
     profile = _run(tmp_path, '').ship_profile or {}
 
@@ -114,11 +128,33 @@ def test_devices_are_not_padded_past_what_was_measured(tmp_path):
         f"with {_MEASURED['Devices']} on screen")
 
 
-def test_universal_consoles_are_not_invented_either(tmp_path):
-    """Two measured against a fallback zero is what produced the +2."""
+def test_a_measured_row_beats_a_guessed_profile(tmp_path):
+    """The other half of the same report: five fore weapons on screen and a
+    fallback profile claiming four dropped the fifth.
+
+    A count of filled cells is a lower bound, so raising the profile to it can
+    never claim more slots than the ship has.
+    """
     profile = _run(tmp_path, '').ship_profile or {}
 
-    assert not profile.get('Universal Consoles')
+    assert profile.get('Fore Weapons') == _MEASURED['Fore Weapons']
+
+
+def test_a_row_the_fallback_zeroes_is_brought_back(tmp_path):
+    """Universal Consoles is absent from the keyword fallback, and a row the
+    profile counts as zero is skipped outright — so the measurement is the
+    only thing that can recover it."""
+    profile = _run(tmp_path, '').ship_profile or {}
+
+    assert profile.get('Universal Consoles') == _MEASURED['Universal Consoles']
+
+
+def test_measurements_do_not_override_an_identified_ship(tmp_path):
+    """A real ship's profile is authoritative: it says four fore weapons, and
+    measuring five means the count is wrong, not the ship."""
+    profile = _run(tmp_path, 'Test Escort').ship_profile or {}
+
+    assert profile.get('Fore Weapons') == 4
 
 
 def test_inference_still_runs_for_an_identified_ship(tmp_path):

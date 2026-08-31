@@ -2229,6 +2229,46 @@ class WarpImporter:
                     if count > profile.get(slot, 0):
                         profile[slot] = count
                         changed = True
+
+                # When no ship was identified the profile is a keyword guess,
+                # and the row detector measured the panel directly. Between a
+                # guess and a measurement the measurement wins.
+                #
+                # `pixel_counts` above cannot serve for this: it counts the
+                # boxes the layout *emitted*, which is what the profile asked
+                # for, so it can only ever agree with itself. The detector's
+                # own reading is `last_row_pixel_counts`, taken before the
+                # profile decided anything.
+                #
+                # Raising only, and only for identified-as-measurable rows. A
+                # count of filled cells is a lower bound — an empty slot is
+                # not seen — so it can never claim more slots than the ship
+                # has, and asking for more than was measured is what puts a
+                # phantom box on the decorative sash at the left of a row.
+                #
+                # Reported case: five fore weapons on screen, the fallback
+                # profile said four, and the fifth was dropped.
+                # Wider than `_MEASURABLE`, which only decides whether the
+                # screen is an equipment panel at all. A row the fallback
+                # profile counts as zero — Universal Consoles, Hangars — is
+                # skipped entirely by the detector, so its measurement is the
+                # only thing that can bring it back.
+                _RAISABLE = _MEASURABLE | {'Universal Consoles', 'Hangars',
+                                           'Experimental', 'Sec-Def'}
+                if not _ship_identified:
+                    for slot, count in (
+                            self._get_layout().last_row_pixel_counts or {}).items():
+                        if slot not in _RAISABLE:
+                            continue
+                        if profile_override and slot in profile_override:
+                            continue
+                        if count > profile.get(slot, 0):
+                            _slog.info(
+                                f'WarpImporter: no ship identified — trusting '
+                                f'the measured {slot} ({count}) over the '
+                                f'fallback profile ({profile.get(slot, 0)})')
+                            profile[slot] = count
+                            changed = True
                 if changed:
                     # Keep confirmed layout — re-detection would overwrite pixel-perfect bboxes
                     if not confirmed_layout:
