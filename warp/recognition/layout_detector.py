@@ -1931,9 +1931,48 @@ class LayoutDetector:
         """
         import cv2
 
-        # Sample only the OUTER BORDER RING — profession glow is in the frame,
-        # not the center (which carries ability-specific art that varies per ability).
+        # Drop the outermost edge first. The profession glow is in the icon's
+        # own frame, but the outermost pixels of a slot bbox are UI chrome —
+        # the slot border, which is tinted by the officer's name-plate colour
+        # and has nothing to do with the ability. On kvort_elp.png that border
+        # is mint green: three Science abilities each showed ~30% of their
+        # sampled ring in the H48-72 "green" band against a 66% blue majority,
+        # so all three classified as Miracle Worker, the seat voted 3/3 for it,
+        # and every ability in that Universal seat was then looked up in the
+        # wrong candidate list.
+        #
+        # Measured over 1073 confirmed BOFF crops from 79 screenshots, by
+        # calling this function rather than a reimplementation of it:
+        #
+        #   overall      84.9% -> 93.9%      Tactical     96.3% -> 97.6%
+        #   Science      72.7% -> 92.2%      Temporal     80.8% -> 75.6%
+        #   Pilot        33.3% -> 91.7%      Command      84.8% -> 81.2%
+        #   Engineering  91.1% -> 98.3%
+        #
+        # Temporal and Command lose a few crops — both are identified by an
+        # amber or red accent that the inset trims along with the chrome —
+        # and that was accepted for the overall gain. Revisit if Temporal
+        # seats start reading wrong.
+        #
+        # A fraction rather than a pixel count because the chrome scales with
+        # the icon: crops run from 19 px to 68 px on the short side, and a
+        # fixed 4 px inset would eat 42% of the smallest. The 14% found by
+        # sweep matches a by-eye reading of the screenshot, where the border
+        # glow covers about 5 px of a 35 px icon.
         ih, iw = crop_bgr.shape[:2]
+        inset = max(1, int(min(ih, iw) * 0.14))
+        if ih - 2 * inset >= 8 and iw - 2 * inset >= 8:
+            crop_bgr = crop_bgr[inset:ih - inset, inset:iw - inset]
+            ih, iw = crop_bgr.shape[:2]
+
+        # Sample the border ring of what is left. Measured on the same 1073
+        # crops by editing this function and re-running it, not by
+        # reimplementing it: ring 93.9%, whole crop 94.4%, centre alone
+        # 90.6%. So the tint is spread across the icon — the centre by itself
+        # is the weakest of the three — but the edge region does carry signal,
+        # and the ring is within five crops of the best option. The inset
+        # above is what actually mattered; this choice is close to a wash and
+        # is left as it was.
         b = max(3, int(min(ih, iw) * 0.22))
         top    = crop_bgr[:b, :].reshape(-1, 3)
         bottom = crop_bgr[-b:, :].reshape(-1, 3)
