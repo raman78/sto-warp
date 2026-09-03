@@ -13,6 +13,7 @@ written for people who read or change the code.
 | [`BOFF_DETECTION.md`](BOFF_DETECTION.md) | BOFF panel — profession markers, seat layout |
 | [`TRAIT_DETECTION.md`](TRAIT_DETECTION.md) | Trait panels — grid localisation, section assignment |
 | [`SHIP_INFO_DETECTION.md`](SHIP_INFO_DETECTION.md) | Ship name / class / tier from the top band, and their bboxes |
+| [`EMPTY_AND_INACTIVE_SLOTS.md`](EMPTY_AND_INACTIVE_SLOTS.md) | Recognising that a slot holds nothing: the fixed rule, the models, and what the labels are for |
 | [`sto_slots_rules.md`](sto_slots_rules.md) | Which slots exist per screen, and the game rules behind them |
 
 ## Data and sync
@@ -21,7 +22,7 @@ written for people who read or change the code.
 |---|---|
 | [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md) | One confirmation's journey: client → staging → merge → model → client |
 | [`SYNC_ARCHITECTURE.md`](SYNC_ARCHITECTURE.md) | The seven refresh phases, their TTLs and freshness rules |
-| [`CARGO_DATA_PLAN.md`](CARGO_DATA_PLAN.md) | Where item/ship reference data comes from and how it is cached |
+| [`CARGO_DATA_PLAN.md`](CARGO_DATA_PLAN.md) | Where item/ship reference data comes from, how it is cached, and how a row maps back to its wiki page |
 | [`SETS_FORMAT_CONTRACT.md`](SETS_FORMAT_CONTRACT.md) | The build-JSON format SETS reads: how it is frozen, validated on export, and watched for upstream drift |
 
 ## Workflows
@@ -38,7 +39,7 @@ written for people who read or change the code.
 | Doc | Scope |
 |---|---|
 | [`data_source_audit.md`](data_source_audit.md) | Data-flow audit log, invariants Z1–Z6, decisions D-A…D-H (in Polish) |
-| [`client_user_view_filter.md`](client_user_view_filter.md) | Z5 closure follow-up from that audit (in Polish) |
+| [`client_user_view_filter.md`](client_user_view_filter.md) | Where `__empty__` / `__inactive__` are stopped before they reach a user or a build — Z5 closure from that audit |
 | [`REMOTE_SYNC_AUDIT.md`](REMOTE_SYNC_AUDIT.md) | Capacity check on the upload/download paths before wider release |
 | [`warp_ml_roadmap.md`](warp_ml_roadmap.md) | Layout + content recognition roadmap, P0–P11 |
 

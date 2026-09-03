@@ -2525,7 +2525,7 @@ class WarpCoreWindow(QMainWindow):
         if chosen is act_vger and v_url:
             QDesktopServices.openUrl(QUrl(v_url))
         elif chosen is act_wiki:
-            QDesktopServices.openUrl(QUrl(wiki_url(name)))
+            QDesktopServices.openUrl(QUrl(wiki_url(name, slot)))
 
     def _change_boff_group_type(self, parent_item, old_label: str, new_label: str):
         """Change all items in a BOFF group to a new group type and rematch."""
@@ -4372,6 +4372,22 @@ class WarpCoreWindow(QMainWindow):
                     f"auto-accept: SKIP poison vector slot={slot!r} "
                     f"name={name!r} conf={conf:.2f} src='session' — "
                     f"virtual labels from session require manual confirmation"
+                )
+                continue
+            # The mirror of the rule above, and the more damaging direction:
+            # a blank cell accepted under an item's name teaches the gallery
+            # that the item is what nothing looks like, and the recogniser
+            # then answers with it on every blank cell. That is how 20 of the
+            # 29 community crops of 'Charged Particle Burst' came to be
+            # pictures of inactive BOFF slots.
+            from warp.recognition.icon_matcher import _real_crop_looks_blank
+            if (name not in VIRTUAL_ITEM_NAMES
+                    and ri.get('crop_bgr') is not None
+                    and _real_crop_looks_blank(ri['crop_bgr'])):
+                _sl.info(
+                    f"auto-accept: SKIP blank cell slot={slot!r} "
+                    f"name={name!r} conf={conf:.2f} — the crop reads as an "
+                    f"empty/inactive slot, so the name needs a human"
                 )
                 continue
             ri['state'] = 'confirmed'

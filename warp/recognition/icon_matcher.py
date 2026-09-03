@@ -176,6 +176,36 @@ def _base_item_name(icon_name: str, known_names: set[str]) -> str:
     return icon_name
 
 
+def _real_crop_looks_blank(crop_bgr) -> bool:
+    """The mirror of `_virtual_crop_looks_real`: a crop carrying a real item's
+    name that is in fact an empty or inactive cell.
+
+    Every other guard in this file looks one way — a colourful crop labelled
+    `__empty__`. Nothing looked for the opposite, and it is the more damaging
+    of the two: a blank cell filed under an item's name teaches the gallery
+    that this item *is* what nothing looks like, and the recogniser then
+    answers with that item on every blank cell it meets. Confirming those
+    answers feeds the loop.
+
+    Measured on the community mirror 2026-09-03: of 9227 crops carrying a real
+    item name, 25 are blank cells, and 20 of those 25 are the same name —
+    `Charged Particle Burst`, which is 20 of the 29 crops that class has. An
+    inactive BOFF cell sits at cosine 0.92 from those 20 and at 0.45 from the
+    9 genuine ones, so the confusion is entirely their doing.
+
+    The judgement is `LayoutDetector._classify_cell`, the same function the
+    pipeline uses to decide a cell is blank before any matching runs. Measured
+    against user-confirmed ground truth it calls 2 of 5833 real icons blank
+    (0.03%), which is the cost of this guard: those two crops do not become
+    session examples, and there are hundreds of others for their classes.
+    """
+    try:
+        from warp.recognition.layout_detector import LayoutDetector
+        return LayoutDetector._classify_cell(crop_bgr) != 'active'
+    except Exception:
+        return False
+
+
 def _virtual_crop_looks_real(crop_bgr) -> bool:
     """Visual sanity check for a virtual-labeled crop (__empty__/__inactive__).
     Returns True when the crop is too bright AND too colour-rich to be a real
@@ -1284,6 +1314,28 @@ class SETSIconMatcher:
         import hashlib
         return hashlib.sha1(crop_bgr.tobytes()).hexdigest()
 
+    @staticmethod
+    def _template_is_degenerate(crop_bgr: 'np.ndarray') -> bool:
+        """True for a crop of one flat colour, which cannot serve as a template.
+
+        `TM_CCOEFF_NORMED` divides by the template's standard deviation. For a
+        constant template that is 0/0, and OpenCV's guard resolves it to
+        exactly 1.00 — against *any* query, colourful or not. Two such crops
+        (pure black, labelled `__empty__`) reached the community pool, and
+        every real icon in every screenshot was therefore also offered
+        `__empty__` at 0.80 + 0.20·histogram ≈ 0.80–0.85. Measured over the
+        301 rows of recog_runs.jsonl written before this guard: not one
+        session score fell between 0 and 0.80, so no genuine match below that
+        floor could ever surface, and the anti-virtual guards had to shoot the
+        false `__empty__` down slot by slot.
+
+        The reverse case is harmless and stays allowed — a constant *query*
+        against a real template scores 0.00, which is the correct verdict.
+        """
+        import cv2
+        return float(cv2.resize(crop_bgr, (MATCH_SIZE, MATCH_SIZE),
+                                interpolation=cv2.INTER_AREA).std()) < 1e-6
+
     @classmethod
     def add_session_example(cls, crop_bgr: 'np.ndarray', name: str,
                             origin: str = 'session') -> None:
@@ -1301,6 +1353,18 @@ class SETSIconMatcher:
         """
         import cv2
         if crop_bgr is None or crop_bgr.size == 0 or not name.strip():
+            return
+        if cls._template_is_degenerate(crop_bgr):
+            # Info, not debug: this fires twice for the whole community pool,
+            # and a crop silently dropped from the seed is exactly the kind of
+            # thing that should be visible in the log when a name goes missing.
+            log.info(f'WARP: session example rejected — {name!r} ({origin}) is a '
+                     f'single flat colour, which would match every query at 1.00')
+            return
+        if not name.startswith('__') and _real_crop_looks_blank(crop_bgr):
+            log.info(f'WARP: session example rejected — {name!r} ({origin}) is a '
+                     f'blank cell, and seeding it would teach the matcher that '
+                     f'an empty slot is that item')
             return
         crop_hash = cls._crop_hash(crop_bgr)
         if origin == 'user':

@@ -224,7 +224,7 @@ overall picture:
   behaviour change — the audit confirmed the existing filter is
   sufficient and the input-side belt-and-braces guard is kept.
 - **Poison-filter flag** (commit `91cd30d`). `sync_client` now carries
-  an explicit `_poison_filter_enabled` flag that surfaces in audit
+  an explicit `_POISON_FILTER_ENABLED` flag that surfaces in audit
   logs, making it possible to verify in production that obvious
   mislabels are blocked before they reach staging. Runtime behaviour
   unchanged.

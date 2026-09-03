@@ -1,238 +1,258 @@
-# Client USER VIEW filter — Z5 closure audit
+# Virtual labels in the client — where they are stopped
 
-> Post-audit TODO #1 z `docs/data_source_audit.md` (Fragment H, D-H.7).
->
-> **Cel:** zmapować gdzie w kliencie sto-warp filtrujemy klasy wirtualne
-> (`__empty__`, `__inactive__`, `__boff_*`) na **wyjściu** rozpoznania
-> (k-NN seed, recognition results, build planner output, UI render),
-> żeby bezpiecznie zamknąć **Z5** od strony klienta i odblokować **D-B.3**
-> (komentowanie filtra na *wejściu* w `sync_client.py:434-436`).
->
-> Status: closure dla Z5 — pokrycie input (D-A.1) + output (ten dokument).
->
-> **`dev/`** to lokalny warsztat maintainera — katalog jest w całości
-> w `.gitignore` i nie ma go w checkoutcie. Ścieżki `dev/*.py` w tym
-> dokumencie są wskaźnikami do odtworzenia pomiaru, nie skryptami do
-> uruchomienia z repo.
+Scope: the client side of invariant **Z5** from
+[`data_source_audit.md`](data_source_audit.md) (in Polish). Z5 says that the
+virtual classes — `__empty__`, `__inactive__` and the `__boff_*` row hints —
+are legitimate labels for the ML pipeline but must never reach the user: not
+as an item name in an exported build, not as a thumbnail, not as text in the
+review panel.
 
----
+After decision D-A.1 the training set is one shared pool, so `__*` is allowed
+*into* the data. Z5 therefore has to be satisfied on the way **out**: at each
+point where recognition output is presented to a user or written to a build.
+This document is the map of those points, the reasoning behind each, and the
+decisions taken about them. It is the closure of post-audit TODO #1 (D-H.7).
 
-## 1. Z5 — pełne brzmienie
-
-Z `docs/data_source_audit.md` §2:
-
-> **Klasy wirtualne (`__*`) są legalne dla ML, ale nie dla seedingu k-NN
-> usera.** ML musi je rozróżniać; user dostaje tylko cropy itemów z gry.
->
-> Konsekwencja: trzeba mieć rozróżnienie: dane ML mogą zawierać `__*`,
-> dane „cropy dla usera" nie.
-
-Po **D-A.1** `data/` jest jednym wspólnym zbiorem (ML + k-NN seed klienta).
-Z5 musi więc być realizowane w **filtrach na wyjściu** w kliencie:
-filtrowanie nie kiedy `__*` wchodzi do `data/`, tylko kiedy `data/` jest
-konsumowany do prezentacji/użycia po stronie usera.
+`dev/` is the maintainer's local working set — it is gitignored in its
+entirety and is not in a checkout. Paths under `dev/` here are pointers for
+reproducing a measurement, not scripts to run from the repo.
 
 ---
 
-## 2. Mapa filtrów `__*` w kliencie
+## 1. Which labels this is about
 
-Grep `__empty__|__inactive__|__boff_|startswith('__'` w `warp/`
-(z wyłączeniem trenera produkującego modele, gdzie virtual to legalna
-klasa ML).
-
-### 2.1 RECOGNITION INPUT — `recognition/icon_matcher.py`
-
-Te filtry chronią Stage 0 (pHash override z `knowledge.json`) przed
-zatrutymi wpisami w knowledge.json — to **defense-in-depth na poziomie
-modelu**, niezależne od kontroli backendu.
-
-| Linia | Co robi | Klasa filtra |
+| Label | Produced by | Means |
 |---|---|---|
-| 244 | Suppression Stage 0 pHash override jeśli `name.startswith('__')` lub `Test Item Name` — odrzuca fallback do ML/template | input → recognizer |
-| 260-267 | Embedder cross-check w Stage 0: jeśli pHash override mówi „X", ale embedder mówi `__*` z conf ≥ 0.40 → suppress override | input → recognizer |
-| 907-916 | `seed_from_training_data`: skip jeśli virtual label + colourful crop (poison) | seed → ML session pool |
-| 996-1001 | `seed_from_community_crops`: skip jeśli virtual label + colourful crop (poison) | seed → ML session pool |
+| `__empty__` | cell pre-classifier, embedder gallery, user confirmation | the slot exists and holds nothing |
+| `__inactive__` | same | the slot is not unlocked at this rank / tier |
+| `__boff_<profession>` | `LayoutDetector` only | "a Tac/Eng/Sci ability could sit in this row" |
 
-**Uwaga:** seedery (907, 996) NIE filtrują virtual jako klasy — filtrują
-„virtual label + colourful crop" jako *mismatch* (typowy poison: real ikona
-mislabeled jako empty/inactive). Prawdziwe `__empty__` crops (dim, uniform)
-**są seedowane** jako legalne session examples — żeby anti-virtual-bias
-combine stage miał kontekst dla zwycięstwa real-icon nad virtual-session.
+The first two are real classes: the models are trained on them, users confirm
+them in WARP CORE, and they travel to the community dataset. The third never
+becomes an item name — see §2.5.
 
-### 2.2 RECOGNITION OUTPUT — `recognition/icon_matcher.py` (combine stage)
+---
 
-Logika **„anti-virtual-bias"** w combine stage (linie 313-410) — to jest
-**rdzeń ochrony Z5 dla usera**. Trzy reguły suppress virtual:
+## 2. The map
 
-| Linia | Reguła | Sytuacja |
+### 2.1 Read path — the community knowledge override
+
+`SETSIconMatcher.match` consults the community pHash table first, and that
+table is the one input the client does not control. Two guards sit there:
+
+| Guard | Behaviour |
+|---|---|
+| virtual / test-entry suppression | an override naming `__*` or `Test Item Name` is skipped, and matching falls through to the ML and template stages |
+| embedder cross-check | when the override claims a real item but the embedder answers `__*` at conf ≥ `VIRTUAL_OVERRIDE_CONF`, the override is suppressed |
+
+This is defense-in-depth at the model level, independent of what the backend
+accepts. It exists because a poisoned entry used to turn a real icon into an
+empty slot at confidence 1.00.
+
+### 2.2 Read path — the anti-virtual rules in the combine stage
+
+This is the core of Z5 for the user. After the knowledge, ML, template and
+session stages have each produced a candidate, `SETSIconMatcher.match`
+decides whether a virtual answer is allowed to win. Four independent rules
+suppress it; any one firing is enough:
+
+| Rule | Fires when | Constant |
 |---|---|---|
-| 321-323 | `ml_real = ml_name not startswith('__') and ml_conf ≥ 0.40` → ML wins | ML mówi real icon — virtual session/template są tłumione |
-| 348-350 | `sess_virtual_perfect = virtual + sess_score ≥ 0.95` + ML mówi real z conf ≥ 0.15 → poison guard | Self-match z poisoned training data — kill virtual |
-| 336-356 | `query_looks_real = bright > 0.15 AND rich > 0.15` + sess/template wirtualne → kill virtual | Query crop bright + colourful, virtual logicznie niemożliwy |
+| ML is confident and real | the embedder names a real item at conf ≥ 0.40 | `VIRTUAL_OVERRIDE_CONF` |
+| poison guard | session returns a virtual at ≥ 0.95 (a pixel-perfect self-match) while the embedder names any real item at ≥ 0.15 | `SESSION_PIXEL_PERFECT`, `POISON_GUARD_ML_MIN` |
+| embedder margin | the best real gallery row beats the best virtual row by ≥ 0.05, whatever the absolute confidence | `EMBED_REAL_VS_VIRTUAL_MARGIN` |
+| query sanity | the crop is itself bright and colour-rich (> 0.15 on both) while session or template answered virtual | `VIRTUAL_SEED_BRIGHT_RATIO`, `VIRTUAL_SEED_RICH_RATIO` |
 
-Output ostateczny: jeśli żadna z trzech reguł nie zadziała, virtual może
-wygrać i wrócić jako recognition result do `warp_importer`. Wtedy filter
-przechodzi do warstwy 2.3/2.4.
+The last three announce themselves in `warp_detection.log` as
+`poison-guard fired`, `embed-margin guard fired` and `query-sanity guard
+fired`, each naming the scores that triggered it. That is how the rules can be
+checked against a running program rather than against this table.
 
-| Linia | Co robi | Klasa filtra |
+If no rule fires, a virtual answer *may* win and is returned to
+`WarpImporter` — which is correct, because an empty slot really is empty most
+of the time. Everything downstream of §2.3 assumes this and filters at the
+point of use.
+
+`SETSIconMatcher._thumb_for_name` returns nothing for a virtual name, so no
+reference picture is ever shown for one.
+
+### 2.3 Seed path — what may become a session example
+
+How well the blank/occupied judgement itself works, and what these labels are
+for, is [`EMPTY_AND_INACTIVE_SLOTS.md`](EMPTY_AND_INACTIVE_SLOTS.md); this
+section covers only what is allowed into the pool.
+
+Confirmed crops are seeded into the in-memory k-NN pool by
+`SETSIconMatcher.seed_from_training_data` and `seed_from_community_crops`.
+Two filters apply, and they answer different questions:
+
+| Filter | Rejects | Why |
 |---|---|---|
-| 404-405 | `_thumb_for_name`: returns None dla virtual (`startswith('__')`) | UI presentation |
+| `_virtual_crop_looks_real` | a crop labelled `__*` that is bright and colour-rich | a real icon mislabelled as empty; seeding it makes it self-match forever |
+| `_real_crop_looks_blank` | a blank cell carrying a real item's name | the mirror, and the more damaging one: it teaches the gallery that the item is what nothing looks like. Added 2026-09-03 after 20 of the 29 community crops of `Charged Particle Burst` turned out to be inactive BOFF cells |
+| `SETSIconMatcher._template_is_degenerate` | a crop of one flat colour, any label | `TM_CCOEFF_NORMED` divides by the template's standard deviation, so a constant template scores exactly 1.00 against every query |
 
-### 2.3 OUTPUT TO BUILD PLANNER — `warp_importer.py` + `build_writer.py`
+Neither filters virtual as a *class*. A genuine `__empty__` crop — dim,
+uniform but not perfectly flat — is seeded, and has to be: the anti-virtual
+rules above compare a real candidate against a virtual one, and they need the
+virtual side to exist.
 
-To są **konsumenci recognition results** którzy zapisują build do SETS
-(jeśli bridge aktywny). Virtual NIE może trafić do build planner —
-filter MUSI zatrzymać go na tym poziomie.
+The flat-colour rejection was added 2026-08-31 after two pure-black
+`__empty__` crops in the community pool were found to offer every real icon
+`__empty__` at ≈ 0.80–0.85. Full measurement in
+[`ML_PIPELINE.md`](ML_PIPELINE.md) §"A session example must have structure".
 
-| Plik:linia | Co robi |
+### 2.4 Write path — the build
+
+Virtual names must not reach a build planner. `warp/build_writer.py` defines
+`VIRTUAL_ITEM_NAMES` and gates on it at every write:
+
+| Construct | Role |
 |---|---|
-| `VIRTUAL_ITEM_NAMES` | `VIRTUAL_ITEM_NAMES = frozenset({'__empty__', '__inactive__'})` |
-| `warp_importer.py:182-184` | Confidence weighting: virtual przy low-conf liczy się jako 0.5× — depriorytetyzacja |
-| `WarpImporter._process_image` | Mapping `cell_state` ('empty'/'inactive') → vname (`__empty__`/`__inactive__`) — translation layer |
-| `WarpImporter._process_image` | `if name not in ('__empty__', '__inactive__')` — skip virtual w jakiejś agregacji |
-| `warp_importer.py:2576-2598` | BOFF profession resolution: virtual → seat's typed profession (label transform) |
-| `WarpImporter._remap_boff_seat_slots` | `names_set.update(VIRTUAL_ITEM_NAMES)` — virtual jako legalne w kontekście możliwych nazw |
-| `WarpImporter._remap_boff_seat_slots` | `if item_name in VIRTUAL_ITEM_NAMES: ...` — handling virtual w slot |
-| `VIRTUAL_ITEM_NAMES` | `VIRTUAL_ITEM_NAMES = frozenset({'__empty__', '__inactive__'})` |
-| `_apply_alien_species` | `if not ri.name or ri.name in VIRTUAL_ITEM_NAMES: continue` — SKIP zapis do build |
-| `_write_seat_specs` | Count „active" slots: `if ri.name and ri.name not in VIRTUAL_ITEM_NAMES` |
-| `_match_clusters_to_seats` | BOFF slot handling: virtual = empty slot dla rank check |
+| `_write_equipment_and_traits` | skips a slot whose name is empty or virtual — the gate that keeps `__empty__` out of the exported build |
+| `_match_clusters_to_seats` | counts only non-virtual items when deciding how full a BOFF seat is |
+| `_write_abilities` | treats a virtual name as an unfilled ability slot for the rank check |
 
-**Kluczowy:** `_apply_alien_species` in `build_writer.py` — to jest **ostateczny filter dla build
-output**. Virtual nigdy nie trafia jako nazwa itemu do build planner.
+`warp_importer._recog_score` is not a filter but is worth knowing about: a
+virtual match below `IMPORTER_CONFIDENT_VIRTUAL_THRESHOLD` counts at half
+weight in the reported recognition score, so an uncertain "nothing here" does
+not inflate the number.
 
-### 2.4 TRAINER UI RENDER — `trainer/trainer_window.py`
+`boff_keys._seat_label_from_items` skips virtual names (and the empty string)
+via `_VIRTUAL_NAMES` when it collects the abilities that describe a seat, so a
+seat is never labelled from an empty cell.
 
-Trener (WARP CORE) wyświetla wyniki rozpoznania userowi do confirmation.
-Virtual NIE może być pokazane jako "`__empty__`" — musi być human-friendly.
+### 2.5 `__boff_*` never leaves the layout detector
 
-| Linia | Co robi |
-|---|---|
-| 1998-2019 | Render: jeśli `is_virtual`, pokaż `'[empty slot]'` / `'[inactive slot]'` zamiast literalnej nazwy |
-| 2864 | `elif name not in VIRTUAL_ITEM_NAMES` — gating jakiejś walidacji nie-virtualem |
-| 3629 | `if name in VIRTUAL_ITEM_NAMES and ri.get('src') == 'session': ...` — never auto-accept virtual z session crop |
-| 3727 | `set(self._build_search_candidates(slot)) \| set(VIRTUAL_ITEM_NAMES)` — search candidates include virtuals jako wybór dla manual labeling |
-| 4011 | `if not name or name in VIRTUAL_ITEM_NAMES: ...` — skip virtual w jakiejś agregacji |
-| 4135, 4301 | `for vname in sorted(VIRTUAL_ITEM_NAMES): ...` — dodawanie virtuali do labelers (manual selection) |
+`LayoutDetector._detect_via_full_scan` tags a detection with
+`__boff_<profession>` as its *item type*, and `_score_row_for_slot` reads that
+tag when scoring a row against a candidate slot. `_get_item_type` returns the
+same form. Nothing outside `layout_detector.py` reads these names — they are
+row hints on a detection tuple, never an item name — so no downstream filter
+is needed for them, and none exists.
 
-W trenerze virtual ma **dwa rola**:
-- (a) wyświetlany jako human-friendly `[empty slot]` (UX, nie filter).
-- (b) dostępny jako manual label dla user-confirmation („tak, to jest empty").
+### 2.6 Trainer UI — display, and deliberate availability
 
-Bez tego user nie mógłby corectly oznaczyć empty slotów do treningu ML.
+WARP CORE shows recognition output to the user, so a raw `__empty__` would be
+both ugly and ambiguous. Two behaviours, and only the first is a filter:
 
-### 2.5 BOFF KEYS — `recognition/boff_keys.py`
+- `_review_row_visuals` renders `[empty slot]` / `[inactive slot]` instead of
+  the literal name.
+- The virtual names are deliberately **offered** as labels: they appear in the
+  rematch candidate lists and in the item selector, because a user must be
+  able to say "yes, this slot is empty". Without that there would be no
+  ground truth for these classes at all.
 
-| Linia | Co robi |
-|---|---|
-| 158 | `_VIRTUAL_NAMES = frozenset({'', '__empty__', '__inactive__'})` |
-| 190 | Filter: `if _field(it, 'name', '') not in _VIRTUAL_NAMES` — collect BOFF abilities POMIJAJĄC virtual |
+One protection sits between the two: `_finish_bbox_drawn` refuses to
+auto-accept a virtual name that came from a session match. That is the
+self-poisoning path — a virtual is written, becomes a session example, and
+self-matches from then on — so it requires a human.
 
-To OUTPUT filter — BOFF ability sheet dla usera nie zawiera virtual.
+### 2.7 Upload path — the only input-side filter
 
-### 2.6 LAYOUT DETECTOR — `recognition/layout_detector.py`
+`WARPSyncClient` carries `_is_poison_label`, gated by the module-level flag
+`_POISON_FILTER_ENABLED`. When enabled, a contribution whose label starts with
+`__` or equals `Test Item Name` is dropped before the POST.
 
-Generator `__boff_<prof>` labels. To NIE jest filter, to **produkcja** tych
-specjalnych virtual labels jako kontekst dla detekcji. Virtual labels dla
-slotów BOFF dają informację „tu może siedzieć Tac/Eng/Sci ability".
+This filter does not protect the user view. It protects nothing on this side
+at all: it exists to mirror the backend's own policy so the client does not
+spend its daily contribution budget on requests the backend will refuse. Its
+current state is the subject of §4.
 
-Linie 288, 305-306, 2436: generate `__boff_<prof>`.
-Linie 417, 2212, 2890: handle `__empty__` jako expected outcome (informational).
+### 2.8 Maintainer tools
 
-### 2.7 KNOWLEDGE LAYER (sync_client) — INPUT FILTER
-
-**Jedyny INPUT-side filter w kliencie**, do zlikwidowania per D-B.3:
-
-| Linia | Co robi |
-|---|---|
-| `knowledge/sync_client.py:434-436` | `if _name.startswith('__') or _name == 'Test Item Name': return` — filter przy contribute knowledge |
-
-Ten filter NIE chroni usera; chroni `knowledge.json` przed virtual hard-override.
-Po **D-A.1** chcemy żeby `__*` mogło trafić do `knowledge.json` jako legalne,
-a Stage 0 (`SETSIconMatcher.__init__` in `icon_matcher.py`) ma **defense-in-depth** który je tam i tak
-odrzuci jako hard-override. Zatem `sync_client.py:434-436` jest **redundantny**.
-
-### 2.8 SCRUB / CONFLICT REVIEW TOOLS — maintainer tools
-
-| Plik:linia | Co robi |
-|---|---|
-| `tools/scrub_training_data.py:44-147` | Offline poison scrub — visual sanity check dla virtual labels |
-| `tools/conflict_reviewer.py:47-56` | Conflict review — virtual identification |
-
-Te tools są **maintainer-only**, nie wpływają na user view runtime.
+`warp/tools/scrub_training_data.py` (offline poison scrub, with a visual
+review mode) and `warp/tools/conflict_reviewer.py` operate on the training
+store. They are maintainer-only and do not run in the user's session.
 
 ---
 
-## 3. Klasyfikacja filtrów wg Z5
+## 3. Classification
 
-**Filtry CHRONIĄCE USER VIEW** (Z5 closure od strony wyjścia):
+**Protecting the user view** — these are what close Z5 on the output side:
 
-1. **Stage 0 defense-in-depth** (`icon_matcher.py:244, 260-267`)
-   — chroni przed zatrutym `knowledge.json` na poziomie pHash override.
-2. **Anti-virtual-bias combine** (`icon_matcher.py:321-356`)
-   — trzy reguły suppress virtual w final recognition result.
-3. **Seed poison guard** (`icon_matcher.py:907, 996`)
-   — chroni session pool przed self-match na poisoned crops.
-4. **`_thumb_for_name` None dla virtual** (`SETSIconMatcher.match` in `icon_matcher.py`)
-   — UI nie pokazuje thumbnail virtual.
-5. **`build_writer.py:231, 455, 573`**
-   — virtual nie ląduje w build planner.
-6. **`warp_importer.py:182, 2576-2598`**
-   — confidence weighting + BOFF profession resolution.
-7. **`_seat_label_from_items` in `boff_keys.py`**
-   — BOFF ability sheet pomija virtual.
-8. **Trainer UI render** (`trainer_window.py:1998-2019`)
-   — human-friendly '[empty slot]' zamiast `__empty__`.
+1. Knowledge-override suppression and the embedder cross-check (§2.1).
+2. The four anti-virtual rules in the combine stage (§2.2).
+3. The two seed-time crop filters (§2.3).
+4. `_thumb_for_name` returning nothing for a virtual name (§2.2).
+5. The three write gates in `build_writer` (§2.4).
+6. `_seat_label_from_items` in `boff_keys` (§2.4).
+7. `_review_row_visuals` in the trainer (§2.6).
 
-**Filtry NIE-USER-VIEW** (do likwidacji per D-B.3 lub legalnie internal):
+**Not user-view filters** — legitimate internals, or subject to §4:
 
-- `sync_client.py:434-436` — input filter dla knowledge contribution, redundantny.
-- `_bbox_iou` in `trainer/training_data.py`, `_load_real_crops` in `trainer/embedder_trainer.py` — ML training data, virtual LEGALNE per D-A.1.
-- `layout_detector.py:288, 305, 2436` — PRODUKCJA `__boff_*` labels, internal.
-- `warp/tools/scrub_training_data.py`, `warp/tools/conflict_reviewer.py` — maintainer-only.
+- `_is_poison_label` in `sync_client` — upload eligibility, not presentation.
+- `training_data.py` and `embedder_trainer.py` — ML training data, where `__*`
+  is legal end-to-end per D-A.1.
+- `__boff_*` production in `layout_detector` — internal row hints (§2.5).
+- `scrub_training_data.py`, `conflict_reviewer.py` — maintainer-only.
 
 ---
 
-## 4. Decyzje Z5 closure
+## 4. Decisions
 
-| # | Decyzja | Notatka |
-|---|---------|---------|
-| Z5-C.1 | **Wielowarstwowa obrona Z5 od strony wyjścia istnieje i jest wystarczająca.** 8 punktów filtra wymienionych w §3 zapewnia że żaden `__*` nie dotrze do build plannera (build_writer.py:231), thumbnail UI (icon_matcher.py:404), BOFF sheet (boff_keys.py:190) ani recognition result na real-looking icon (icon_matcher.py:321-356 anti-virtual-bias). | Z5 zamknięte od wyjścia. |
-| Z5-C.2 | **`sync_client.py:434-436` może być bezpiecznie zakomentowany (D-B.3).** Defense-in-depth Stage 0 (`SETSIconMatcher.__init__`) złapie `__*` z `knowledge.json` jako hard-override suppression — nawet jeśli backend wpisze tam virtual. Redundancja jest zamierzona (D-A.1 spec). | Odblokowanie D-B.3. |
-| Z5-C.3 | **Komentowanie filtra w `sync_client.py` musi być symetryczne z komentowaniem w backendzie (D-A.1 + D-G.1).** Nie wolno wyłączyć tylko jednego — albo oba (klient + backend), albo żaden. Rollback jednoczesny. | Spójność rollback. |
-| Z5-C.4 | **Anti-virtual-bias thresholds nie powinny być modyfikowane bez evidence z combat testów.** VIRTUAL_OVERRIDE_CONF=0.40, POISON_GUARD_ML_MIN=0.15, SESSION_PIXEL_PERFECT=0.95, VIRTUAL_SEED_BRIGHT_RATIO=0.15, VIRTUAL_SEED_RICH_RATIO=0.15 — kalibrowane na tactical-console / Kentari-launcher (icon_matcher.py:55). VIRTUAL_SEED_* podniesione z 0.07 → 0.15 dnia 2026-07-17 po wizualnym przeglądzie 20 community-mirror crops (`dev/diag_view_community_poison.py`): genuine empty/inactive BOFF slots sięgają ~12% bright/rich, realne mislabeled icons ≥ 19%. Wszelka zmiana wymaga re-kalibracji. | Frozen calibration. |
-| Z5-C.5 | **Trainer UI '[empty slot]' / '[inactive slot]' render zostaje.** To jest UX, nie filter. User MUSI widzieć i móc oznaczać empty/inactive — bez tego brak labeling-do-treningu klasy `__empty__`/`__inactive__`. | Nie ruszać. |
-| Z5-C.6 | **Layout detector `__boff_*` generation zostaje.** To są internal slot type hints dla Stage 1+, nigdy nie docierają do user view (filter w boff_keys.py:190 i build_writer.py:231 przechwytują). | Nie ruszać. |
+Decision IDs are referenced from `data_source_audit.md` and from
+`sync_client.py`; they are kept stable even where the finding has moved on.
 
----
-
-## 5. Wnioski dla implementacji D-B.3
-
-D-B.3 (komentowanie `sync_client.py:434-436`) jest **bezpieczne** i może
-iść w PHASE 4 razem z komentowaniem analogicznego filtra w backendzie
-(D-A.1, D-G.1). Bez tego dokumentu nie było wiadomo czy filter w
-sync_client chroni USER VIEW czy tylko knowledge.json — okazało się że
-**tylko knowledge.json**, i to redundantnie wobec Stage 0 defense-in-depth.
-
-Mechanizm rollback: jeśli po deployu D-A.1 + D-B.3 zaobserwujemy że
-Stage 0 defense-in-depth jednak przecieka (np. `_classify_ml` zwraca
-real z conf < 0.40 i embedder cross-check nie odrzuca virtual override),
-**odkomentowujemy `sync_client.py:434-436` + analogiczne 3 miejsca
-w backendzie jednym commitem**. Rollback ma być jednoatomowy.
+| # | Decision | Status |
+|---|---|---|
+| Z5-C.1 | The output-side defence is layered and sufficient: no `__*` reaches a build, a thumbnail, a BOFF seat label or a recognition result on a real-looking icon. | Holds. Re-verified 2026-08-31; the combine stage now has four rules rather than the three mapped in June, and a fifth filter at seed time. |
+| Z5-C.2 | The client's upload filter is redundant *for user safety* — the knowledge-override suppression catches `__*` on the read path regardless of what the backend stores. | Holds. It is not redundant for budget: see Z5-C.7. |
+| Z5-C.3 | The client filter and the backend filter must be flipped together, never one alone. | **Currently violated** — see Z5-C.7. |
+| Z5-C.4 | The anti-virtual thresholds are calibrated and must not be changed without evidence. `VIRTUAL_OVERRIDE_CONF` 0.40, `POISON_GUARD_ML_MIN` 0.15, `SESSION_PIXEL_PERFECT` 0.95, `VIRTUAL_SEED_BRIGHT_RATIO` / `VIRTUAL_SEED_RICH_RATIO` 0.15 each, `EMBED_REAL_VS_VIRTUAL_MARGIN` 0.05. The seed ratios were raised from 0.07 on 2026-07-17 after a visual review of community crops (`dev/diag_view_community_poison.py`): genuine empty and inactive BOFF slots reach ~12% bright/rich, real mislabelled icons ≥ 19%. | Holds. `tests/test_virtual_crop_guard.py` pins the seed ratios. |
+| Z5-C.5 | The `[empty slot]` / `[inactive slot]` rendering and the availability of virtual names as manual labels both stay. Removing either would leave the classes with no ground truth. | Holds. |
+| Z5-C.6 | `__boff_*` generation in the layout detector stays. | Holds, and on firmer ground than in June: these labels never leave `layout_detector.py`, so they do not depend on a downstream filter (§2.5). |
+| Z5-C.7 | **D-B.3 was implemented and rolled back.** The client filter was disabled on 2026-06-09 and re-enabled the next day (`76bff9f`) because the deployed backend answered HTTP 400 to every virtual label, burning the contribution budget. | Open — see §5. |
 
 ---
 
-## 6. Out-of-scope
+## 5. Current state and what is unresolved
 
-Następujące obszary celowo nie są w tym audycie:
+The two flags are out of step:
 
-- **Anti-virtual-bias re-tuning** — frozen calibration per Z5-C.4.
-- **Recognition pipeline refactor** — Stage 0/1/2/3 architecture niezmienna.
-- **BOFF keys algorithm** — `_VIRTUAL_NAMES` filter w `_seat_label_from_items` in `boff_keys.py` zostaje.
+| Side | Flag | Value on disk |
+|---|---|---|
+| client | `_POISON_FILTER_ENABLED` in `warp/knowledge/sync_client.py` | `True` — filtering |
+| backend | `_POISON_FILTER_ENABLED` in `sets-warp-backend` `main.py` | `False` — accepting |
+
+Z5-C.3 requires these to match. The asymmetry is in the safe direction — the
+client is the stricter of the two, so nothing extra reaches a user — but it
+means user confirmations of `__empty__` and `__inactive__` are still not
+reaching community knowledge, which is what D-A.1 and D-B.3 were for.
+
+The rejections that caused the June rollback came from a Space running a build
+older than the backend change; pushing to the backend's `main` did not deploy
+it. That was fixed on 2026-07-17 by an auto-deploy workflow, so the reason for
+the rollback is very likely gone.
+
+**Open question.** Does the deployed backend now accept a virtual label? It
+cannot be answered read-only — `/health` does not report the flag, and the
+only way to know is one deliberate contribution with a virtual label,
+observing whether the response is 200 or 400. Until that is done, the client
+flag stays `True`: flipping it on the strength of a source file in another
+repository is what produced the June rollback. When it is answered, flip both
+flags in one change per Z5-C.3, and record the result here.
+
+---
+
+## 6. Out of scope
+
+- Re-tuning the anti-virtual thresholds — frozen per Z5-C.4.
+- The recognition stage architecture itself.
+- The parent audit `data_source_audit.md`, which is in Polish and covers the
+  whole data flow rather than this one boundary.
 
 ---
 
 ## 7. Log
 
-- 2026-06-09: założenie dokumentu, mapa 8 filtrów USER VIEW + 1 filter INPUT
-  (sync_client.py:434-436), 6 decyzji Z5-C.1..Z5-C.6, odblokowanie D-B.3.
+- 2026-06-09: document created. Eight user-view filters mapped, decisions
+  Z5-C.1..Z5-C.6, D-B.3 unblocked.
+- 2026-06-10: D-B.3 rolled back on the client (`76bff9f`) — the deployed
+  backend rejected virtual labels. Not recorded here at the time.
+- 2026-08-31: rewritten in English and re-verified against the code. Three
+  claims were wrong: the build gate is `_write_equipment_and_traits`, not
+  `_apply_alien_species`; the combine stage has four suppression rules, not
+  three; `__boff_*` labels never leave the layout detector, so they do not
+  rely on a downstream filter. Added the flat-template seed filter, the
+  current flag divergence as Z5-C.7, and §5.

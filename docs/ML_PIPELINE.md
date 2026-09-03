@@ -445,6 +445,53 @@ The classifier and embedder are the *same* files for every install —
 no per-user variant on disk. ModelUpdater replaces them only when the
 remote `trained_at` is strictly later than the local one (§4).
 
+### A session example must have structure (2026-08-31)
+
+Both template stages score with `cv2.matchTemplate(..., TM_CCOEFF_NORMED)`,
+which divides by the template's standard deviation. For a template of one
+flat colour that is 0/0, and OpenCV's guard resolves it to exactly **1.00 —
+against every query**, colourful or not. The reverse is harmless: a flat
+*query* against a real template scores 0.00, which is the right answer.
+
+Two such crops (pure black, one 29×22 from a `Boff Universal` slot and one
+90×70 from `Body Armor`, both labelled `__empty__`) reached the community
+pool. Their label is not wrong — that is why the seed-time poison guard, which
+looks for a *colourful* crop under a virtual label, let them through — but as
+templates they are degenerate. Every real icon in every screenshot was
+therefore also offered `__empty__` at `0.80 + 0.20 · histogram` ≈ 0.80–0.85,
+and the anti-virtual suppression rules (mapped in
+`docs/client_user_view_filter.md` §2.2) had to shoot it down slot by slot.
+
+Observable without reading any of this: three `guard fired` warnings per
+filled slot in `warp_detection.log`, and a `session` column that never left
+the 0.80s in the per-image match summary.
+
+Measured over the 301 rows `recog_runs.jsonl` held before the guard — the
+append-only record of what each stage scored, one line per matched slot —
+**not one session score fell between 0 and 0.80** (231 at or above it, 70 at
+zero, where a knowledge override short-circuited the stage). No genuine
+session match below that floor could surface at all.
+
+`SETSIconMatcher._template_is_degenerate` now rejects such a crop in
+`add_session_example`, which every seeder and the trainer's Accept callback
+go through. The rejection is logged at info level, so a name missing from the
+pool is visible rather than silent:
+
+```
+WARP: session example rejected — '__empty__' (community) is a single flat
+colour, which would match every query at 1.00
+```
+
+The cutoff is exact zero variance rather than a tolerance: one differing pixel
+in 4096 already scores 0.006 against an unrelated query, so there is no grey
+zone to allow for. 1373 virtual examples remain in the pool afterwards, so the
+ability to recognise a genuinely empty slot is unaffected.
+
+The guard is client-side only. The annotation is written before the session
+example is offered, so a flat crop still reaches `annotations.json` and still
+uploads; the two community crops keep arriving on every install until they are
+rejected upstream. What changes is that they can no longer answer a query.
+
 ---
 
 ## 7. Data stored on HuggingFace

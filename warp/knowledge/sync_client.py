@@ -46,14 +46,16 @@ from warp.debug import syslog as log
 # backend rejects them with HTTP 400 ("not eligible for community
 # knowledge"). We mirror that filter here to avoid spamming the backend
 # with foredoomed POSTs and to preserve the daily contribution budget.
-# Defense-in-depth in warp/recognition/icon_matcher.py:244 still
-# suppresses these as knowledge.json hard-overrides, so the user view
-# stays protected on the read path.
+# Defense-in-depth in `SETSIconMatcher.match` still suppresses these as
+# knowledge.json hard-overrides, so the user view stays protected on the
+# read path whatever this flag says.
 #
-# Per Z5-C.3 (docs/client_user_view_filter.md:197), this flag MUST stay
-# in lockstep with the backend's filter — never flip one without the
-# other. Toggle to False only as part of an atomic backend+client
-# rollback.
+# Per Z5-C.3 (docs/client_user_view_filter.md §4), this flag MUST stay in
+# lockstep with the backend's own `_POISON_FILTER_ENABLED` — never flip one
+# without the other. They are out of step today: the backend accepts these
+# labels and this side still drops them, because the deployed backend was
+# once answering HTTP 400 to every one of them. See §5 of that document for
+# what has to be established before flipping this back to False.
 _POISON_FILTER_ENABLED = True
 
 
@@ -464,9 +466,10 @@ class WARPSyncClient:
             return
 
         # Poison-label gate (D-A.1 / D-B.3) — wired through
-        # `_is_poison_label`, currently disabled by `_POISON_FILTER_ENABLED`
-        # at the top of this module. See policy block there for rationale
-        # and rollback instructions.
+        # `_is_poison_label` and currently enabled by
+        # `_POISON_FILTER_ENABLED` at the top of this module. See the policy
+        # block there for the rationale and for what would justify turning
+        # it off.
         if _is_poison_label(_name):
             log.debug(f'WARPSync: skipping ineligible label {_name!r}')
             return
