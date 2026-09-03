@@ -573,7 +573,7 @@ class AnnotationWidget(QWidget):
         if chosen is act_vger and v_url:
             QDesktopServices.openUrl(QUrl(v_url))
         elif chosen is act_wiki:
-            QDesktopServices.openUrl(QUrl(wiki_url(name)))
+            QDesktopServices.openUrl(QUrl(wiki_url(name, slot)))
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() != Qt.MouseButton.LeftButton: return

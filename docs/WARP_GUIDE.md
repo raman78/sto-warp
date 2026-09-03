@@ -358,7 +358,11 @@ Right-clicking any row in the Results tree (slot row or individual item) opens a
 - **Open in WARP CORE** — only shown when WARP is running inside the launcher window (not in standalone `sto-warp gui`). Jumps straight to the WARP CORE tab with the screenshot pre-selected so a correction can be made without scrolling through the file list.
 - **Open in WARP Fast Correction Mode** — hands the **entire current batch** (every screenshot in the run) to WARP CORE in a special temporary workspace that does not touch the local training set. Use this when a few items still need polishing before exporting the SETS JSON, but you do not want the fixes to permanently rewrite the standing training data. See [Fast Correction Mode](#65-fast-correction-mode).
 - **Open on vger.stobuilds.com** — opens the matching category page on vger (e.g. *space-equipment* or *starship-traits*) in your browser, where you can search for the item. Only shown for equipment and trait slots — BOFF abilities do not have a vger page.
-- **Open on STO Wiki** — opens the item's own page on the STO Wiki directly (e.g. *stowiki.net/wiki/Phaser_Beam_Array*).
+- **Open on STO Wiki** — opens the item's page on the STO Wiki in your browser.
+
+  The wiki usually does not title a page with the plain item name. Traits and bridge officer abilities carry a note in brackets — *Harmonic Shield Linkage (space trait)*, *Heisenberg Amplifier (ability)* — and an item with no page of its own is described on the page of the set it belongs to, so a console can land on *31st Century Temporal Technologies Set*. WARP does not guess the address from the name: it uses the page each item was catalogued from, so the link opens the right article instead of a "page does not exist" screen.
+
+  This is also why the slot the item sits in matters. *Adaptive Offense* is two different traits, one for space and one for ground, with a page each; whether you right-click it in a space trait row or a ground one is what picks between them. If an item was recognised into the wrong slot, the link still finds it — looking it up is usually what you want to do about a wrong name.
 
 The clicked filename is shown as a disabled header at the top of the menu, so it is always clear which file the action will affect — useful when the same slot has children from several different screenshots.
 
@@ -709,7 +713,7 @@ Every status can be changed. Pick the row, correct the name, and accept it — a
 **Right-click** any item row to open a menu with external links:
 
 - **Open on vger.stobuilds.com** — opens the relevant vger category page in your browser (equipment or traits). Not shown for BOFF abilities.
-- **Open on STO Wiki** — opens the item's wiki page directly so you can verify what the item looks like, what set it belongs to, etc.
+- **Open on STO Wiki** — opens the item's wiki page directly so you can verify what the item looks like, what set it belongs to, etc. Same behaviour as in the Results tree, including how the slot decides between two traits of the same name — see [Right-click — quick actions on a Results row](#right-click--quick-actions-on-a-results-row).
 
 At the bottom:
 - **Add BBox** — enter draw mode to add a missing box (Alt+A)

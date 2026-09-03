@@ -1242,7 +1242,7 @@ class ResultsView(QWidget):
                 act_vger = menu.addAction('Open on vger.stobuilds.com')
                 act_vger.setData(v_url)
             act_wiki = menu.addAction('Open on STO Wiki')
-            act_wiki.setData(wiki_url(ri.name))
+            act_wiki.setData(wiki_url(ri.name, ri.slot))
 
         chosen = menu.exec(global_pos)
         if chosen is None:

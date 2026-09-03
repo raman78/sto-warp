@@ -856,10 +856,108 @@ _SLOT_TO_VGER_PAGE: dict[str, str] = {
 }
 
 
-def wiki_url(name: str) -> str:
-    """STO Wiki URL for an item / trait / ability by name."""
-    from urllib.parse import quote_plus
-    return f'https://stowiki.net/wiki/{quote_plus(name.replace(" ", "_"))}'
+# Trait slots and the (environment, category) bucket `_build_traits` files
+# their contents under. Traits are where a display name alone is not enough:
+# 135 of them carry two or three wiki pages — `Adaptive Offense` exists as a
+# space trait and a ground trait, `Aggressive` as ground, bridge officer and
+# duty officer — and the slot is what says which one is on screen. Keyed the
+# same way `warp_importer._build_slot_candidates` keys `trait_slot_pools`, so
+# the page a slot links to is the page of the pool it was matched against.
+_TRAIT_SLOT_BUCKET: dict[str, tuple[str, str]] = {
+    'Personal Space Traits':  ('space',  'personal'),
+    'Personal Ground Traits': ('ground', 'personal'),
+    'Space Reputation':       ('space',  'rep'),
+    'Ground Reputation':      ('ground', 'rep'),
+    'Active Space Rep':       ('space',  'active_rep'),
+    'Active Ground Rep':      ('ground', 'active_rep'),
+}
+
+
+def _cargo_row(name: str, slot: str) -> dict | None:
+    """The cargo row *name* came from, using *slot* to pick the table.
+
+    Falls through to every other table when the slot says nothing useful or
+    the name is not in the table it names — a misrecognised item is shown
+    under the wrong slot, and looking it up on the wiki is exactly what the
+    user does about that. Each source is guarded on its own, matching the
+    try/except reads in `canonical_names`.
+    """
+    def _traits(env: str, cat: str):
+        return (traits().get(env) or {}).get(cat) or {}
+
+    def _equipment():
+        return {n: row
+                for key in sorted(equipment())
+                for n, row in (equipment()[key] or {}).items()}
+
+    if slot in _TRAIT_SLOT_BUCKET:
+        first = [lambda: _traits(*_TRAIT_SLOT_BUCKET[slot])]
+    elif slot == 'Starship Traits':
+        first = [starship_traits]
+    elif slot.startswith('Boff'):
+        first = [lambda: boff_abilities().get('all') or {}]
+    elif slot in ('Ship Type', 'Ship Name'):
+        first = [ships]
+    else:
+        # Every remaining slot is an equipment slot. Naming it explicitly
+        # rather than letting it reach equipment at the end of the fallback
+        # matters: the day cargo files a trait under a name an item already
+        # has, the fallback order alone would send the console to the trait's
+        # page. Measured 2026-08-31 no such overlap exists — which is exactly
+        # when a dependence on it is cheapest to remove.
+        first = [_equipment]
+
+    # Fallback, in a fixed order so the same name always resolves the same
+    # way. Reached when the slot is unknown to cargo, or when the item is
+    # shown under a slot it does not belong to — a misrecognition, which is
+    # the case the user is most likely to be looking the item up about.
+    rest = [lambda e=env, c=cat: _traits(e, c)
+            for env, cat in (('space', 'personal'), ('ground', 'personal'),
+                             ('space', 'rep'), ('ground', 'rep'),
+                             ('space', 'active_rep'), ('ground', 'active_rep'))]
+    rest += [starship_traits,
+             lambda: boff_abilities().get('all') or {},
+             _equipment,
+             ships]
+    lookups = first + rest
+
+    for get in lookups:
+        try:
+            row = get().get(name)
+        except Exception as exc:
+            log.warning(f'cargo._cargo_row: lookup failed for {name!r}: {exc!r}')
+            continue
+        if isinstance(row, dict):
+            return row
+    return None
+
+
+def wiki_url(name: str, slot: str = '') -> str:
+    """STO Wiki URL for an item / trait / ability by name.
+
+    The title comes from the row's `Page` field, which is the cargo built-in
+    `_pageName` — the page the row was extracted from, so it always resolves.
+    A name is not a title: traits and abilities carry a disambiguator the
+    name does not (`Harmonic Shield Linkage (space trait)`,
+    `Heisenberg Amplifier (ability)`), and an item without a page of its own
+    is documented on its set's (`Console - Universal - Causal Anchor` lives
+    on `31st Century Temporal Technologies Set`).
+
+    Measured 2026-08-31 against the live wiki, sampling each table: the
+    name-based title resolved for 0/40 starship traits, 4/40 BOFF abilities,
+    10/40 personal traits and 85/100 equipment items. Every `Page` title
+    resolved. Names cargo does not carry — skill nodes, specialisations —
+    keep the name-based URL, which is all there is to go on.
+    """
+    from urllib.parse import quote
+    row = _cargo_row(name, slot) if name else None
+    page = (row or {}).get('Page') or name
+    # Parentheses and apostrophes are legal in a title and the wiki leaves
+    # them alone in its own links — `Harmonic_Shield_Linkage_(space_trait)`,
+    # not `..._%28space_trait%29`. Both resolve; the readable one is what the
+    # user sees in the address bar and what they can compare against a link
+    # they were sent. Everything else stays encoded.
+    return f'https://stowiki.net/wiki/{quote(page.replace(" ", "_"), safe="()\'/,")}'
 
 
 def vger_url(slot: str) -> str | None:

@@ -273,6 +273,74 @@ The overlay is meant to disappear. Each publisher run drops rows whose name
 has turned up in `equipment.json`; one went that way on the first run. At
 zero rows the whole mechanism can be retired.
 
+## The wiki page a row came from (added 2026-08-31)
+
+Every cargo row carries `Page`. It is not a field the wiki authors fill in:
+`warp-cargo-bay`'s `fetcher/cargo_api.py` aliases the MediaWiki built-in
+`_pageName` to it (`PAGE_ALIAS`), so `Page` is *the title of the page the row
+was extracted from*. That makes it the one title guaranteed to resolve, and
+it is what `cargo.wiki_url` builds the "Open on STO Wiki" link from.
+
+A display `name` is not a title. The wiki disambiguates:
+
+| Table | `name` | `Page` |
+|---|---|---|
+| `traits.json` | `Harmonic Shield Linkage` | `Harmonic Shield Linkage (space trait)` |
+| `starship_traits.json` | `Thirst for Battle` | `Thirst for Battle (starship trait)` |
+| `boff_abilities.json` | `Heisenberg Amplifier` | `Heisenberg Amplifier (ability)` |
+| `equipment.json` | `Console - Universal - Causal Anchor` | `31st Century Temporal Technologies Set` |
+
+Traits, starship traits and BOFF abilities differ from their name in **every**
+row. Equipment differs in 2103 of 4309: an item with no page of its own is
+documented on its set's or its weapon family's page, which is where its cargo
+row lives too.
+
+Measured 2026-08-31 against the live wiki, sampling each table and asking the
+API which titles exist:
+
+| Table | sampled | name-title resolves | `Page`-title resolves |
+|---|---|---|---|
+| `starship_traits.json` | 40 | 0 | 40 |
+| `boff_abilities.json` | 40 | 4 | 40 |
+| `traits.json` | 40 | 10 | 40 |
+| `equipment.json` | 100 | 85 | 100 |
+
+### Why the slot is an argument
+
+`wiki_url(name, slot)` takes the slot because 135 trait names carry more than
+one page: `Adaptive Offense` exists as a space trait and a ground trait,
+`Aggressive` as ground, bridge officer and duty officer. The name alone cannot
+choose. The slot can, and `_TRAIT_SLOT_BUCKET` maps it to the same
+`(environment, category)` bucket `_build_traits` files the row under — the
+same keying `warp_importer._build_slot_candidates` uses for `trait_slot_pools`,
+so the page a slot links to belongs to the pool the item was matched against.
+
+`_cargo_row` reads the table the slot names first, then falls through the
+others in a fixed order. Two properties come out of that:
+
+- An equipment slot reads `equipment()` **before** the trait tables. No item
+  name currently collides with a trait name, so the order changes nothing
+  today; it is there so that the day one does, a console does not link to a
+  trait's page.
+- An item shown under a slot it does not belong to still resolves, through the
+  fallback. That is the misrecognition case — precisely when a user reaches
+  for the wiki.
+
+A name no cargo table holds — a skill-tree node, a captain specialisation —
+keeps the name-based URL. There is nothing else to go on, and it is what the
+link did for everything before this.
+
+Parentheses and apostrophes are left unencoded, because the wiki writes its
+own links that way: `Harmonic_Shield_Linkage_(space_trait)`, not
+`..._%28space_trait%29`. Both resolve; the readable one is what the user sees
+in the address bar. Verified end to end by fetching the generated URLs — HTTP
+200 with article content, not a "page does not exist" body.
+
+Consumers: the right-click menus in the Results tree, the review tree and the
+canvas overlay. `docs/WARP_GUIDE.md` describes what the user sees;
+`docs/FAST_CORRECTION_MODE.md` notes that Fast Correction Mode does not change
+any of it.
+
 ## Open questions
 
 - Mirror upstream files on the sets-sto HF org as a secondary endpoint

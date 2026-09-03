@@ -208,7 +208,8 @@ All generic review-panel UI features carry over unchanged into FC:
   (`annotation_widget.py:contextMenuEvent`) and on review-tree leaf
   items (`trainer_window.py:_show_item_link_menu`) — "Open on
   vger.stobuilds.com" (slot → category page via `cargo.vger_url`) and
-  "Open on STO Wiki" (`cargo.wiki_url`). Uses
+  "Open on STO Wiki" (`cargo.wiki_url`, which takes the slot as well — see
+  `docs/CARGO_DATA_PLAN.md` §"The wiki page a row came from"). Uses
   `QDesktopServices.openUrl`.
 
 These are not gated by mode — the same code paths execute in both
