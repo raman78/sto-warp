@@ -103,11 +103,37 @@ EQUIPMENT_TYPES: dict[str, str] = {
     'Warp Engine': 'core',
 }
 
-# Hangars whose advanced/elite variants the SETS loader drops.
-_ELITE_HANGAR_WHITELIST = {
+# SETS's own loader skips `Hangar - Advanced*` / `Hangar - Elite*` except
+# these two (`src/cargomanager.py`), so a build carrying one of the other 179
+# loses that slot on import — silently, via `remove_invalid_build_items`.
+#
+# That is a fact about SETS, and it used to be applied here, to WARP's
+# candidate pool. The effect was worse than the problem: recognition could
+# not name an Advanced hangar at all, so it returned a neighbouring one
+# instead — the wrong ship rather than no answer.
+#
+# Recognition now offers all of them and the export predicts what SETS will
+# do with them (`sets_schema`, rule `not_in_sets`). Measured 2026-09-04 over
+# the 142 hangar crops in the community mirror: 127 named correctly before,
+# 134 after; the 12 that were unreachable by construction drop to 0; the
+# three pre-existing errors are unchanged, and every new error is an
+# Advanced/Elite pair of the same hangar rather than a different ship.
+_SETS_SKIPPED_HANGAR_EXCEPTIONS = frozenset({
     'Hangar - Elite Federation Mission Scout Ships',
     'Hangar - Elite Valor Fighters',
-}
+})
+
+
+def sets_drops_on_import(name: str) -> bool:
+    """True when SETS's build loader will not keep this item name.
+
+    Mirrors the skip in SETS `src/cargomanager.py`: the name never enters its
+    image set, and `remove_invalid_build_items` replaces anything missing
+    from that set with an empty slot. Used by the export validator to say so
+    before the user finds out by the item being gone.
+    """
+    return (name.startswith(('Hangar - Advanced', 'Hangar - Elite'))
+            and name not in _SETS_SKIPPED_HANGAR_EXCEPTIONS)
 
 # Cache freshness window. Older than this triggers a background refresh on
 # the next `refresh_async()` call.
@@ -637,10 +663,6 @@ def _build_equipment() -> dict[str, dict[str, dict]]:
             continue
         raw_name = item.get('name')
         if not raw_name:
-            continue
-        if kind == 'Hangar Bay' and raw_name not in _ELITE_HANGAR_WHITELIST and (
-                raw_name.startswith('Hangar - Advanced')
-                or raw_name.startswith('Hangar - Elite')):
             continue
         name = _sanitize_equipment_name(raw_name)
         if not name:

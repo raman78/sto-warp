@@ -395,3 +395,54 @@ def test_the_faction_the_exporter_writes_still_exists():
 
     assert _ALIEN_FACTION in vocab['FACTIONS']
     assert 'Alien' in vocab['SPECIES'][_ALIEN_FACTION]
+
+
+# ── Hangars SETS refuses ────────────────────────────────────────────────────
+#
+# SETS's loader skips `Hangar - Advanced*` / `Hangar - Elite*` except two
+# names, and `remove_invalid_build_items` then replaces them with an empty
+# slot — silently. WARP used to mirror that skip in its own candidate pool,
+# which meant it could not name such a hangar at all and returned a
+# neighbouring one instead: the wrong ship rather than no answer.
+#
+# Recognition now offers them and the validator predicts what SETS will do.
+
+def test_a_hangar_sets_skips_is_reported_as_a_gap_on_the_sets_side():
+    from warp.sets_schema import _sets_skips
+
+    assert _sets_skips('Hangar - Advanced Danube Runabouts') is True
+
+
+def test_the_two_hangars_sets_keeps_are_not_reported():
+    from warp.sets_schema import _sets_skips
+
+    assert _sets_skips('Hangar - Elite Valor Fighters') is False
+    assert _sets_skips('Hangar - Elite Federation Mission Scout Ships') is False
+
+
+def test_an_ordinary_hangar_is_not_reported():
+    from warp.sets_schema import _sets_skips
+
+    assert _sets_skips('Hangar - Type 7 Shuttlecraft') is False
+
+
+def test_the_rule_matches_the_one_cargo_carries():
+    """The validator keeps its own copy so it can be imported without cargo.
+    Two copies drift; this is what stops them."""
+    from warp.sets_schema import _sets_skips
+    from warp.data.cargo import sets_drops_on_import
+
+    for name in ('Hangar - Advanced Danube Runabouts',
+                 'Hangar - Elite Valor Fighters',
+                 'Hangar - Elite Stalker Fighters',
+                 'Hangar - Type 7 Shuttlecraft',
+                 'Console - Universal - Causal Anchor'):
+        assert _sets_skips(name) == sets_drops_on_import(name), name
+
+
+def test_recognition_can_now_name_them():
+    """The point of the change: the candidate pool no longer hides them."""
+    from warp.data.cargo import equipment
+
+    hangars = equipment().get('hangars') or {}
+    assert 'Hangar - Advanced Danube Runabouts' in hangars

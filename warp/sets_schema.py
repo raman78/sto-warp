@@ -283,6 +283,35 @@ def _check_equipment(build: dict, cache, out: list[Violation]) -> None:
                     out.append(Violation(path, 'not_in_sets',
                                          'an item SETS can resolve',
                                          f'{name!r} ({row["source"]})'))
+                elif _sets_skips(name):
+                    # Cargo carries the row and WARP recognises it; SETS's own
+                    # loader is what refuses it. Same rule, different reason
+                    # from the overlay case above — and the same conclusion
+                    # for the user, so it must not be reported as a WARP bug.
+                    out.append(Violation(path, 'not_in_sets',
+                                         'an item SETS can resolve',
+                                         f'{name!r} (SETS loader skips it)'))
+
+
+
+# SETS's build loader skips `Hangar - Advanced*` / `Hangar - Elite*` except
+# two names (`src/cargomanager.py`), so those never enter its image set and
+# `remove_invalid_build_items` replaces them with an empty slot on import —
+# silently, with nothing shown to the SETS user.
+#
+# Duplicated here rather than imported: this module stays dependency-free so
+# `tools/` and the tests can load it without cargo. `warp.data.cargo` carries
+# the same rule as `sets_drops_on_import`, and `tests/test_sets_schema.py`
+# holds the two in agreement.
+_SETS_KEPT_HANGARS = frozenset({
+    'Hangar - Elite Federation Mission Scout Ships',
+    'Hangar - Elite Valor Fighters',
+})
+
+
+def _sets_skips(name: str) -> bool:
+    return (name.startswith(('Hangar - Advanced', 'Hangar - Elite'))
+            and name not in _SETS_KEPT_HANGARS)
 
 
 def _check_traits(build: dict, cache, out: list[Violation]) -> None:
