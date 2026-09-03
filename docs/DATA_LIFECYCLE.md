@@ -60,10 +60,10 @@ admin scripts, HF-token handling) see the backend's
               │  one CI job runs all four mergers sequentially
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│   DEMOCRATIC MERGE  (every 2 h, Z3 thresholds: NEW=1, UPDATE≥2)          │
+│   DEMOCRATIC MERGE  (every 2 h — tallying settles every entry)           │
 │                                                                          │
 │   democratic_merge_crops.py    staging/*/crops + annotations.jsonl       │
-│                                  ─► data/crops/<sha>.png                 │
+│                                  ─► data/crops/<ab>/<sha>.png            │
 │                                  ─► data/annotations.jsonl               │
 │   democratic_merge_anchors.py  staging/*/anchors_grid_*.json             │
 │                                  ─► data/anchors/<bt>_<bucket>.json      │
@@ -75,9 +75,10 @@ admin scripts, HF-token handling) see the backend's
 │                                  ─► knowledge.json (phash → name)        │
 │                                  on sets-sto/warp-knowledge              │
 │                                                                          │
-│   On promotion: source staging entry is DELETED in the SAME commit       │
-│   (drain-on-promote). One commit per merger. Poison filter strips        │
-│   `__virtual__` / `Test Item Name` before they reach data/.              │
+│   Every tallied entry is settled and its staging copy DELETED, plus     │
+│   any staging file no row refers to. Commits are chunked, additions      │
+│   before deletions. Poison filter strips `__virtual__` /                 │
+│   `Test Item Name` before they reach data/.                             │
 └─────────────┼────────────────────────────────────────────────────────────┘
               │
               │  GitHub Actions — train_central_model.yml, cron `0 * * * *`
@@ -153,31 +154,66 @@ is through majority promotion.
 
 ---
 
-## 4. Z3 asymmetric thresholds
+## 4. What a tally decides
 
 `merge_staging.yml` passes `--min 2` to every merger by default. Each
 merger applies the threshold asymmetrically:
 
-| Case | Votes needed |
+Staging means one thing: an entry has arrived from a client, has not been
+tallied, and is not in the models. Tallying settles it either way, so every
+entry is applied and staging empties. The vote count then expresses
+confidence *in* the record rather than gating entry to it.
+
+| What the tally finds | What happens |
 |---|---|
-| Key is **not yet** in `data/` (new sha, new pHash, new anchor bucket) | **1** is enough — promote on first sighting. |
-| Key **already exists** in `data/` and the new majority disagrees | **≥ 2** votes for the new label before the existing entry is overwritten. |
+| Key is not yet in `data/` | Promoted on first sighting. |
+| The vote agrees with `data/` | Counted: `votes` accumulates, and the record is otherwise left alone. |
+| The vote disagrees | Applied. `votes` restarts from this batch's count and the superseded verdict is kept in `losers` with its own strength. |
 
-The two-vote ratchet on updates prevents a single dissenter from flipping
-a long-standing community label. The one-vote acceptance on new keys
-keeps unusual icons reachable — waiting for a second vote on a
-once-a-year ship would mean it never lands in `data/` at all.
+**Why this replaced a two-vote ratchet on updates.** That bar is sound for a
+crowd and equal to "never" for this project. Measured 2026-09-03: two
+contributors with annotations, 4003 entries in staging of which 3897 merely
+confirmed what `data/` already said and could never drain, and 102
+corrections waiting indefinitely — among them a crop stored as
+`Attack Pattern Beta'`, a name no cargo row has ever matched, which a human
+had already corrected while the models kept training on the typo.
 
-The `merge_staging.yml` workflow_dispatch lets admins override `min_votes`
-on demand if a campaign of corrections needs to land in one cycle.
+Nothing is lost when a verdict is overturned: `losers` carries the previous
+name and how many votes it had, so a contested entry is distinguishable from
+a settled one and the change is reversible. A weak entry is visibly weak —
+one vote, no dissent — which is what a review of the tail sorts on.
+
+`--min` remains on the command line for compatibility with the shared merge
+workflow and is **not** a gate for crops; a non-default value is reported at
+the top of the run so it cannot look effective when it is not.
 
 ---
 
-## 5. Drain on promote
+## 5. Drain on promote, and the sweep behind it
 
 Each of the four mergers ends its run by emitting the rows it promoted to
-`data/` and **deleting the corresponding `staging/` paths in the same
-HF commit** that wrote them. The grep target in `merge_staging.yml`
+`data/` and deleting the corresponding `staging/` paths. Since the promotion
+grew past what one commit can carry, that is a short ordered sequence rather
+than a single atomic write — additions first, then the index that references
+them, then the deletions — so an interrupted run leaves duplicates to redo
+and never a reference to something missing (`hf_commit`).
+
+Drain-on-promote alone is not enough to keep staging clean, because it only
+removes what was promoted. Two things could survive it indefinitely, and both
+are now closed:
+
+| Residue | Why it could not drain | What happens now |
+|---|---|---|
+| A crop PNG no annotation row refers to | it is only tallyable through its row, so it produced no vote to promote | the crop merge sweeps it, including whole install directories that have no `annotations.jsonl` at all — uploads write PNGs and rows in one commit, so that state means something other than the upload path wrote them |
+| A contribution naming a virtual class | `admin_merge` refuses `__*` unconditionally, so its pHash is never promoted | drained as refused rather than left pending |
+
+Ten orphaned crops were sitting in `staging/migration-sister/`, left by a
+one-off migration, until this was added; the only thing that had ever removed
+that class was `admin_drain_stale_staging.py`, run by hand, last on
+2026-07-17.
+
+`admin_audit_pipeline_movement.py` asserts the result daily: staging holding
+anything no run can settle is a breach, reported with its origin. See §6. The grep target in `merge_staging.yml`
 ("Drain summary") catches lines like:
 
 ```
@@ -198,6 +234,26 @@ Two consequences:
 ---
 
 ## 6. The audit safety net
+
+Two audits, and they answer different questions.
+
+`audit_pipeline_movement.yml` runs `admin_audit_pipeline_movement.py` every
+morning. It asks whether anything is **flowing**: uploads arriving while
+`data/` has not been written for `--max-age-days` is a breach, and so is
+staging holding a file no run can settle. It is deliberately blind to the
+cause — a bad token, a raised threshold, a crashed merger and an opaque HTTP
+400 all look the same from there, and all deserve an email the next morning.
+
+It exists because the crop merge failed on every scheduled run from
+2026-07-16 to 2026-09-03 and the workflow reported success throughout: the
+step piped its output through `tee`, and bash returns the exit status of the
+last command in a pipeline. Seven weeks of promotions were lost behind a
+green tick, and it was found by hand while tracing an unrelated crop. Every
+`run:` block in this repo now sets `pipefail`, and a test holds that line.
+
+The state audits below could not have caught it: a pipeline that has stopped
+entirely looks healthy to a threshold on pile size, right up until the pile
+is enormous.
 
 `audit_staging_health.yml` runs `admin_audit_staging.py` on the 1st of
 every month (and on demand). It is **read-only**:
@@ -221,6 +277,13 @@ in-flight rather than orphaned.
 ---
 
 ## 7. One-shot drain — `admin_drain_stale_staging.py`
+
+Kept for historic backlogs, and no longer part of normal operation: the
+mergers settle and drain everything they tally, and the crop merge sweeps
+what no row refers to (§5), so absent an actual failure there is nothing for
+this to do. Its rule — drop a staging copy whose sha is already in `data/` —
+also no longer matches the residue that occurs in practice, which is files
+`data/` never had.
 
 The drain-on-promote logic in the mergers is recent. Before it shipped,
 promoted entries accumulated in `staging/` indefinitely.

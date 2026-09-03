@@ -590,7 +590,7 @@ Displays the current screenshot with coloured bounding boxes drawn over each det
 | Green        | `confirmed (user)`| Accepted by you (Enter / autocomplete pick / Accept button) |
 | Yellow/gold  | `confirmed (auto)`| Auto-accepted by the program because confidence ≥ Auto threshold (default 0.75). Persists across restarts so you can tell at a glance what *you* confirmed vs what the program did. Editing the name re-flags it as user-confirmed (green). |
 | Orange       | `community conflict` | You previously confirmed this slot as one item, but the current community model now proposes a different name. The bbox waits for you to re-verify instead of being silently overwritten. See [Community conflicts](#community-conflicts) in section 6. |
-| Cyan         | `text slot`       | Ship Type / Ship Tier — read by OCR, no icon matching, no confidence score |
+| Cyan         | `text slot`       | Ship Type / Ship Tier — read from the text at the top of the screenshot, not by matching icons. These do carry a confidence, and it depends on where the value came from — see [Where the ship tier comes from](#where-the-ship-tier-comes-from) below |
 | Grey (empty name) | `pending, no match` | The grid found this slot but the icon matcher had low confidence (< 0.35) or the match name had the wrong type for the slot. The bbox is kept so you can correct it manually — type the right name and Accept. |
 | Gold crosshair | (drawing)       | While Alt+LMB drag is in progress — the bbox you're currently drawing |
 
@@ -655,8 +655,22 @@ Tip: if the value is wrong, correct it like any other row. Your correction wins.
 
 Two things worth knowing:
 
-- WARP only does this when the badge is genuinely absent. A tier it can read is always used as-is.
+- The counting also runs when the badge *is* readable, and can raise a tier that was read too low. A `[T6-X2]` misread as `[T6-X]` leaves the build a slot short in every panel, with nothing to show you why; if the picture holds more slots than the badge allows, the badge loses.
 - It can only ever add an upgrade, never rule one out. A build with empty slots looks the same as a ship without the upgrade, so when WARP sees no extra slots it claims nothing rather than guessing "no upgrade".
+
+##### Where the ship tier comes from
+
+The Ship Tier row can be filled from three places, and its confidence tells you which — so you know how hard to look at it.
+
+| Confidence | Where the value came from |
+|---|---|
+| 100% | **You confirmed it** on this screenshot before. It is your own answer, handed back. |
+| 90% | **Read off the badge** in the header. Measured against 80 screenshots whose tier a person had confirmed, the badge reading agreed on 74 of the 79 it managed to read — about nineteen times in twenty. |
+| 45% | **Worked out from the slots on screen**, as described above. Deliberately below the lowest auto-accept setting, so this one always waits for you. |
+
+The reason the badge is not treated as certain: nearly all of its mistakes are the same one — `[T6]` read as `T1`, on smaller screenshots. `T1` is a real tier, so nothing further down the line objects, and a build sized for a T1 is missing most of its slots. Nineteen times in twenty is good, and it is not good enough to write into your training data unseen.
+
+Whatever the source, the row always shows the tier the build was actually sized from — the same value used for the slot counts and written into the export. If you correct it, your correction wins from then on.
 
 | Action | How |
 |--------|-----|
@@ -900,6 +914,13 @@ Auto-accept applies:
 - After running Auto-Detect
 
 The checkbox state and threshold value are saved across sessions (per user).
+
+**Two things auto-accept always leaves for you**, however high the confidence:
+
+- An **empty or inactive slot** whose name came from a previous confirmation of yours. Accepting those automatically would let one mistake copy itself: the accepted answer becomes an example, the example matches the next empty slot, and so on.
+- A slot the program named after an **item**, when the picture in it looks like an empty or locked slot. This is the same trap the other way round, and it is the more damaging one — it teaches the program that "nothing" *is* that item, and from then on it offers that item for every empty slot it meets. One real item's name had been learned this way from twenty pictures of blank slots before it was found.
+
+Both show up as red rows waiting for you. If you agree with the name, accept it by hand and it sticks.
 
 ### Selecting from the autocomplete dropdown
 

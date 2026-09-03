@@ -321,13 +321,34 @@ noticeable UI freeze on close while an upload finishes.
 │                                       ones only the wiki has
 ├── ship_images/                      ← ship images mirrored from STOCD/SETS-Data
 ├── community_crops/                  ← HF crops tarball extracted here
-│   ├── data/crops/<sha>.png
+│   ├── data/crops/<ab>/<sha>.png     ← sharded by the first two characters
 │   ├── data/annotations.jsonl
 │   └── crops_manifest.json           ← dataset SHA pin for idempotent refresh
 ├── knowledge.json                    ← community pHash entries
 ├── icon_equivalence.json             ← admin-curated equivalence classes
 └── warp_*.log                        ← per-channel logs
 ```
+
+### Why the crop mirror is sharded
+
+`data/crops/` upstream reached the limit HF enforces — 10 000 files per
+directory — and the promotion froze there on 2026-07-16 with an HTTP 400 the
+server would not explain until the message was read in full. Crops are now
+written under the first two characters of their sha, which is their content
+hash, so the path is derivable on both sides with no index to keep in step.
+
+The mirror follows the same rule for its own reasons: it held 12 274 files
+after one merge and grows weekly, every sync globs it several times, and the
+client also ships on Windows. `CommunityCropsClient._shard_local` runs on
+every sync, is idempotent, and migrates an older install in place by rename —
+no re-download. Nothing assumes it has already run: the counters, the cleanup
+guard, the k-NN seeder and the backend's mirror lookup all accept either
+layout.
+
+An install that has not updated is unharmed. Its sync finds no crops under
+the flat path upstream, and `_soft_delete`'s cleanup guard refuses to empty a
+mirror over a removal that large, so it keeps everything it has and simply
+stops receiving new crops until it updates.
 
 The `.meta` sidecars next to cargo JSONs hold `{etag, fetched_at}` so
 the next refresh can send `If-None-Match` and so the 24 h skip-window
