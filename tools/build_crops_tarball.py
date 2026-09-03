@@ -90,7 +90,14 @@ def main() -> int:
         crops_dir = repo_dir / 'data' / 'crops'
         ann_file  = repo_dir / 'data' / 'annotations.jsonl'
         elapsed = time.monotonic() - t0
-        crop_count_dl = len(list(crops_dir.glob('*.png'))) if crops_dir.is_dir() else 0
+        # Both layouts: the flat files predate the shards, which exist
+        # because HF refuses more than 10 000 files in one directory. The
+        # tarball stays flat inside — a crop's filename is its content sha,
+        # so it cannot collide, and it is the layout the client's mirror and
+        # every reader of it already use.
+        crop_files = (sorted(crops_dir.rglob('*.png'))
+                      if crops_dir.is_dir() else [])
+        crop_count_dl = len(crop_files)
         print(f'sparse checkout complete in {elapsed:.0f}s — '
               f'{crop_count_dl} crops fetched', flush=True)
         tar_path  = tmp / TARBALL_FILE
@@ -106,7 +113,7 @@ def main() -> int:
                 ti.mtime = 0
                 with open(ann_file, 'rb') as f:
                     tar.addfile(ti, f)
-            for png in sorted(crops_dir.glob('*.png')):
+            for png in crop_files:
                 ti = tar.gettarinfo(str(png), arcname=f'data/crops/{png.name}')
                 ti.mtime = 0
                 with open(png, 'rb') as f:

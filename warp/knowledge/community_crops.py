@@ -51,7 +51,13 @@ from warp.debug import syslog as log
 HF_DATASET_REPO = "sets-sto/sto-icon-dataset"
 HF_REPO_TYPE    = "dataset"
 
-_ALLOW_PATTERNS = ['data/annotations.jsonl', 'data/crops/*.png']
+# `data/crops/` filled up: HF refuses a push that would put more than 10 000
+# files in one directory, and the promotion froze on 2026-07-16 with the
+# folder at ~9 985. New crops are written under a two-hex-character shard
+# (`data/crops/ab/<sha>.png`). Both layouts are read: the flat files predate
+# the shards and are migrated in their own pass.
+_ALLOW_PATTERNS = ['data/annotations.jsonl',
+                   'data/crops/*.png', 'data/crops/*/*.png']
 
 # Prebuilt tarball + manifest published by the dataset-tooling workflow.
 # Manifest is tiny JSON; tarball is the concatenated crops + annotations.
@@ -181,10 +187,14 @@ class CommunityCropsClient:
             log.warning(f'community_crops: list_repo_files failed: {e}')
             return False
 
-        upstream_crops: set[str] = {
-            Path(p).name for p in upstream_files
+        # Keyed by filename, which is the content sha — so a crop is the
+        # same crop whether upstream keeps it flat or under a shard, and the
+        # local mirror stays flat either way.
+        upstream_by_name: dict[str, str] = {
+            Path(p).name: p for p in upstream_files
             if p.startswith('data/crops/') and p.endswith('.png')
         }
+        upstream_crops: set[str] = set(upstream_by_name)
         has_annotations = 'data/annotations.jsonl' in upstream_files
 
         crops_dir = community_crops_dir()
@@ -244,7 +254,7 @@ class CommunityCropsClient:
                         hf_hub_download,
                         repo_id=HF_DATASET_REPO,
                         repo_type=HF_REPO_TYPE,
-                        filename=f'data/crops/{name}',
+                        filename=upstream_by_name[name],
                         revision=revision,
                         local_dir=str(community_root()),
                     ): name
@@ -268,10 +278,48 @@ class CommunityCropsClient:
                 # Don't pin the sha — next call retries the misses.
                 return False
 
+        self._flatten_shards()
+
         if to_remove:
             self._soft_delete(to_remove)
 
         return True
+
+    def _flatten_shards(self) -> int:
+        """Move `data/crops/<ab>/<sha>.png` up into `data/crops/<sha>.png`.
+
+        Upstream shards the folder because HF refuses more than 10 000 files
+        in one directory. The mirror does not have to: a crop's filename is
+        its content sha, so a flat directory cannot collide, and every reader
+        on this side — the k-NN seed, the review tools, `_scan` — already
+        globs it flat. Downloads land wherever the repo path says, so they
+        are flattened here, once, instead of teaching each reader two layouts.
+        """
+        crops_dir = community_crops_dir()
+        if not crops_dir.exists():
+            return 0
+        moved = 0
+        for shard in sorted(p for p in crops_dir.iterdir() if p.is_dir()):
+            if shard.name.startswith('.'):
+                continue
+            for png in shard.glob('*.png'):
+                dst = crops_dir / png.name
+                try:
+                    _assert_inside_mirror_crops(dst)
+                    if dst.exists():
+                        png.unlink()
+                    else:
+                        png.rename(dst)
+                    moved += 1
+                except Exception as e:
+                    log.warning(f'community_crops: flatten {png.name} failed: {e}')
+            try:
+                shard.rmdir()
+            except OSError:
+                pass
+        if moved:
+            log.info(f'community_crops: flattened {moved} sharded crop(s)')
+        return moved
 
     def _try_tarball_seed(self, progress_cb: ProgressCb | None) -> str | None:
         """Seed the mirror from a prebuilt tarball published next to the
@@ -457,6 +505,7 @@ class CommunityCropsClient:
                 allow_patterns=_ALLOW_PATTERNS,
                 revision=revision,
             )
+            self._flatten_shards()
             return True
         except Exception as e:
             log.warning(f'community_crops: snapshot download failed: {e}')
