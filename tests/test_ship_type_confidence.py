@@ -222,8 +222,15 @@ def test_emitted_named_ship_type_keeps_full_confidence(tmp_path):
     assert items['Ship Type'].confidence == 1.0
 
 
-def test_emitted_ship_tier_is_unaffected(tmp_path):
-    """Tier comes off the badge via OCR and never consults ShipDB."""
+def test_emitted_ship_tier_is_unaffected_by_the_class_lookup(tmp_path):
+    """The tier comes off the badge and never consults ShipDB, so a class-only
+    class match may not drag its confidence down with it.
+
+    The badge has a grade of its own — see tests/test_ship_tier_confidence.py,
+    which owns what that grade is.
+    """
+    from warp.warp_importer import SHIP_TIER_CONF_BADGE
+
     items = _run_importer(tmp_path, 'Cruiser')
 
-    assert items['Ship Tier'].confidence == 1.0
+    assert items['Ship Tier'].confidence == SHIP_TIER_CONF_BADGE

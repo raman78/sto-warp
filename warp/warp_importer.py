@@ -1389,6 +1389,30 @@ def ship_type_confidence(resolution: 'ShipResolution | None') -> float:
     return SHIP_TYPE_CONF_IDENTIFIED
 
 
+# Ship Tier confidence by provenance, for the same reason as Ship Type above:
+# the tier is not a label but a slot count — `_apply_ship_and_tier_bonuses`
+# grants +1 Universal Console, Device and Starship Trait for `-X` and +2 for
+# `-X2` — so a wrong tier accepted as truth resizes the whole grid.
+#
+# The badge figure is measured, not chosen: running the shipped
+# `extract_ship_info` + `refine_ship_info` over every screenshot in
+# annotations.json that carries a user-confirmed Ship Tier (80 images,
+# 2026-08-31) the badge read agrees with the user on 73 of the 79 it answered
+# at all. One of the six disagreements is the store being wrong rather than
+# OCR — `1-ba54d6e861e08f02.png` is confirmed `T1` while its badge plainly
+# reads `[T6-X2]` — so the rate is 74/79, 93.7%. Rounded down for an 80-image
+# sample. The dominant failure is a `[T6]` bracket read as `T1` (4 of the
+# remaining 5), which is exactly the case that must stay reviewable: it looks
+# like a legal tier and costs slots.
+SHIP_TIER_CONF_CONFIRMED = 1.0     # the user's own confirmed annotation
+SHIP_TIER_CONF_BADGE     = 0.90    # read off the tier badge by OCR
+# Raised from the measured slot rows because the badge was absent or read too
+# low. Deliberately below the 0.50 auto-accept floor: the raise is a lower
+# bound argued from pixel counts and its accuracy has never been measured, so
+# it must reach the training data only through a human.
+SHIP_TIER_CONF_INFERRED  = 0.45
+
+
 # Canonical slot order for the detection-log table. Slots present in the
 # resolved profile with count > 0 are listed in this order; anything left
 # over (defensive — should not happen) is appended at the end.
@@ -1896,6 +1920,9 @@ class WarpImporter:
         # row survived the trainer's merge while the grid had already been
         # sized from the OCR value, so the same surplus rows came back on
         # every Auto-Detect with no way for the user to stop them.
+        # Provenance of the tier finally emitted for review — the confidence
+        # the trainer sees has to say which of the three sources produced it.
+        _tier_from_user = False
         if _is_trainer_call:
             _confirmed_ship = self._load_confirmed_ship_info(source)
             _ct = _confirmed_ship.get('Ship Type', '')
@@ -1904,6 +1931,8 @@ class WarpImporter:
                            f'{_ct!r} — confirmed by user, taken as truth')
                 ship_type = _ct
             _cr = _confirmed_ship.get('Ship Tier', '')
+            if _cr:
+                _tier_from_user = True
             if _cr and _cr != ship_tier:
                 _slog.info(f'WarpImporter: tier {ship_tier!r} (OCR) → {_cr!r} '
                            f'— confirmed by user, taken as truth; slot bonuses '
@@ -2059,6 +2088,7 @@ class WarpImporter:
             _raised_to = min(2, _ocr_x + _x)
             if _x and _raised_to > _ocr_x:
                 _delta = _raised_to - _ocr_x
+                _tier_before = ship_tier
                 _apply_ship_and_tier_bonuses(
                     profile, None, 'T6-X2' if _delta == 2 else 'T6-X')
                 _inferred_tier = _compose_inferred_tier(
@@ -2079,9 +2109,9 @@ class WarpImporter:
                              f'Devices={profile.get("Devices", 0)}, '
                              f'Starship Traits='
                              f'{profile.get("Starship Traits", 0)}')
-                if _ocr_x:
+                if _tier_before:
                     _slog.info(
-                        f'WarpImporter: tier {ship_tier!r} (OCR) raised to '
+                        f'WarpImporter: tier {_tier_before!r} raised to '
                         f'{_inferred_tier or f"+{_raised_to}"} — the screen '
                         f'holds {_x} slot(s) more than that tier grants '
                         f'({_measured})')
@@ -2107,12 +2137,15 @@ class WarpImporter:
             # Ship Name is OCR-internal only (anchor for locating ship_type) —
             # not emitted as a visible slot.  Ship Type and Ship Tier carry
             # real information for ShipDB and are shown in the review UI.
-            for _slot, _bbkey, _valkey in (
-                ('Ship Type', 'ship_type_bbox', 'ship_type'),
-                ('Ship Tier', 'ship_tier_bbox', 'ship_tier'),
+            # Values come from the resolved `ship_type` / `ship_tier`, never
+            # from `text_info` — by the time this runs both may have been
+            # overruled by a user confirmation or by the measured rows.
+            for _slot, _bbkey in (
+                ('Ship Type', 'ship_type_bbox'),
+                ('Ship Tier', 'ship_tier_bbox'),
             ):
                 _bb = text_info.get(_bbkey)
-                _is_inferred = False
+                _is_inferred = _slot == 'Ship Tier' and bool(_inferred_tier)
                 if not _bb and _slot == 'Ship Tier' and _inferred_tier:
                     # The badge is not on screen, so there is nothing to draw
                     # a box around. Anchor it to the ship-class line, which
@@ -2120,19 +2153,30 @@ class WarpImporter:
                     # — the user can then see and correct it like any other
                     # slot instead of it being silently absent.
                     _bb = text_info.get('ship_type_bbox')
-                    _is_inferred = bool(_bb)
                 if not _bb:
                     continue
                 _bb_t = tuple(_bb)
                 layout[_slot] = [_bb_t]
                 if _slot == 'Ship Type':
                     _val = ship_type
-                    # Ship Tier is read straight off the badge by OCR and does
-                    # not go through ShipDB, so only the type is graded here.
                     _conf = ship_type_confidence(resolution) if _val else 0.0
                 else:
-                    _val = text_info.get(_valkey, '') or _inferred_tier
-                    _conf = 1.0 if _val else 0.0
+                    # `ship_tier`, not the raw OCR field: a tier the user
+                    # confirmed or one the measured rows raised is what every
+                    # other consumer was given, and the review row has to show
+                    # the same value — otherwise the trainer offers the reader
+                    # a tier the build was never sized from, at a confidence
+                    # that invites auto-accept to write it back over the one
+                    # they confirmed.
+                    _val = ship_tier
+                    if not _val:
+                        _conf = 0.0
+                    elif _is_inferred:
+                        _conf = SHIP_TIER_CONF_INFERRED
+                    elif _tier_from_user:
+                        _conf = SHIP_TIER_CONF_CONFIRMED
+                    else:
+                        _conf = SHIP_TIER_CONF_BADGE
                 result.items.append(RecognisedItem(
                     slot        = _slot,
                     slot_index  = 0,

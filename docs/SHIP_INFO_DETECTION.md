@@ -455,6 +455,81 @@ unreachable for split badges but still apply to passes 1 and 1b, so revert them
 too if the corpus is re-measured. `tests/test_tier_badge_split.py` holds the
 real token dump for the case.
 
+### Decision 2026-08-31: the review row shows the tier the build was sized from
+
+**Change.** The `Ship Tier` item emitted for WARP CORE now carries the
+resolved `ship_tier` — the same value ShipDB, the profile and the exporter
+were given — instead of the raw `text_info['ship_tier']` the OCR pass
+produced, and its confidence says which of the three sources answered.
+
+**Why.** The two decisions above gave the tier two ways to change after OCR
+read it, and neither reached the review row. A screenshot whose badge read
+`T1` while the user's confirmed `T6` sized the grid offered `T1` at a flat
+1.00 — above every auto-accept setting. Accepting it writes `T1` into
+`annotations.json`, and because a confirmed tier now outranks OCR, the next
+Auto-Detect sizes the grid from it. The header said one thing and the row
+offered another:
+
+```
+WarpImporter: tier 'T1' (OCR) → 'T6' — confirmed by user, taken as truth
+  Tier  : T6
+RecognitionWorker:   slot='Ship Tier'   name='T1'   conf=1.00
+```
+
+Checkable without the source: the `Ship Tier` row in WARP CORE now reads the
+same value as the `Tier  :` line of the resolution header above it in the
+detection log. On that screenshot it reads `T6-X2` — the confirmed `T6` plus
+the upgrade the measured rows found — marked as inferred and left pending.
+
+**The grades.**
+
+| Source | Confidence | Reasoning |
+|---|---|---|
+| `SHIP_TIER_CONF_CONFIRMED` | 1.0 | the user's own row; it *is* ground truth |
+| `SHIP_TIER_CONF_BADGE` | 0.90 | measured, see below |
+| `SHIP_TIER_CONF_INFERRED` | 0.45 | below the 0.50 auto-accept floor |
+
+The badge figure is measured rather than chosen. Running the shipped
+`extract_ship_info` + `refine_ship_info` over all 80 screenshots in one
+maintainer's `annotations.json` that carry a user-confirmed `Ship Tier`, the
+badge agrees with the user on 73 of the 79 it answered at all. The misses are
+not spread evenly:
+
+| read | confirmed | n | Verdict |
+|---|---|---|---|
+| `T1` | `T6` | 4 | genuine misreads |
+| `T6-X2` | `T5` | 1 | genuine — `B'rel Bird-of-Prey Retrofit`, a T5 hull |
+| *(nothing)* | `T6-X2` | 1 | badge not read at all |
+| `T6-X2` | `T1` | 1 | **the store is wrong**, not OCR |
+
+The last row was audited by eye: `1-ba54d6e861e08f02.png` carries a confirmed
+`Ship Tier = T1` while its badge plainly reads `Verne Temporal Science Vessel
+[T6-X2]`. Discounting it the rate is 74/79 — 93.7%, rounded down to 0.90 for
+the sample size.
+
+Four of the five real misses are a `[T6]` bracket read as `T1`, all on
+screenshots narrower than 1700 px (`Kor Bird-of-Prey [T6]` on
+`Kor-casual-17430cee006ca2ca.png` was checked against the pixels). That is the
+case the grade exists for: `T1` is a legal tier, so nothing downstream rejects
+it, and it costs slots.
+
+The inferred grade sits below the floor deliberately. The raise is a lower
+bound argued from pixel counts, and unlike the badge its accuracy has never
+been measured — so it may reach the training data only through a human.
+`src='inferred'` continues to mark the row in the UI, and now does so whenever
+the raise fired, not only when the badge was off-screen.
+
+**Also corrected.** The raise logged `tier 'T6-X2' (OCR) raised to T6-X2` —
+it read `ship_tier` *after* the reassignment, so it printed the new value as
+if OCR had read it. It now captures the previous value. The companion branch
+announced `no tier on screen` whenever the badge carried no `-X` suffix, which
+is most screens; it is now selected by whether a tier existed at all.
+
+**How to revert.** Restore `_val = text_info.get('ship_tier', '') or
+_inferred_tier` and the flat `1.0`. `tests/test_ship_tier_confidence.py`
+drives `_process_image` itself, so four of its six tests fail on the revert —
+the two that do not are the negative controls.
+
 ## Open questions
 
 1. **`_HUD_BLACKLIST` does not gate name assembly.** `Kit Modules`,
