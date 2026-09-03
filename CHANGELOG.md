@@ -8,6 +8,63 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.34] — 2026-09-03
+
+### Fixed
+- **The ship tier shown for review is the one the build was actually sized
+  from.** The row used to repeat what OCR read off the badge, even when your
+  own correction or the slots on screen had already overruled it — so a
+  screenshot whose badge read `T1` under your confirmed `T6` offered `T1` as
+  certain, and accepting it put T1 back into your training data. The row now
+  shows the value in use and says how much to trust it: your own confirmation
+  counts as certain, a badge reading is graded on how often badges are right
+  (measured: about nineteen times in twenty), and a tier worked out from the
+  slots always waits for you.
+- **Ship names survive a misread letter.** A dropped or swapped character used
+  to hand the read to a looser match and could return a different ship
+  entirely — a *Lexington* becoming a *Universe*. Recognition now prefers the
+  ship whose name really matches and only falls back to the class when nothing
+  does, and a guessed class is no longer reported as certain.
+- **A tier badge split across two OCR fragments is read again.** On smaller
+  screenshots the badge could be cut in the middle — `[T6-` and `X2]` — and
+  the tier came out blank.
+- **A tier read too low is corrected from the picture.** `[T6-X2]` misread as
+  `[T6-X]` left every panel a slot short with nothing to explain why. When the
+  screenshot holds more slots than the badge allows, the picture wins.
+- **Empty and locked slots are no longer learned as items.** Two faults, one
+  in each direction. A pure-black picture confirmed as "empty" matched every
+  icon it was compared against, so the program had to argue itself out of
+  calling every slot empty. And a picture of a blank slot filed under an
+  item's name taught it that "nothing" *is* that item — twenty pictures of
+  locked bridge officer slots had been learned under one ability's name, which
+  is why that ability kept turning up on empty seats. Neither is accepted for
+  learning now, and auto-accept leaves both cases for you.
+- **Bridge officer abilities are read from the icon, not the slot border.**
+- **Right-clicking an item opens the wiki page it was catalogued from.** Most
+  items are not filed on the wiki under their plain name — traits and
+  abilities carry a note in brackets, and an item without its own page lives
+  on its set's — so the link used to land on "page does not exist" for most
+  traits and abilities.
+- **The review list stops jumping to the top while you scroll**, and **Mark
+  Done reappears correctly after you delete a row**.
+
+### Added
+- **Items nobody has confirmed yet can now be recognised.** The picture
+  library on the wiki is larger than the set of items anyone has taught the
+  program, and those pictures are now used directly, so an item can be named
+  the first time it is seen.
+- **Gear the game draws differently in the 23rd century is recognised as the
+  same item**, and the review panel says which of the two pictures was
+  actually matched.
+- **A record of what recognition decided** is kept per screenshot, so a change
+  in quality can be seen rather than guessed at.
+
+### Changed
+- **Community pictures are stored in subfolders.** The shared collection
+  outgrew a single directory. Your local copy reorganises itself the first
+  time it syncs — no re-download — and an older version keeps everything it
+  already has.
+
 ## [1.0.33] — 2026-08-27
 
 ### Fixed

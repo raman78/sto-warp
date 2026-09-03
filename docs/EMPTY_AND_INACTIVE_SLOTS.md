@@ -55,39 +55,42 @@ from beating a real icon live in `SETSIconMatcher.match` and are mapped in
 ## How well it works
 
 Measured 2026-09-03 against every user-confirmed crop in one maintainer's
-training store — 732 blank cells and 5833 real icons.
+training store — 732 blank cells and 5833 real icons (1500 of them sampled
+for the model rows).
 
 | Decider | blank cells called blank | real icons called blank |
 |---|---|---|
-| the rule | 717/732 — **98.0%** | 2/5833 — **0.03%** |
-| the models, on their own | 710/732 — 97.0% | 1/1500 — 0.07% |
+| the rule | 717/732 — **98.0%** | 0/1500 — **0.00%** |
+| the models, on their own | 732/732 — **100%** | 0/1500 — **0.00%** |
 
-The second row is measured with the session pool empty, so that a crop cannot
-match itself; what remains is the shipped gallery, which may still hold this
-install's own uploads, so it is an upper bound.
-
-Neither number is the interesting one. This is:
+The model rows are measured with the session pool empty, so that a crop
+cannot match itself. What remains is the shipped gallery, which is built from
+community crops and may include this install's own uploads, so treat them as
+an upper bound rather than a holdout.
 
 | | cells |
 |---|---|
-| both agree the cell is blank | 695 |
-| only the rule sees it | 22 |
+| both agree the cell is blank | 717 |
+| only the rule sees it | 0 |
 | only the models see it | 15 |
 | **neither sees it** | **0** |
 | | **732/732 = 100%** |
 
-The two fail on disjoint sets. The rule misses cells that sit just outside its
-thresholds — locked cells whose brightness varies a little more than expected,
-and empty device slots drawn over a bright background. The models missed 22
-cells, and every one of them for the same reason, described next.
+The rule misses 15 cells that sit just outside its thresholds — locked cells
+whose brightness varies a little more than expected, and empty device slots
+drawn over a bright background — and the models catch every one. The pipeline
+consults the rule first and the models second, so it takes the union either
+way.
 
-Since the pipeline consults the rule first and the models second, it already
-takes the union of the two. That is why the arrangement exists, and why
-neither half is redundant.
+**These figures changed on the same day.** Before the mislabelled crops
+described below were removed and the embedder retrained, the models missed 22
+cells the rule caught, and the two looked complementary rather than one
+strictly better than the other. The rule's numbers did not move, because the
+rule does not learn.
 
-## The defect this measurement found
+## The defect this measurement found, and what removing it did
 
-All 22 model misses came back as `Charged Particle Burst`. That is not a
+Before the cleanup, all 22 model misses came back as `Charged Particle Burst`. That is not a
 coincidence and it is not a limit of the model:
 
 | an inactive bridge-officer cell, compared with | cosine similarity |
@@ -128,10 +131,15 @@ definition, so the guard refuses exactly what the pipeline would call blank.
 The cost is the rule's own error rate: 2 crops in 5833 do not become session
 examples, and their classes have hundreds of others.
 
-The 25 crops already in the dataset are a separate, deliberate cleanup. The
-backend's review tool (`admin_reject_crops.py`) now scans both directions —
+The 25 crops already in the dataset were a separate, deliberate cleanup. The
+backend's review tool (`admin_reject_crops.py`) scans both directions —
 `--direction real` surfaces them for keep / reject / relabel through the same
-ledger and montage as before.
+ledger and montage as before — and they were rejected on 2026-09-03.
+
+**Retraining on the cleaned data closed it.** The 22 confusions are gone: the
+embedder now names every one of the 732 blank cells correctly, including the
+15 the fixed rule misses, and calls no real icon blank. That is the whole of
+the change — the model was never the limitation.
 
 ## What this means for collecting more
 
@@ -139,9 +147,9 @@ Blank cells are the one label where more examples buy nothing measurable:
 
 - The rule decides 98% of cases and does not read examples at all. No amount
   of data moves that number.
-- The models handle the remaining 2%, and their class for "nothing" is
-  already strong — it matches the very cells that were failing at 0.92. The
-  failures were mislabelled data, not missing data.
+- The models are now correct on all 732, so there is no error left for more
+  examples to remove. What fixed the ones that were wrong was deleting 20 bad
+  labels, not adding good ones.
 - The store holds ~1400 examples (773 confirmed locally, 645 in the community
   pool), which is far past what a nearest-neighbour reference needs.
 
@@ -172,13 +180,26 @@ where these labels are stopped.
 
 ## What is left
 
-- The rule's 15 residual misses are two tight clusters against its thresholds:
-  locked cells whose brightness variation runs to 28 against a cut at 20, two
-  whose hue sits a point below the navy band, and four empty device slots on a
-  bright background. Widening the cuts risks dim blue icons, so it needs its
-  own measurement before anything changes.
-- The 25 mislabelled crops in the published dataset are waiting on a review
-  pass with the tool above.
-- Once they are cleaned, the models-alone figure is worth re-measuring: the
-  22 failures should disappear, and only then is it meaningful to ask whether
-  the fixed rule still needs to answer first.
+**Does the fixed rule still need to answer first?** On this corpus the models
+alone are now correct on all 732 blank cells and on all 1500 real icons, so
+the rule adds no accuracy. It still earns its place on two other grounds, and
+both would have to be measured before removing it:
+
+- *Cost.* It settles roughly 700 of the 732 without an inference. Every cell
+  it hands to the models is about a quarter of a second, so removing it turns
+  a screenshot that resolves in seconds into one that takes minutes.
+- *Generalisation.* It reads what the game draws — dark and even, or dim navy
+  — rather than what it has been shown. A rule has nothing to forget when the
+  next screenshot arrives at a resolution nobody has contributed, and the
+  measurements above are an upper bound on the models precisely because the
+  gallery may contain this install's own crops.
+
+Neither is an argument against the models. They are reasons the question is
+about cost and coverage now, not about accuracy.
+
+**The rule's 15 residual misses** are two tight clusters against its
+thresholds: locked cells whose brightness variation runs to 28 against a cut
+at 20, two whose hue sits a point below the navy band, and four empty device
+slots on a bright background. The models catch all fifteen, so nothing is
+lost today; widening the cuts risks dim blue icons and would need its own
+measurement.
