@@ -1526,6 +1526,7 @@ class SETSIconMatcher:
         import cv2
         from warp.knowledge.community_crops import (
             community_annotations_file, community_crops_dir,
+            mirror_crop_path,
         )
 
         ann_path  = community_annotations_file()
@@ -1574,7 +1575,11 @@ class SETSIconMatcher:
             slot = d.get('slot') or ''
             if not name or slot in _TEXT_SLOTS:
                 continue
-            p = crops_dir / f'{sha}.png'
+            # Sharded, with the flat path as a fallback for a mirror
+            # that has not been through `_shard_local` yet.
+            p = mirror_crop_path(f'{sha}.png')
+            if not p.exists():
+                p = crops_dir / f'{sha}.png'
             if not p.exists():
                 continue
             img = cv2.imread(str(p))

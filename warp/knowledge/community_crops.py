@@ -88,6 +88,27 @@ def community_crops_dir() -> Path:
     return community_root() / 'data' / 'crops'
 
 
+def mirror_crop_path(name: str) -> Path:
+    """Where a crop lives in the mirror: `data/crops/<first two chars>/<name>`.
+
+    The same shard rule the dataset uses upstream, for the same reason on a
+    smaller scale: the folder held 12 274 files after one merge and grows
+    every week, every sync globs it several times, and the client also ships
+    on Windows. The shard is derivable from the filename — which is the
+    content sha — so there is no index to keep in step.
+    """
+    return community_crops_dir() / name[:2] / name
+
+
+def _mirror_crops(crops_dir: Path):
+    """Every crop in the mirror, whichever layout it is in.
+
+    Installs that predate the shards have their crops flat; `_shard_local`
+    moves them, but a reader must not depend on that having happened yet.
+    """
+    return crops_dir.rglob('*.png') if crops_dir.exists() else iter(())
+
+
 def community_annotations_file() -> Path:
     return community_root() / 'data' / 'annotations.jsonl'
 
@@ -100,7 +121,8 @@ def _assert_inside_mirror_crops(path: Path) -> None:
     """Refuse to touch anything outside `<cache>/community_crops/data/crops/`."""
     expected_parent = community_crops_dir().resolve()
     resolved = path.resolve()
-    if resolved.parent != expected_parent:
+    # A shard directory is one level deeper; anything else is still refused.
+    if resolved.parent != expected_parent and resolved.parent.parent != expected_parent:
         raise RuntimeError(
             f'refusing to mutate path outside mirror crops dir: '
             f'{resolved} (expected parent {expected_parent})'
@@ -199,7 +221,7 @@ class CommunityCropsClient:
 
         crops_dir = community_crops_dir()
         crops_dir.mkdir(parents=True, exist_ok=True)
-        local_crops: set[str] = {p.name for p in crops_dir.glob('*.png')}
+        local_crops: set[str] = {p.name for p in _mirror_crops(crops_dir)}
 
         # Cold start: thousands of parallel hf_hub_download calls trigger
         # HF anonymous rate-limit (HTTP 429 + ~110s retry waits per file).
@@ -212,7 +234,7 @@ class CommunityCropsClient:
             )
             seeded_sha = self._try_tarball_seed(self._progress_cb)
             if seeded_sha:
-                local_crops = {p.name for p in crops_dir.glob('*.png')}
+                local_crops = {p.name for p in _mirror_crops(crops_dir)}
                 log.info(
                     f'community_crops: tarball seeded at {seeded_sha[:8]} — '
                     f'local now {len(local_crops)} crops'
@@ -278,47 +300,42 @@ class CommunityCropsClient:
                 # Don't pin the sha — next call retries the misses.
                 return False
 
-        self._flatten_shards()
+        self._shard_local()
 
         if to_remove:
             self._soft_delete(to_remove)
 
         return True
 
-    def _flatten_shards(self) -> int:
-        """Move `data/crops/<ab>/<sha>.png` up into `data/crops/<sha>.png`.
+    def _shard_local(self) -> int:
+        """Move the mirror onto the shard layout, and keep it there.
 
-        Upstream shards the folder because HF refuses more than 10 000 files
-        in one directory. The mirror does not have to: a crop's filename is
-        its content sha, so a flat directory cannot collide, and every reader
-        on this side — the k-NN seed, the review tools, `_scan` — already
-        globs it flat. Downloads land wherever the repo path says, so they
-        are flattened here, once, instead of teaching each reader two layouts.
+        Two jobs, both idempotent and both cheap enough to run on every sync:
+        a download that landed flat (the tarball, or a repo path that has not
+        been sharded upstream yet) is filed into its shard, and an install
+        that predates this keeps its crops where every reader can still find
+        them until it has been through here once.
+
+        Renames only — no network, no re-download.
         """
         crops_dir = community_crops_dir()
         if not crops_dir.exists():
             return 0
         moved = 0
-        for shard in sorted(p for p in crops_dir.iterdir() if p.is_dir()):
-            if shard.name.startswith('.'):
-                continue
-            for png in shard.glob('*.png'):
-                dst = crops_dir / png.name
-                try:
-                    _assert_inside_mirror_crops(dst)
-                    if dst.exists():
-                        png.unlink()
-                    else:
-                        png.rename(dst)
-                    moved += 1
-                except Exception as e:
-                    log.warning(f'community_crops: flatten {png.name} failed: {e}')
+        for png in list(crops_dir.glob('*.png')):
+            dst = mirror_crop_path(png.name)
             try:
-                shard.rmdir()
-            except OSError:
-                pass
+                dst.parent.mkdir(parents=True, exist_ok=True)
+                _assert_inside_mirror_crops(dst)
+                if dst.exists():
+                    png.unlink()          # same sha, same bytes
+                else:
+                    png.rename(dst)
+                moved += 1
+            except Exception as e:
+                log.warning(f'community_crops: sharding {png.name} failed: {e}')
         if moved:
-            log.info(f'community_crops: flattened {moved} sharded crop(s)')
+            log.info(f'community_crops: filed {moved} crop(s) into shards')
         return moved
 
     def _try_tarball_seed(self, progress_cb: ProgressCb | None) -> str | None:
@@ -420,6 +437,9 @@ class CommunityCropsClient:
                 # parent traversal, device files, and symlinks — the
                 # documented safe default for untrusted-but-expected tarballs.
                 tar.extractall(path=community_root(), filter='data')
+            # The tarball carries whatever layout it was built with;
+            # the mirror keeps one.
+            self._shard_local()
         except Exception as e:
             log.warning(f'community_crops: tarball extract failed: {e}')
             tmp_path.unlink(missing_ok=True)
@@ -441,7 +461,7 @@ class CommunityCropsClient:
         for _TRASH_KEEP_LAST cycles before auto-prune.
         """
         crops_dir = community_crops_dir()
-        local_count = sum(1 for _ in crops_dir.glob('*.png'))
+        local_count = sum(1 for _ in _mirror_crops(crops_dir))
 
         if local_count >= _CLEANUP_GUARD_MIN_LOCAL:
             frac = len(names) / max(local_count, 1)
@@ -458,7 +478,9 @@ class CommunityCropsClient:
         trash_dir.mkdir(parents=True, exist_ok=True)
         moved = 0
         for name in names:
-            src = crops_dir / name
+            src = mirror_crop_path(name)
+            if not src.exists():
+                src = crops_dir / name      # not migrated yet
             if not src.exists():
                 continue
             _assert_inside_mirror_crops(src)
@@ -505,7 +527,7 @@ class CommunityCropsClient:
                 allow_patterns=_ALLOW_PATTERNS,
                 revision=revision,
             )
-            self._flatten_shards()
+            self._shard_local()
             return True
         except Exception as e:
             log.warning(f'community_crops: snapshot download failed: {e}')
@@ -521,7 +543,7 @@ class CommunityCropsClient:
             except Exception:
                 pass
         crops_dir = community_crops_dir()
-        n_crops = sum(1 for _ in crops_dir.glob('*.png')) if crops_dir.exists() else 0
+        n_crops = sum(1 for _ in _mirror_crops(crops_dir))
         verb = 'ready' if ok else 'stale (download failed)'
         log.info(f'community_crops: mirror {verb} — '
                  f'{n_ann} annotations, {n_crops} crops')
