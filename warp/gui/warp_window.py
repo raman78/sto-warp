@@ -775,9 +775,11 @@ class WarpWindow(QMainWindow):
         form for the user to submit (or discard).
 
         Two different messages, because two different things are wrong.
-        `not_in_sets` means the item exists in the game and in WARP but not
-        in the tables SETS reads — a gap upstream that no bug report here
-        can close, so that case gets an explanation and no report button.
+        `not_in_sets` means the item exists in the game and WARP read it
+        correctly, and SETS still cannot place it — either no cargo table
+        stores it or SETS's loader passes the row over. Neither is closable
+        by a bug report here, so that case gets an explanation and no report
+        button; `upstream_gaps` keeps the tally that makes the case upstream.
         Anything else is a build WARP wrote incorrectly, which is worth
         reporting.
         """
@@ -800,12 +802,12 @@ class WarpWindow(QMainWindow):
             names = ', '.join(sorted({v.got.split(" (")[0].strip("'")
                                       for v in upstream})[:3])
             box.setText(
-                f'{len(upstream)} item(s) in this build are missing from the '
-                f'item tables SETS reads, so SETS will drop them on import:\n\n'
+                f'SETS will drop {len(upstream)} item(s) from this build on '
+                f'import:\n\n'
                 f'{names}{"…" if len(upstream) > 3 else ""}\n\n'
-                f'WARP recognises them from a list of its own. This is a gap '
-                f'in the wiki data SETS uses, not a fault in the export — the '
-                f'file itself is correct.')
+                f'WARP recognised them correctly and the exported file is '
+                f'correct — SETS is unable to place them. They are counted so '
+                f'the case for adding them can be made upstream.')
         box.setDetailedText('\n'.join(str(v) for v in violations))
         report_btn = (box.addButton('Report on GitHub',
                                     QMessageBox.ButtonRole.ActionRole)

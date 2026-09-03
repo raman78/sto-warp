@@ -211,6 +211,36 @@ Callers must not present this as a WARP defect.
 violations are `not_in_sets` gets an explanation and **no** report button,
 and a mixed set reports the real defects alone.
 
+### The gap ledger
+
+The rule has a second cause with the same conclusion for the user and a
+different one for us. `_sets_skips` covers items cargo *does* store, which
+SETS's own build loader passes over — the Advanced and Elite hangars. So a
+`not_in_sets` violation is a request to one of two projects, and which one
+depends on the reason:
+
+| Reason in the violation | Who can fix it | What to ask for |
+|---|---|---|
+| the row carries `source` | the wiki | a cargo table row for an item the wiki already documents |
+| `_sets_skips` matches | SETS | its loader accepting a row cargo already carries |
+
+`upstream_gaps.record`, called from `write_sets_build`, appends every such
+violation to `upstream_gaps.json` under the user's data directory: item name,
+reason, the slots it turned up in, how many exports carried it, first and last
+seen. The reason is part of the key, so the same name can hold two entries —
+merging them would collapse two requests to two different projects into one
+list nobody can act on.
+
+`python -m warp.tools.upstream_gaps_report` prints the tally grouped by
+reason; `--path` prints the file location. Nothing consumes it automatically.
+It exists so an upstream request can say "recognised in N real builds" instead
+of resting on a single screenshot, which is the form of the argument that has
+a chance of moving either project.
+
+The ledger never blocks an export: `record` swallows and logs its own
+failures, because a user who exported a build must get the build whether or
+not the bookkeeping worked.
+
 ## Seat specs and ability ranks
 
 Two build fields cannot be read off the screenshot and are derived

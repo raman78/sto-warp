@@ -30,6 +30,7 @@ import json
 import os
 from pathlib import Path
 
+from warp import upstream_gaps
 from warp.debug import log
 from warp.sets_schema import (
     BOFF_RANKS, SEAT_RANK_SLOT, errors, summarise, validate_sets_build)
@@ -152,6 +153,12 @@ def write_sets_build(sets_build, path, cache=None, report_to: list | None = None
     violations = validate_sets_build(payload, cache)
     if report_to is not None:
         report_to.extend(violations)
+
+    # `not_in_sets` is nobody's bug here — the item was recognised correctly
+    # and SETS still drops it. Keep a tally so the case for fixing it upstream
+    # can be made from real builds rather than from one user's anecdote.
+    upstream_gaps.record(violations)
+
     if violations:
         log.warning(f'SETS_SCHEMA: {summarise(violations)}')
         if os.environ.get('WARP_STRICT_EXPORT') == '1' and errors(violations):
