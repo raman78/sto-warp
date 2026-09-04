@@ -8,6 +8,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.36] — 2026-09-05
+
+### Fixed
+- **Corrections to a screenshot's type now reach the community dataset.**
+  Changing the type of a screenshot in WARP CORE does not change the
+  file itself, and the check that decided what to send looked only at
+  the file — so the correction stayed on the machine and the community
+  kept the type the screenshot was first given. Corrections made before
+  this release are sent on the next synchronisation, without any action
+  needed.
+- **A screenshot the server declines is retried instead of being
+  forgotten.** When part of a batch was declined, the whole batch was
+  recorded as sent and never looked at again. Declined items are now
+  kept for the next attempt, and the reason the server gave is written
+  to the system log.
+
+### Added
+- **A note in the status bar counts confirmations that have not been
+  shared yet.** It appears only when something is waiting, and clears on
+  its own once the uploads go through. A number that stays put means the
+  uploads are being declined rather than queued, and the System logs tab
+  records why.
+
 ## [1.0.35] — 2026-09-04
 
 ### Fixed
