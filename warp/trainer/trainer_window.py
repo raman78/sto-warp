@@ -209,6 +209,20 @@ class WarpCoreWindow(QMainWindow):
         self._status_progress.cancel_requested.connect(self._cancel_active_run)
         self.statusBar().addPermanentWidget(self._status_progress)
 
+        # Confirmations this machine holds that the community dataset has not
+        # got. Permanent rather than a status message, because the condition
+        # persists and `showMessage` is overwritten by the next operation —
+        # which is how an upload fault stayed invisible for months.
+        #
+        # Hidden while the number is zero. A short backlog is the normal state
+        # straight after confirming, and a label that is always on is a label
+        # nobody reads.
+        self._backlog_label = QLabel('')
+        self._backlog_label.setStyleSheet('color: #e0a030;')
+        self._backlog_label.hide()
+        self.statusBar().addPermanentWidget(self._backlog_label)
+        self._refresh_upload_backlog()
+
         # Periodic HF sync — fires every 5 minutes, uploads only if data changed.
         # Skipped in embed mode: the launcher's SyncCoordinator owns the timer
         # so we don't fire two refreshes per cycle.
@@ -3377,6 +3391,39 @@ class WarpCoreWindow(QMainWindow):
             name = self._name_edit.text().strip()
         return slot, name
 
+    def _refresh_upload_backlog(self) -> None:
+        """Show, or hide, how much this machine has confirmed but not shared.
+
+        Called after a sync cycle and after the review panel is repopulated,
+        which between them cover both directions the number moves in: work
+        arriving (a confirmation) and work leaving (an upload).
+
+        Never raises — a status label must not be the thing that breaks the
+        trainer.
+        """
+        try:
+            from warp.trainer.sync import upload_backlog
+            mgr = getattr(self, '_data_mgr', None)
+            store = getattr(mgr, '_dir', None)
+            if store is None:
+                return
+            pending = sum(upload_backlog(store).values())
+        except Exception as e:
+            log.debug(f'WarpCore: upload backlog check skipped ({e})')
+            return
+
+        if not pending:
+            self._backlog_label.hide()
+            return
+        self._backlog_label.setText(f'{pending} not yet shared')
+        self._backlog_label.setToolTip(
+            f'{pending} confirmation(s) on this machine have not been accepted '
+            f'by the community dataset yet.\n\n'
+            f'This is normal right after confirming and should clear within a '
+            f'sync or two. If it does not fall, the uploads are being refused '
+            f'— the System logs tab carries the reason.')
+        self._backlog_label.show()
+
     def _set_review_buttons_enabled(self, enabled: bool):
         for btn in (self._btn_remove_item,):  # btn_edit_bbox disabled
             btn.setEnabled(enabled)
@@ -5151,6 +5198,11 @@ class WarpCoreWindow(QMainWindow):
             ModelUpdater().check_and_update()
         except Exception as e:
             log.debug(f'WARP CORE: model update check error: {e}')
+
+        # The two directions the backlog moves in are a confirmation arriving
+        # and an upload leaving. This tick covers the second; the review panel
+        # covers the first.
+        self._refresh_upload_backlog()
 
     # Screen type → importer build_type mapping (same as RecognitionWorker)
     _STYPE_TO_BUILD: dict[str, str] = {

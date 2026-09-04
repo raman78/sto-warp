@@ -295,3 +295,23 @@ def test_the_check_never_raises_when_there_is_no_store(tmp_path, monkeypatch):
     sync, w = _make_worker(tmp_path, monkeypatch)
 
     assert w._diagnose_upload_backlog() == {}
+
+
+def test_the_backlog_helper_works_without_a_worker(tmp_path, monkeypatch):
+    """`upload_backlog` is module level so the trainer window can ask without
+    a sync in flight and without a signal plumbed through three layers."""
+    from warp.trainer.sync import upload_backlog
+
+    d = tmp_path / 'screen_types' / 'BOFFS'
+    d.mkdir(parents=True)
+    (d / 'a.png').write_bytes(b'\x89PNG' + b'\x00' * 200)
+
+    assert upload_backlog(tmp_path) == {'screen_types': 1}
+
+
+def test_the_backlog_helper_is_silent_on_a_missing_store(tmp_path):
+    """It runs at window construction, so it must not raise before a folder
+    has ever been opened."""
+    from warp.trainer.sync import upload_backlog
+
+    assert upload_backlog(tmp_path / 'nothing here') == {}

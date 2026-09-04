@@ -617,45 +617,8 @@ class SyncWorker(QThread):
     # ── Self-diagnosis ────────────────────────────────────────────────────
 
     def _diagnose_upload_backlog(self) -> dict[str, int]:
-        """Compare what this install has confirmed against what it has sent.
-
-        Every upload fault found so far has been silent in the same way: the
-        client believed it had sent something it had not, and nothing ever
-        asked whether the two agreed. A count of confirmed-but-unsent is the
-        one number that would have shown it, so it is computed after every
-        upload pass and logged when it is not zero.
-
-        It answers "does my machine still hold work the community dataset has
-        not got", which is a question the client can settle alone — no network
-        call, no listing, just the local store against the local cache. What
-        it deliberately does *not* claim is that everything counted as sent
-        actually arrived; only the maintainer's own reconciliation against the
-        published dataset can say that.
-
-        Returns `{channel: pending}`, empty when everything is accounted for.
-        """
-        out: dict[str, int] = {}
-        try:
-            root = self._mgr._dir / 'screen_types'
-            if root.is_dir():
-                cache = self._load_screen_type_cache(
-                    self._mgr._dir / '.sync_uploaded_screen_hashes.json')
-                pending = 0
-                for type_dir in root.iterdir():
-                    if not type_dir.is_dir() or type_dir.name == 'UNKNOWN':
-                        continue
-                    for png in type_dir.glob('*.png'):
-                        try:
-                            sha = self._file_sha256(png)
-                        except Exception:
-                            continue
-                        if self._screen_needs_upload(sha, type_dir.name, cache):
-                            pending += 1
-                if pending:
-                    out['screen_types'] = pending
-        except Exception as e:
-            _slog.debug(f'HF Sync: screen backlog check skipped ({e})')
-        return out
+        """This worker's view of `upload_backlog` — see that function."""
+        return upload_backlog(self._mgr._dir)
 
     def _report_upload_backlog(self) -> None:
         """Say plainly what has not reached the community dataset.
@@ -920,6 +883,42 @@ class SyncWorker(QThread):
 # ---------------------------------------------------------------------------
 # SyncManager — WARP-specific background sync task
 # ---------------------------------------------------------------------------
+
+def upload_backlog(store_dir: Path) -> dict[str, int]:
+    """`{channel: pending}` — confirmed in this store, not yet sent.
+
+    Module level rather than a worker method so the trainer window can ask
+    without a sync in flight and without plumbing a signal through three
+    layers. Pure disk reads: the local store against the local upload cache,
+    no network.
+
+    What it deliberately does not claim is that everything counted as sent
+    arrived — only a comparison against the published dataset can say that,
+    and that is `admin_reconcile_local.py` on the maintainer's side.
+    """
+    out: dict[str, int] = {}
+    try:
+        root = Path(store_dir) / 'screen_types'
+        if root.is_dir():
+            cache = SyncWorker._load_screen_type_cache(
+                Path(store_dir) / '.sync_uploaded_screen_hashes.json')
+            pending = 0
+            for type_dir in root.iterdir():
+                if not type_dir.is_dir() or type_dir.name == 'UNKNOWN':
+                    continue
+                for png in type_dir.glob('*.png'):
+                    try:
+                        sha = SyncWorker._file_sha256(png)
+                    except Exception:
+                        continue
+                    if SyncWorker._screen_needs_upload(sha, type_dir.name, cache):
+                        pending += 1
+            if pending:
+                out['screen_types'] = pending
+    except Exception as e:
+        _slog.debug(f'upload_backlog: screen check skipped ({e})')
+    return out
+
 
 class SyncManager(QObject):
     """
