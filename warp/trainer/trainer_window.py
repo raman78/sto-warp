@@ -26,6 +26,7 @@ from PySide6.QtGui import QFont, QAction, QBrush, QColor, QIcon, QStandardItemMo
 from warp import userdata
 from warp.trainer.annotation_widget import AnnotationWidget
 from warp.trainer.fast_session      import display_name as _disp_name
+from warp.ui_helpers import window_title
 from warp.trainer.training_data      import (
     TrainingDataManager, AnnotationState, NON_ICON_SLOTS, SINGLE_INSTANCE_SLOTS,
     TEXT_LEARNING_SLOTS, VIRTUAL_ITEM_NAMES, _bbox_iou,
@@ -191,7 +192,7 @@ class WarpCoreWindow(QMainWindow):
         self._detect_loop_prev_unresolved: int | None = None
         self._recog_dlg = None
         self._selection_just_changed = False
-        self.setWindowTitle('WARP CORE — ML Trainer')
+        self.setWindowTitle(window_title('WARP CORE', 'ML Trainer'))
         self.setMinimumSize(1280, 740)
         apply_dark_style(self)
         self._build_ui()
@@ -762,7 +763,7 @@ class WarpCoreWindow(QMainWindow):
         self.setStyleSheet(accent_qss('fast_correction'))
         self._fast_banner.setVisible(True)
         self._btn_send_to_warp.setText('↗ Send to WARP')
-        self.setWindowTitle('WARP CORE — Fast Correction Mode')
+        self.setWindowTitle(window_title('WARP CORE', 'Fast Correction Mode'))
         if self._file_list.count():
             self._file_list.setCurrentRow(0)
         self.statusBar().showMessage(
@@ -788,7 +789,7 @@ class WarpCoreWindow(QMainWindow):
         self._btn_send_to_warp.setText('↗ Send this to WARP')
         for a in (self._action_open_screenshot, self._action_open_folder):
             a.setVisible(True)
-        self.setWindowTitle('WARP CORE — ML Trainer')
+        self.setWindowTitle(window_title('WARP CORE', 'ML Trainer'))
 
         snap = getattr(self, '_pre_fc_snapshot', None)
         self._pre_fc_snapshot = None

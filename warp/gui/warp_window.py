@@ -32,6 +32,7 @@ from warp.gui.progress_bar import StatusProgressBar
 from warp.gui.results_view import ResultsView
 from warp.style import ACCENT, primary_btn_style, secondary_btn_style
 
+from warp.ui_helpers import window_title
 from warp.debug import log
 from warp.warp_importer import (
     SCREENSHOT_EXTENSIONS, ImportResult, WarpImporter,
@@ -151,7 +152,8 @@ class WarpWindow(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.setWindowTitle('sto-warp — Star Trek Online screenshot recognition')
+        self.setWindowTitle(window_title(
+            'sto-warp', 'Star Trek Online screenshot recognition'))
         self.resize(1100, 700)
 
         self._result: ImportResult | None = None

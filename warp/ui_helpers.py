@@ -9,6 +9,32 @@ from PySide6.QtCore import QTimer
 from PySide6.QtWidgets import QLabel
 
 
+def window_title(name: str, suffix: str = '') -> str:
+    """`"<name> V<version>"`, with an optional trailing `" — <suffix>"`.
+
+    Every window builds its title through here rather than holding a literal,
+    because the trainer alone sets its own title in three places — entering
+    Fast Correction Mode and leaving it again — and a version pasted into some
+    of them disappears the moment the user switches modes.
+
+    Matches the format STO-CLARE uses, so the two programs read alike when
+    both are open.
+
+    The number comes from the installed package's build metadata, so it is
+    the version that is *running* rather than the version in the working tree
+    — an editable install keeps showing the release it was built from until
+    it is reinstalled, and a checkout with no metadata at all reports
+    `0.0.0+unknown`. Shown as-is either way: a title claiming nothing is
+    worse than one admitting the build is old or unknown, and for the case
+    this exists for — a user reporting what they are running — the installed
+    version is the right answer.
+    """
+    from warp import __version__
+
+    base = f'{name} V{__version__}'
+    return f'{base} — {suffix}' if suffix else base
+
+
 def time_spent_counter(
     parent,
     prefix: str = 'Time: ',

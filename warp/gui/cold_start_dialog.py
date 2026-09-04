@@ -38,6 +38,7 @@ from PySide6.QtWidgets import (
 
 from warp.debug import syslog as log
 from warp.userdata import config_dir
+from warp.ui_helpers import window_title
 
 
 _MARKER_FILENAME = 'startup_sync_done'
@@ -258,7 +259,7 @@ class ColdStartDialog(QDialog):
 
     def __init__(self, parent: QWidget | None = None):
         super().__init__(parent)
-        self.setWindowTitle('sto-warp — first-run setup')
+        self.setWindowTitle(window_title('sto-warp', 'first-run setup'))
         self.setModal(True)
         self.setMinimumWidth(640)
         # Strip the system close button; we want users to use Close or

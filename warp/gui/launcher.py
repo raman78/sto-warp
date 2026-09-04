@@ -25,6 +25,7 @@ from PySide6.QtWidgets import (
     QApplication, QMainWindow, QMessageBox, QPushButton, QTabWidget,
 )
 
+from warp.ui_helpers import window_title
 from warp.debug import log
 from warp.resources import resource_path
 
@@ -94,7 +95,7 @@ class LauncherWindow(QMainWindow):
         # only the periodic timer instead of re-running the cycle that
         # the splash already drove to completion.
         self._skip_initial_sync = skip_initial_sync
-        self.setWindowTitle('sto-warp')
+        self.setWindowTitle(window_title('sto-warp'))
         _app_icon = _rounded_app_icon()
         if not _app_icon.isNull():
             self.setWindowIcon(_app_icon)
