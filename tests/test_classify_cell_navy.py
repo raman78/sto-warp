@@ -1,4 +1,4 @@
-"""Inside the navy window, brightness variance separates the three states.
+"""Brightness variance separates empty, inactive and active in both families.
 
 A BOFF panel draws a locked seat as a navy cell with an X across it. An empty
 seat on the same panel is the navy background with nothing drawn on it, and a
@@ -112,3 +112,52 @@ def test_an_empty_crop_is_treated_as_active():
     a real item rather than fail visibly."""
     assert LayoutDetector._classify_cell(None) == 'active'
     assert LayoutDetector._classify_cell(np.zeros((0, 0, 3), np.uint8)) == 'active'
+
+
+# ── The dark, non-navy inactive family ─────────────────────────────────────
+#
+# The game also locks a slot without the navy X: a near-black cell carrying a
+# 'LOCK' word, a padlock symbol, or a level requirement like 'lvl 65'. All of
+# them are markings drawn on a dark cell, so the same property separates them
+# from an unpainted one — an empty cell is flat, a marked one is not.
+#
+# Measured 2026-09-04 over the dark non-navy cells alone (124 inactive, 150
+# empty): inactive median std_v 15.1, p10 11.7; empty median 1.7, p90 4.3.
+# The gate was 10, which missed the four faintest markings.
+
+
+def _dark_cell(std_v: float, mean_v: float = 20.0, size=(64, 49)):
+    """A near-black cell with a chosen brightness variance and no colour."""
+    h, w = size
+    rng = np.random.default_rng(1)
+    v = np.clip(rng.normal(mean_v, std_v, (h, w)), 0, 255).astype(np.uint8)
+    return cv2.merge([v, v, v])
+
+
+def test_the_dark_fixture_is_outside_the_navy_window():
+    """Guards the test: these must not be caught by the navy branch instead."""
+    _, mean_s, _ = _measured(_dark_cell(std_v=15))
+
+    assert mean_s < 100
+
+
+def test_a_marked_dark_cell_is_inactive():
+    """LOCK / padlock / level text, at the measured median variance."""
+    assert LayoutDetector._classify_cell(_dark_cell(std_v=15)) == 'inactive'
+
+
+def test_a_faint_marking_is_no_longer_read_as_empty():
+    """std_v 9 sits between the old gate of 10 and the new one of 8 — the
+    band holding the faintest LOCK cells."""
+    assert LayoutDetector._classify_cell(_dark_cell(std_v=9)) == 'inactive'
+
+
+def test_an_unpainted_dark_cell_is_still_empty():
+    """Empty sits at a median of 1.7; the gate must stay clear of it."""
+    assert LayoutDetector._classify_cell(_dark_cell(std_v=2)) == 'empty'
+
+
+def test_the_gate_keeps_a_margin_above_the_empty_distribution():
+    """8 was chosen over 6 because both catch the same 122 of 124 markings,
+    and 8 leaves more room above empty's 90th percentile of 4.3."""
+    assert LayoutDetector._classify_cell(_dark_cell(std_v=5)) == 'empty'

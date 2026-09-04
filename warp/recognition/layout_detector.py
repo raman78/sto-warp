@@ -2160,10 +2160,20 @@ class LayoutDetector:
         Uses the inner 60% of the crop to avoid border contamination.
 
         active   — has a visible icon (bright content)
-        inactive — locked / unavailable slot:
-                     BOFFS: dark navy-blue with X pattern (blue-saturated)
-                     EQ/Traits: near-black with 'LOCK' text (higher brightness variance)
-        empty    — slot exists but nothing is slotted (uniform near-black, thin border only)
+        inactive — locked / unavailable slot. The game draws this several
+                   ways, and all of them share one property: something is
+                   painted on an otherwise dark cell.
+                     BOFFS:     navy-blue fill with an X across it
+                     EQ/Traits: near-black carrying a 'LOCK' word, a padlock
+                                symbol, or a level requirement such as
+                                'lvl 65'
+        empty    — slot exists but nothing is slotted: an unpainted cell,
+                   either near-black or the navy panel showing through, with
+                   a thin border and nothing else
+
+        So the three separate on how much the cell varies, not on how bright
+        or how blue it is — an unpainted cell is flat whatever its colour,
+        and every inactive marking, X or word or padlock, adds variance.
         """
         import cv2
         if crop_bgr is None or crop_bgr.size == 0:
@@ -2211,8 +2221,18 @@ class LayoutDetector:
         # Darker BOFF inactive (lower-res screenshots / dimmer monitors)
         if mean_s > 40 and 95 < mean_h < 130:
             return 'inactive'
-        # LOCK (EQ/Traits): near-black but text pixels raise brightness variance
-        if std_v > 10:
+        # The dark, non-navy markings: a 'LOCK' word, a padlock symbol, or a
+        # level requirement. Whichever it is, it is drawn on a near-black cell
+        # and its pixels raise brightness variance above a flat one.
+        #
+        # Measured 2026-09-04 over the same crops, restricted to dark
+        # non-navy cells (124 inactive, 150 empty): inactive sits at a median
+        # std_v of 15.1 and a 10th percentile of 11.7, empty at a median of
+        # 1.7 and a 90th percentile of 4.3. The gate was 10, which missed 4
+        # of the faintest markings; 8 catches 122 of 124 for the same two
+        # false positives, and 6 buys nothing further, so 8 is the widest
+        # margin that costs nothing.
+        if std_v > 8:
             return 'inactive'
         return 'empty'
 
