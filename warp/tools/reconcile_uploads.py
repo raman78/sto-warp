@@ -1,3 +1,13 @@
+#!/usr/bin/env python3
+# warp/tools/reconcile_uploads.py
+#
+# REPO OWNER TOOL — deep diagnosis of whether this install's contributions
+# reached the community dataset. Ships in the package like its neighbours in
+# this folder, and like them it is not part of the user-facing program: a user
+# is told only that something is pending, by the counter in WARP CORE's status
+# bar. Interpreting *why* — a lost upload against a lost vote — is maintainer
+# work and needs the published dataset to answer.
+
 """Did this machine's contributions reach the community dataset.
 
 The published dataset is what the trainers read and what every install

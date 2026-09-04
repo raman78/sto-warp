@@ -366,12 +366,16 @@ a comparison between a local store and the published dataset into `unsent`,
 version scored every difference alike, which amounts to arguing the consensus
 should be corrected to match one machine — see the invariant in §3.
 
-The client answers the narrower half of the same question by itself, with no
-network: `sync.upload_backlog` counts what this install has confirmed and not
-sent, `SyncWorker._report_upload_backlog` logs it after every upload pass, and
-WARP CORE shows it in the status bar. None of that can prove something
-counted as sent arrived; only the reconciliation against the published
-dataset can.
+The two halves are deliberately split by audience. A user is told only that
+something is pending: `sync.upload_backlog` counts what this install has
+confirmed and not sent, `SyncWorker._report_upload_backlog` logs it after
+every upload pass, and WARP CORE shows the number in its status bar. All of
+that is local — the store against the upload cache, no network — and it
+cannot prove that something counted as sent arrived.
+
+Interpreting *why* is maintainer work, because it needs the published dataset:
+`warp.tools.reconcile_uploads` is a repo-owner tool like the rest of that
+folder, shipped in the package and not part of the user-facing program.
 
 ## 6. The audit safety net
 
