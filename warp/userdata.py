@@ -129,6 +129,15 @@ def contribute_queue_file() -> Path:
     return data_dir() / 'contribute_queue.jsonl'
 
 
+def sets_gaps_push_stamp_file() -> Path:
+    """When this install last sent its SETS-gap ledger to the backend.
+
+    Kept apart from the ledger itself so clearing one does not silently
+    disable the other.
+    """
+    return cache_dir() / 'sets_gaps_push.json'
+
+
 def screen_type_stats_file() -> Path:
     """Validation-accuracy stats kept by the trainer."""
     return data_dir() / 'screen_type_stats.json'

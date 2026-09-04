@@ -367,6 +367,15 @@ class WARPSyncClient:
             target=self._download_icon_equivalence_bg,
             daemon=True, name='warp-icon-equiv-dl'
         ).start()
+        # Once a day, hand the backend this install's tally of items SETS
+        # drops on import. Runs here rather than at export time because the
+        # figure only matters in aggregate: nothing upstream acts faster for
+        # hearing about one build sooner, and a per-export POST would add a
+        # network call to a user action that must never wait on one.
+        threading.Thread(
+            target=self._push_sets_gaps_bg,
+            daemon=True, name='warp-sets-gaps-push'
+        ).start()
 
     # ── Public API ─────────────────────────────────────────────────────────────
 
@@ -517,6 +526,69 @@ class WARPSyncClient:
         ).start()
 
     # ── Background workers ─────────────────────────────────────────────────────
+
+    def _push_sets_gaps_bg(self) -> None:
+        """Send this install's SETS-gap ledger, at most once a day.
+
+        The payload is item names only — no crop, no screenshot, no build.
+        It answers one question for the maintainer: how many separate
+        installs hit an item SETS refuses, which is what an upstream request
+        to the wiki or to SETS can be argued from.
+
+        The full ledger goes each time and replaces the previous upload, so
+        a repeat send cannot inflate anyone's count and an item that stops
+        occurring drops off on its own. That also means a missed day costs
+        nothing — the next push carries everything.
+
+        Silent on failure, like every other call here: this is bookkeeping
+        and must never surface as a problem the user has to think about.
+        """
+        from warp import upstream_gaps
+
+        try:
+            stamp = userdata.sets_gaps_push_stamp_file()
+            today = str(date.today())
+            try:
+                if json.loads(stamp.read_text()).get('date') == today:
+                    return
+            except Exception:
+                pass          # no stamp, or unreadable — treat as due
+
+            items = upstream_gaps.snapshot()
+            if not items:
+                # Nothing to report and nothing reported before: skip the
+                # round trip entirely. Once this install *has* reported, an
+                # empty ledger is worth sending — that is how an entry
+                # expires after the wiki or SETS fixes the gap.
+                if not stamp.exists():
+                    return
+
+            payload = json.dumps({
+                'install_id': self._install_id,
+                'items':      items,
+            }, ensure_ascii=False).encode('utf-8')
+
+            import urllib.request
+            req = urllib.request.Request(
+                f'{self._url}/upload/sets-gaps',
+                data=payload,
+                headers={'Content-Type': 'application/json',
+                         'User-Agent':   f'WARP/{WARP_VERSION}'},
+                method='POST',
+            )
+            with urllib.request.urlopen(
+                    req, timeout=config.SYNC_CONTRIBUTE_TIMEOUT) as resp:
+                result = json.loads(resp.read().decode('utf-8'))
+
+            stamp.parent.mkdir(parents=True, exist_ok=True)
+            stamp.write_text(json.dumps({'date': today}))
+            log.info(f'WARPSync: reported {result.get("accepted", 0)} '
+                     f'item(s) SETS drops on import')
+        except Exception as e:
+            # No stamp is written, so the next start retries. Debug level:
+            # the backend being unreachable is already reported by the
+            # knowledge download, and repeating it here is noise.
+            log.debug(f'WARPSync: SETS-gap report skipped ({e})')
 
     def _download_knowledge_bg(self, force: bool = False) -> None:
         """Download knowledge.json from backend; update self._knowledge."""

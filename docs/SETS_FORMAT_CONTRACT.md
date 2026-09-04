@@ -231,15 +231,64 @@ seen. The reason is part of the key, so the same name can hold two entries —
 merging them would collapse two requests to two different projects into one
 list nobody can act on.
 
-`python -m warp.tools.upstream_gaps_report` prints the tally grouped by
-reason; `--path` prints the file location. Nothing consumes it automatically.
-It exists so an upstream request can say "recognised in N real builds" instead
-of resting on a single screenshot, which is the form of the argument that has
-a chance of moving either project.
+`python -m warp.tools.upstream_gaps_report` prints the local tally grouped by
+reason; `--path` prints the file location.
 
 The ledger never blocks an export: `record` swallows and logs its own
 failures, because a user who exported a build must get the build whether or
 not the bookkeeping worked.
+
+#### Reaching the maintainer
+
+A local file answers nothing on its own — the argument upstream is *how many
+installs* hit an item, not how many times one user exported. So the client
+sends its ledger to the backend and the backend counts installs.
+
+```
+WARP export ──► upstream_gaps.json ──┐
+                (local, per export)  │  once a day, on startup
+                                     ▼
+                        POST /upload/sets-gaps
+                                     │
+                                     ▼
+                    sets_gaps/<install_id>.json   (one file per install)
+                                     │
+                                     ▼
+                    admin_sets_gaps_report.py  →  installs per item
+```
+
+`WARPSyncClient._push_sets_gaps_bg` runs on startup alongside the knowledge
+and icon-equivalence downloads, and does nothing if it already sent today
+(`userdata.sets_gaps_push_stamp_file`). Export time was deliberately not
+chosen: nothing upstream acts faster for hearing about a build sooner, and it
+would put a network call inside a user action that must never wait on one.
+
+Three properties follow from sending the **whole ledger** each time and having
+the backend **replace** that install's file:
+
+- Re-sending is idempotent, so a retry or a second WARP on the same machine
+  cannot inflate a count.
+- An item that stops being reported — the wiki added the cargo row — expires
+  from the report by itself, with nothing to sweep.
+- A missed day costs nothing; the next push carries everything.
+
+The payload is item names, reasons and slots. No crop, no screenshot, no
+build, and deliberately **not** the local export count: a count would let one
+user's repeated exports read as demand from many. Deduplication happens in
+both places — the endpoint collapses repeats within a request, and
+`admin_sets_gaps_report._tally` counts an install once per item however often
+it appears.
+
+An unknown `reason` is rejected rather than filed under either bucket: that
+value can only be a client newer than the backend, and guessing would put a
+request in front of the wrong project.
+
+Installs that stop reporting age out on their own. Because a live client
+pushes daily, a file that has not moved in `STALE_AFTER_DAYS` (90) belongs to
+an install that is gone, and `admin_sets_gaps_report` stops counting it —
+otherwise uninstalled copies would keep voting on the one number this exists
+to produce. Nothing is deleted, so an install that comes back is counted again
+on its next push, and `--stale-after 0` shows the unfiltered total.
 
 ## Seat specs and ability ranks
 

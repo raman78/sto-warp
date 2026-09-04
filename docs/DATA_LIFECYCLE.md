@@ -39,6 +39,7 @@ admin scripts, HF-token handling) see the backend's
 │                                staging/<install_id>/annotations.jsonl    │
 │   /upload/screen-types     ─►  staging/<install_id>/screen_types/<T>/    │
 │   /upload/anchors          ─►  staging/<install_id>/anchors_grid_*.json  │
+│   /upload/sets-gaps        ─►  sets_gaps/<install_id>.json               │
 └─────────────┼────────────────────────────────────────────────────────────┘
               │
               │   per-install HF dataset writes (one commit per batch)
@@ -54,6 +55,10 @@ admin scripts, HF-token handling) see the backend's
 │   staging/<iid_*>/anchors_grid_*.json   ┘                                │
 │                                                                          │
 │   contributions/<date>/<uuid>.{png,json}  ← phash knowledge overrides    │
+│                                                                          │
+│   sets_gaps/<iid>.json   ← NOT staging: no vote, nothing to merge.       │
+│                            One snapshot per install, replaced on each    │
+│                            upload, read only by the maintainer's report. │
 └─────────────┼────────────────────────────────────────────────────────────┘
               │
               │  GitHub Actions — merge_staging.yml, cron `22 */2 * * *`

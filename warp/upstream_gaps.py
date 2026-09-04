@@ -115,6 +115,28 @@ def record(violations) -> int:
         return 0
 
 
+def snapshot() -> list[dict]:
+    """This install's current ledger, in the shape the backend accepts.
+
+    The whole ledger goes up at once and replaces whatever this install sent
+    before, so the upload is idempotent and an item that stops appearing
+    expires by itself. Export counts stay local: what the backend needs is
+    how many *installs* hit an item, and sending our own count would let one
+    user's repeated exports read as demand from many.
+    """
+    try:
+        data = json.loads(ledger_path().read_text(encoding='utf-8'))
+    except Exception:
+        return []
+    if not isinstance(data, dict):
+        return []
+    return [
+        {'name': e['name'], 'reason': e['reason'], 'slots': e.get('slots') or []}
+        for e in data.values()
+        if isinstance(e, dict) and e.get('name') and e.get('reason')
+    ]
+
+
 def summary() -> str:
     """A human-readable tally, grouped by which project the gap belongs to."""
     try:
