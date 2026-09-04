@@ -444,6 +444,39 @@ numbers only, never file paths or your user name.
 Tip: the same list also goes to the system log, so you can send it later even
 if you closed the notice.
 
+#### When SETS cannot take an item that was recognised correctly
+
+There is a second, different notice, and it is not a fault report:
+
+```
+┌─ SETS schema warnings ───────────────────────────────┐
+│  SETS will drop 2 item(s) from this build on import: │
+│                                                      │
+│  Elite Fleet Phaser Pulsewave, Hangar - Elite …      │
+│                                                      │
+│  WARP recognised them correctly and the exported     │
+│  file is correct — SETS is unable to place them.     │
+│  They are counted so the case for adding them can    │
+│  be made upstream.                                   │
+│                                                      │
+│      [ Show Details… ]              [ Close ]        │
+└──────────────────────────────────────────────────────┘
+```
+
+There is no **Report on GitHub** button here on purpose. Nothing is broken on
+this side: the picture was read right and the file says the right thing. SETS
+builds its item list from the same public wiki tables WARP does, and for a
+handful of items those tables have no entry — or have one that the SETS
+importer passes over. Either way the item is dropped when you load the build,
+and no change to WARP can prevent that.
+
+What you can do is nothing, and that is fine: the build imports, minus those
+slots, and you can add them by hand in SETS. WARP keeps a private tally of
+which items this happens to, so the case for fixing it can be put to the
+people who maintain the wiki or SETS with real numbers behind it rather than
+one player's screenshot. The tally holds item names only — no screenshots and
+no build files — and is sent no more than once a day.
+
 #### Checking a build file yourself
 
 Any saved build file can be checked from a terminal, including one that SETS
@@ -821,7 +854,13 @@ The intended WARP CORE workflow, end to end:
 
 The Item field has **autocomplete** — start typing the item name and a dropdown shows matches from the STO item database. Select with arrow keys or mouse.
 
-If the correct item is not in the autocomplete list, type the full name manually. It will still be saved as training data for that icon.
+The name has to be one the list actually holds. If it isn't, WARP CORE shows **Invalid item name** and keeps the field open instead of saving. Typing the name exactly as it appears in the list works just as well as picking it — the check is on the finished text, not on how you entered it.
+
+The reason is that a confirmed name is treated as fact everywhere afterwards: it trains the recognition model, it is shared with the community, and it is written into the build file for SETS. A name that exists only in your typing can do none of those things, so it would quietly become bad training data rather than a useful correction. A misspelling costs more than a blank — a slot left unnamed is simply unknown, while a wrong name teaches the program something false about that picture.
+
+The list is per slot, so an item that is real but belongs elsewhere is refused too. That usually means the slot is wrong rather than the name — check the box is over what you think it is.
+
+If the item genuinely isn't in the list, leave the field blank and confirm. That records the picture as unknown, which is honest and still useful; the item database is refreshed from the wiki, so the name may appear later.
 
 > **Tip:** You don't have to correct every item. Focus on red (< 40%) and yellow items. Green items (≥ 75%) are usually correct — Auto-accept handles these automatically if enabled.
 
@@ -838,9 +877,13 @@ If WARP missed a slot entirely (no box drawn over an item):
 
 Bridge officer seats sometimes contain slots that are visually empty (nothing assigned yet) or inactive (locked/unavailable at this rank).
 
-**Inactive slots** (the navy-blue "X" icon) are now detected automatically — WARP recognises the dark-blue pattern and marks these as *inactive* without any manual work. They appear in the review list as greyed-out entries.
+**Both are detected automatically**, and the rule WARP follows is simple enough to predict: it asks how much is *drawn* in the cell, not how bright or how blue it is. A slot with nothing in it is flat — plain dark, or the navy panel showing through. A locked slot always has something painted on it, and the game paints it several ways: the navy square with an X, the word **LOCK**, a padlock, or a level requirement such as *lvl 65*. A slot with a real ability has a picture, which varies far more than any of those.
 
-**Empty slots** and any inactive slots that were not auto-detected can still be annotated manually:
+So all of these end up as *inactive* without any manual work, and a genuinely empty seat is told apart from a locked one rather than lumped in with it. They appear in the review list as greyed-out entries.
+
+Where it still gets it wrong is worth knowing, because you can see it coming: if a box is drawn slightly off and catches part of the bright slot next door, the cell contains a picture as far as WARP is concerned, and it will treat it as occupied. Redrawing the box over just the one slot fixes it.
+
+**Empty slots** and any slot that was not classified correctly can still be annotated manually:
 
 1. Draw a bounding box over the empty or inactive slot icon as you would for a normal ability.
 2. In the **Item** field, type `__empty__` (for an unoccupied slot) or `__inactive__` (for a locked/unavailable slot).
@@ -915,12 +958,13 @@ Auto-accept applies:
 
 The checkbox state and threshold value are saved across sessions (per user).
 
-**Two things auto-accept always leaves for you**, however high the confidence:
+**Three things auto-accept always leaves for you**, however high the confidence:
 
 - An **empty or inactive slot** whose name came from a previous confirmation of yours. Accepting those automatically would let one mistake copy itself: the accepted answer becomes an example, the example matches the next empty slot, and so on.
 - A slot the program named after an **item**, when the picture in it looks like an empty or locked slot. This is the same trap the other way round, and it is the more damaging one — it teaches the program that "nothing" *is* that item, and from then on it offers that item for every empty slot it meets. One real item's name had been learned this way from twenty pictures of blank slots before it was found.
+- A name the **slot's list does not hold**. Confidence answers "which picture is this most like"; it says nothing about whether the answer is a name anything else can use. The reference pictures come from the wiki, and the wiki sometimes files one item's artwork under a longer name than the item has — so the program can be entirely right about the picture and still offer a name the item database has never heard of. Left to you, exactly as if you had typed it.
 
-Both show up as red rows waiting for you. If you agree with the name, accept it by hand and it sticks.
+All three show up as rows waiting for you. If you agree with the name, accept it by hand and it sticks.
 
 ### Selecting from the autocomplete dropdown
 
@@ -1216,6 +1260,7 @@ checks for updates **every 15 minutes** (rate-limit cache; uses `requests` with 
 - The icon crop image (small PNG, ~64×64 px) — just the item icon, cropped from your screenshot
 - The item name and slot type you confirmed
 - An anonymous installation ID (random UUID, generated at first launch, stored locally)
+- A list of item names SETS could not take on export, and the slots they were in — names only, no pictures and no build files. Sent at most once a day, and only after an export produced at least one. It exists to count how many separate installations meet the same missing item, which is the argument for getting it added upstream; see [When SETS cannot take an item that was recognised correctly](#when-sets-cannot-take-an-item-that-was-recognised-correctly).
 
 No username, account information, full screenshots, or ship names are ever transmitted.
 
@@ -1320,6 +1365,21 @@ Items shown as "???" have a confidence below the minimum threshold (40%). They w
 3. Type the correct item name in the Item field.
 4. Accept.
 5. Repeat for all ??? items — confirmed crops will be uploaded automatically and help improve future recognition.
+
+### "Invalid item name" when confirming
+
+The name typed into the Item field is not one the list holds for that slot, so
+nothing was saved. Three things cause it, in rough order of how often:
+
+| What happened | What to do |
+|---|---|
+| A typo, or a word missing from a long name | Retype using the dropdown rather than from memory — picking from it always passes |
+| The name is real but belongs to another slot | The box is probably over the wrong thing; check what it covers before renaming |
+| The item is genuinely not in the database | Leave the field blank and confirm — the slot is recorded as unknown, which is honest and still trains position |
+
+The check is deliberate: a confirmed name is used as fact afterwards, so a
+name that exists only in your typing would become bad training data rather
+than a correction. See [Correcting item names](#correcting-item-names).
 
 ### Recognition is slow
 

@@ -141,6 +141,48 @@ surface, no rummaging through staging history.
 
 ---
 
+## 2a. What may be confirmed at all
+
+Everything downstream — the vote, the promotion, the training run — treats a
+confirmed label as ground truth. So the narrowest place to keep a bad name
+out is the moment of confirmation, before anything is uploaded.
+
+`WarpCoreWindow._name_is_acceptable` is that gate. A name must match the
+slot's own candidate list exactly, or be one of the virtual classes; an empty
+name is allowed, because that is how a slot is recorded as Unknown. Ship Type
+and Ship Tier bypass it — they are OCR reads edited through their own combos,
+not names picked from an item list, and their vocabulary is the ship roster
+rather than the item cargo.
+
+It backs three paths, and the third is the one that was missing:
+
+| Path | What confirms | Gated since |
+|---|---|---|
+| `_on_accept` | a name the user typed or picked | 2026-05-18 |
+| `_apply_auto_accept` | a recogniser result above the confidence threshold | 2026-09-04 |
+| `_finish_bbox_drawn` | a recogniser result on a freshly drawn box | 2026-09-04 |
+
+Confidence says "this looks like X". It says nothing about whether X is a
+name the exporter can write or cargo can resolve, so the two auto-confirm
+paths leave an unrecognised name pending for a human instead of writing it.
+That was not hypothetical: `Fire on my Mark (Ground)` and `Liberated Borg
+Kingdom Nanoprobes (space)` reached `data/` this way — wiki *art* names that
+no user typed (see [`ML_PIPELINE.md`](ML_PIPELINE.md), "Reaching items nobody
+has confirmed") — and the second beat the correct cargo name in a merge vote,
+which its `losers` record still shows.
+
+An empty candidate list means cargo could not be consulted, and the gate
+falls open rather than blocking the trainer outright. The virtual classes are
+added unconditionally, so they are excluded from that emptiness test — with
+them included it could never be empty and the fallback would be unreachable.
+
+The backend does not repeat this check: it holds no item vocabulary at all
+(`config/labels.json` carries screen types and slot names, no item names), so
+the gate is the client's and the merge-side vocabulary check in
+`admin_reject_crops` is the review backstop.
+
+---
+
 ## 3. `staging/` vs `data/` — the contract
 
 Every artefact the user can vote on has two homes inside
@@ -161,13 +203,17 @@ is through majority promotion.
 
 ## 4. What a tally decides
 
-`merge_staging.yml` passes `--min 2` to every merger by default. Each
-merger applies the threshold asymmetrically:
-
 Staging means one thing: an entry has arrived from a client, has not been
 tallied, and is not in the models. Tallying settles it either way, so every
 entry is applied and staging empties. The vote count then expresses
 confidence *in* the record rather than gating entry to it.
+
+`merge_staging.yml` still passes `--min 2` to every merger, but only
+`admin_merge` enforces it, and there asymmetrically: a new pHash needs one
+vote, changing an existing one needs the threshold. The crops merger accepts
+every tallied entry and ignores the flag, which its `--min` help text says
+outright — the parameter was removed from its merge function on 2026-09-04
+because a dead knob that looks live is worse than no knob.
 
 | What the tally finds | What happens |
 |---|---|
@@ -204,18 +250,33 @@ them, then the deletions — so an interrupted run leaves duplicates to redo
 and never a reference to something missing (`hf_commit`).
 
 Drain-on-promote alone is not enough to keep staging clean, because it only
-removes what was promoted. Two things could survive it indefinitely, and both
-are now closed:
+removes what was promoted. Anything the tally *refuses to consider* is
+invisible to that drain by construction, so it stays for good. Five such
+classes have been found and closed:
 
 | Residue | Why it could not drain | What happens now |
 |---|---|---|
 | A crop PNG no annotation row refers to | it is only tallyable through its row, so it produced no vote to promote | the crop merge sweeps it, including whole install directories that have no `annotations.jsonl` at all — uploads write PNGs and rows in one commit, so that state means something other than the upload path wrote them |
+| A row whose crop exists nowhere | tallying reads the PNG's bytes; with no PNG in staging and no entry in `data/`, the row can never be promoted | `_surviving_rows` drops it — the mirror of the case above, and the direction that had no sweep |
+| A crop barred by the review ledger | the tally skips rejected shas, so nothing promoted them and nothing drained them; the rejection was re-litigated on every run | `_surviving_rows` drops the row and the sweep drops the PNG |
+| A screen typed outside the whitelist | `democratic_merge_screens` skips a type it cannot merge, so it never promotes | swept by `_sweep_unpromotable`; `UNKNOWN` is the live case, the client's not-yet-classified sentinel |
 | A contribution naming a virtual class | `admin_merge` refuses `__*` unconditionally, so its pHash is never promoted | drained as refused rather than left pending |
 
-Ten orphaned crops were sitting in `staging/migration-sister/`, left by a
-one-off migration, until this was added; the only thing that had ever removed
-that class was `admin_drain_stale_staging.py`, run by hand, last on
-2026-07-17.
+Both crop and screen mergers had the same trap: they return early when there
+are no votes, which is **exactly the state these entries leave staging in**.
+A sweep placed after that point is unreachable in the only situation it
+exists for, so each merger now tests for sweepable residue before deciding
+there is nothing to do.
+
+The counts when this was completed on 2026-09-04: 29 `UNKNOWN` screens, 4
+rows whose crop existed nowhere, 2 crops barred by the ledger. Before that,
+ten orphaned crops had been sitting in `staging/migration-sister/`, left by a
+one-off migration; the only thing that had ever removed any of these was
+`admin_drain_stale_staging.py`, run by hand, last on 2026-07-17.
+
+`_surviving_rows` keeps an ordinary single vote waiting for company. Dropping
+one of those would discard a contribution, which is worse than any residue
+swept here.
 
 `admin_audit_pipeline_movement.py` asserts the result daily: staging holding
 anything no run can settle is a breach, reported with its origin. See §6. The grep target in `merge_staging.yml`

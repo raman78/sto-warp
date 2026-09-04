@@ -42,8 +42,22 @@ Two mechanisms, in this order:
 ```
 
 The rule reads the inner 60% of the cell in HSV and keys on what the game
-actually draws: an empty slot is dark and even; a locked bridge-officer cell
-is dim navy with a faint X; an unlocked one has a bright, detailed picture.
+actually draws. The property it keys on is **how much the cell varies**, not
+how bright or how blue it is, and that is what lets one rule cover markings
+that look nothing alike:
+
+| What the game draws | What the cell is |
+|---|---|
+| nothing — dark and even, or the navy panel showing through | empty |
+| a navy fill with an X across it | inactive |
+| a `LOCK` word, a padlock, or a level requirement on near-black | inactive |
+| a picture | active |
+
+An unpainted cell is flat whatever its colour; every locked marking, X or
+word or padlock, adds variance. So the rule splits twice on brightness
+variance — once inside the blue-saturated navy window, once outside it — and
+the hue and saturation tests only decide which of the two splits applies.
+
 When it says blank, the cell is settled and no matching runs — which is also
 why a screenshot resolves in seconds rather than minutes.
 
@@ -87,6 +101,49 @@ described below were removed and the embedder retrained, the models missed 22
 cells the rule caught, and the two looked complementary rather than one
 strictly better than the other. The rule's numbers did not move, because the
 rule does not learn.
+
+### Telling the two blanks apart
+
+The table above asks one question — was a blank cell called blank — and
+counts `__empty__` and `__inactive__` together. It does not ask whether the
+rule picked the right one of the two, and until 2026-09-04 nobody had
+measured that.
+
+Measured on a different corpus, so the two sets of figures are not directly
+comparable: the 985 confirmed virtual crops in the published community
+dataset, plus a 1200-crop sample of its real icons. Every figure comes from
+running `LayoutDetector._classify_cell` itself, not a copy of it.
+
+| | before | after |
+|---|---|---|
+| blank cells called blank | 96.6% | **98.3%** |
+| real icons called blank | 0.00% | **0.00%** |
+| of the blanks, `__empty__` called empty | 75.8% | **87.1%** |
+| of the blanks, `__inactive__` called inactive | 96.2% | **98.2%** |
+
+The first row is the same question the table above asks, on this corpus. The
+last two are the new one.
+
+Getting the pair wrong is far cheaper than missing a blank altogether — both
+labels stop matching and neither invents an item — which is why the coarse
+figure was the one worth having first. The distinction still matters for
+training: the embedder learns `__empty__` and `__inactive__` as separate
+classes, so a flat navy cell filed under the wrong one teaches it that the
+locked marking is optional.
+
+Two thresholds moved, both chosen from the measured distributions rather than
+tuned to the sample:
+
+- Inside the navy window a flat fill now reads as empty rather than inactive.
+  A locked cell carries the X and varies; an empty seat on the same panel is
+  the background showing through and does not.
+- The cut that separates a locked cell from a real icon was set below the
+  dimmest real icon in the corpus, but not at it — the gap was left wider
+  than the sample strictly requires, so an icon dimmer than any seen so far
+  is still read as an icon.
+
+The damaging direction — a blank cell called active, which then gets given an
+item name — fell by half.
 
 ## The defect this measurement found, and what removing it did
 
@@ -197,9 +254,24 @@ both would have to be measured before removing it:
 Neither is an argument against the models. They are reasons the question is
 about cost and coverage now, not about accuracy.
 
-**The rule's 15 residual misses** are two tight clusters against its
-thresholds: locked cells whose brightness variation runs to 28 against a cut
-at 20, two whose hue sits a point below the navy band, and four empty device
-slots on a bright background. The models catch all fifteen, so nothing is
-lost today; widening the cuts risks dim blue icons and would need its own
-measurement.
+**The residual misses.** The largest cluster described here until 2026-09-04
+was locked cells whose brightness variation ran past the cut that separated
+them from real icons. That cut has since been widened, on the measurement in
+"Telling the two blanks apart" — the concern raised here, that widening
+risks dim blue icons, was the thing measured: on that corpus the gap between
+the most-varying locked cell and the dimmest real icon is real but narrow,
+and the new cut sits inside it with room to spare on the icon side.
+
+What remains is a different shape and is not a threshold problem:
+
+- **Crops that are cut off centre.** A navy cell whose X sits partly outside
+  the frame, or whose frame catches a slice of the bright cell next door,
+  reads as a picture because it contains one. Moving a threshold cannot fix
+  a crop that shows the wrong thing.
+- **Ground truth that is wrong.** Some crops confirmed as `__empty__` carry a
+  clearly drawn X. The percentages above are measured against the labels as
+  they stand, so those count as misses while the rule is right and the label
+  is not.
+
+The models catch what the rule does not, so nothing is lost at recognition
+time either way — the pipeline takes the union.

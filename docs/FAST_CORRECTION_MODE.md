@@ -237,7 +237,7 @@ Two problems existed prior to 1.0.18 around near-overlapping bounding boxes
 
 `_bbox_iou` in `warp/trainer/training_data.py` computes
 Intersection-over-Union for two `(x, y, w, h)` tuples. Step 2 of
-`add_annotation()` (line 329) now:
+`add_annotation()` now:
 
 - Scans all existing annotations for the same image key.
 - Exact bbox match → update in-place immediately (original behaviour).

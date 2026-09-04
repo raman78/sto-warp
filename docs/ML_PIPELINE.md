@@ -292,6 +292,52 @@ hard override. The gallery classes are defensive — they exist so the
 embedding space has somewhere to map empty/inactive crops *instead of*
 mapping them to real abilities.
 
+#### Reaching items nobody has confirmed (wiki-art enrolment)
+
+The gallery ships pre-built from confirmed crops, so an item no contributor
+has ever confirmed has no entry and cannot be matched at all. The wiki PNG
+for that item is already on disk — it is the same icon library the template
+matcher uses — and the embedder is a function, so a usable reference costs
+one forward pass and no training. `SETSIconMatcher._enroll_wiki_art` adds one
+for every item the gallery lacks, marked as art so the rest of the pipeline
+can tell an art reference from a confirmed crop.
+
+The naming problem this creates, and the rule that answers it, matter more
+than the mechanism. The wiki files its art under names that describe the
+*picture*, not the item: `Impulse Engines (23c)` for the 23rd-century
+artwork, `Adaptive Defense (ground)` and `Adaptive Defense (space)` for two
+traits cargo stores as separate rows under one `name`, and further
+qualifiers for colour, faction and reputation. Cargo carries none of those
+distinctions in the item name, so art enrolled under the filename verbatim
+enters the gallery under a label nothing downstream can resolve.
+
+`_base_item_name` folds them, driven by the item names cargo currently
+carries rather than by the spelling of the tag — because the tag is not
+reliably a variant marker. `Modified Phaser Pistol (23c.)` is a real item
+name, parenthesis and all. The order of the checks is what keeps both
+readings working:
+
+| Case | Result |
+|---|---|
+| the name is already an item cargo carries | leave it — a tagged item name |
+| else the base name is an item | fold onto the base |
+| neither | leave it — nothing to fold onto |
+
+Folding a space and a ground variant onto one name is correct rather than
+lossy. Cargo stores them as two rows under a single `name`, so one name is
+all this program can emit for either, and the gallery holds many vectors per
+class by design. The pair becomes two references for one label, and whichever
+wins the k-NN returns the same, correct name.
+
+Measured 2026-09-04 over the 4406-icon library: 155 icons carry a
+parenthesised tag, 109 are cargo names outright, 46 fold onto a base, and
+none falls outside those two cases — which is what makes the rule safe to
+apply to any tag rather than to an enumerated list. The rule previously knew
+only the era tag, so 12 icons entered the gallery unresolvable; two of them
+reached confirmed training data, and one beat the correct cargo name in a
+merge vote. See [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md) for the gate that
+now stops a name like that being confirmed.
+
 ### Ship type / tier OCR correction map
 
 File: `sets-warp-backend/admin_train.py` — `collect_text_corrections()`

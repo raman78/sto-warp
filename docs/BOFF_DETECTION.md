@@ -444,7 +444,7 @@ Fix (`WarpImporter._process_image` in `warp/warp_importer.py`): each cell is pas
 `WarpCoreWindow._show_review_context_menu()`
 (`WarpCoreWindow._slot_ordinal` in `warp/trainer/trainer_window.py`) adds a right-click context menu
 on BOFF group headers in the review tree. When the user picks a new type,
-`_change_boff_group_type()` (line 2341) runs:
+`_change_boff_group_type()` runs:
 
 ```
 right-click "Boff Science #2"
@@ -462,7 +462,7 @@ right-click "Boff Science #2"
      against the combined candidate set (threshold ≥ 0.40)
   3. Update ri['slot'], ri['name'], ri['conf'], ri['_group_label']
   4. Reparent: if target group already exists in _slot_parents,
-     assign "#N" suffix to keep seats separate (line 2422).
+     assign "#N" suffix to keep seats separate.
      reparent_item(item, reparent_key, reparent_key)
       │
       ▼
