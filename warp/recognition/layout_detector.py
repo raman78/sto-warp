@@ -2180,15 +2180,32 @@ class LayoutDetector:
         mean_s = hsv[:, 1].mean()
         mean_h = hsv[:, 0].mean()
 
-        # BOFF inactive: navy-blue X pattern — strongly blue-saturated with
-        # uniform brightness (std_v < 15). Must be checked BEFORE the
-        # brightness gate: at typical screenshot resolutions these cells
-        # have mean_v ~70, well above the 45 threshold for generic active.
-        # Real icons have rich visual detail → std_v >> 25; the uniform
-        # navy fill sits at std_v ~6. mean_s > 100 separates the saturated
-        # navy from dim-but-desaturated icons (e.g. Hold Together).
-        if mean_s > 100 and 95 < mean_h < 130 and std_v < 20:
-            return 'inactive'
+        # Blue-saturated navy window. Must be checked BEFORE the brightness
+        # gate: at typical screenshot resolutions these cells have mean_v ~70,
+        # well above the 45 threshold for generic active. `mean_s > 100`
+        # separates the saturated navy from dim-but-desaturated icons (e.g.
+        # Hold Together).
+        #
+        # Inside it, brightness variance tells the three apart, because what
+        # varies is how much pattern the cell carries. Measured 2026-09-04
+        # against 985 confirmed virtual crops and a 1200-crop sample of real
+        # icons, all classified by this function:
+        #
+        #   flat navy fill  std_v < 5    the panel showing through an EMPTY
+        #                                slot — no X drawn on it at all
+        #   navy + X        std_v 5-33   INACTIVE; the X is the variance
+        #   real icon       std_v > 33   ACTIVE (minimum seen: 33.4)
+        #
+        # The upper gate was 20, which left 28 inactive cells reading as
+        # active — the damaging direction, since a locked cell then gets an
+        # item name. Raising it to 30 catches 662 of 663 and still clears the
+        # dimmest real icon by 3.4, so it is a widened margin, not a tighter
+        # squeeze between the classes.
+        if mean_s > 100 and 95 < mean_h < 130:
+            if std_v < 5:
+                return 'empty'
+            if std_v < 30:
+                return 'inactive'
         if mean_v > 45:
             return 'active'
         # Darker BOFF inactive (lower-res screenshots / dimmer monitors)
