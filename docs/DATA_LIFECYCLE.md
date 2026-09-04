@@ -165,11 +165,17 @@ It backs three paths, and the third is the one that was missing:
 Confidence says "this looks like X". It says nothing about whether X is a
 name the exporter can write or cargo can resolve, so the two auto-confirm
 paths leave an unrecognised name pending for a human instead of writing it.
-That was not hypothetical: `Fire on my Mark (Ground)` and `Liberated Borg
-Kingdom Nanoprobes (space)` reached `data/` this way — wiki *art* names that
-no user typed (see [`ML_PIPELINE.md`](ML_PIPELINE.md), "Reaching items nobody
-has confirmed") — and the second beat the correct cargo name in a merge vote,
-which its `losers` record still shows.
+
+The recogniser really does produce such names. One of the two `Liberated Borg
+Kingdom Nanoprobes (space)` annotations records `ml_name` as exactly that, at
+0.89 — the suffixed form is a wiki *art* name (see
+[`ML_PIPELINE.md`](ML_PIPELINE.md), "Reaching items nobody has confirmed"),
+and the model offered it unprompted. It went on to beat the correct cargo
+name in a merge vote, which its `losers` record still shows.
+
+What that pair does *not* show is auto-accept writing it unattended: both
+were confirmed with a human present. The gate closes the path that would not
+have asked, above a threshold the recogniser was already clearing.
 
 An empty candidate list means cargo could not be consulted, and the gate
 falls open rather than blocking the trainer outright. The virtual classes are
