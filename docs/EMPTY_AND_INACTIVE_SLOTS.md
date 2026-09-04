@@ -114,15 +114,21 @@ comparable: the 985 confirmed virtual crops in the published community
 dataset, plus a 1200-crop sample of its real icons. Every figure comes from
 running `LayoutDetector._classify_cell` itself, not a copy of it.
 
-| | before | after |
-|---|---|---|
-| blank cells called blank | 96.6% | **98.3%** |
-| real icons called blank | 0.00% | **0.00%** |
-| of the blanks, `__empty__` called empty | 75.8% | **87.1%** |
-| of the blanks, `__inactive__` called inactive | 96.2% | **98.2%** |
+| | before | after | labels corrected |
+|---|---|---|---|
+| blank cells called blank | 96.6% | 98.3% | **98.4%** |
+| real icons called blank | 0.00% | 0.00% | **0.00%** |
+| of the blanks, `__empty__` called empty | 75.8% | 87.1% | **89.5%** |
+| of the blanks, `__inactive__` called inactive | 96.2% | 98.2% | **98.4%** |
 
 The first row is the same question the table above asks, on this corpus. The
 last two are the new one.
+
+The third column is the same code against the labels as they stand after the
+review described under "The residual misses" — six crops were wrong, not the
+rule. It is listed separately rather than merged into the second, because
+moving a threshold and correcting a label are different acts and only the
+first is a change to the program.
 
 Getting the pair wrong is far cheaper than missing a blank altogether — both
 labels stop matching and neither invents an item — which is why the coarse
@@ -262,16 +268,34 @@ risks dim blue icons, was the thing measured: on that corpus the gap between
 the most-varying locked cell and the dimmest real icon is real but narrow,
 and the new cut sits inside it with room to spare on the icon side.
 
-What remains is a different shape and is not a threshold problem:
+What remains is a different shape and is not a threshold problem. Every
+disagreement between the rule and a stored label was reviewed by eye on
+2026-09-04; these are the three kinds found:
+
+- **An empty slot wearing the game's NEW banner.** A device slot the player
+  has not filled still gets the yellow `NEW` tag drawn across its top third.
+  The rule samples the inner 60% of the cell, which trims 20% from each edge
+  — not enough to clear a banner that deep, so the strip that survives is
+  bright, patterned and yellow, and the cell reads as occupied. The label is
+  right and so is the picture; the rule simply cannot see past the banner.
+  Four such crops, all in `Devices`.
+
+  Sampling the lower 60% instead would clear it, since the banner is always
+  at the top. That change touches every cell the program classifies, so it
+  needs its own measurement over the whole corpus rather than a fix made in
+  passing.
 
 - **Crops that are cut off centre.** A navy cell whose X sits partly outside
   the frame, or whose frame catches a slice of the bright cell next door,
   reads as a picture because it contains one. Moving a threshold cannot fix
   a crop that shows the wrong thing.
-- **Ground truth that is wrong.** Some crops confirmed as `__empty__` carry a
-  clearly drawn X. The percentages above are measured against the labels as
-  they stand, so those count as misses while the rule is right and the label
-  is not.
+
+- **Ground truth that was wrong.** Three crops confirmed as `__empty__`
+  carried an unmistakable navy square with a diagonal X, and one `__empty__`
+  had four votes behind it — the wrong convention repeated by four separate
+  installs rather than slipped in once. Three further crops were not slot
+  cells at all. All six were corrected or rejected on 2026-09-04, so the
+  figures above already reflect the labels as fixed.
 
 The models catch what the rule does not, so nothing is lost at recognition
 time either way — the pipeline takes the union.
