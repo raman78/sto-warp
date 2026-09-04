@@ -187,11 +187,14 @@ every trait-bearing build type:
 
 Implementation:
 
-- `warp/recognition/layout_detector.py:286-300` — TRAITS Strategy 0
-- `warp/recognition/layout_detector.py:323-380` — MIXED `_merge_traits` closure
-- `warp/warp_importer.py:839-851` — `_needs_matcher` includes
-  `SPACE_TRAITS` / `GROUND_TRAITS` so `icon_matcher` and `app_cache`
-  reach `LayoutDetector.detect()`
+- `LayoutDetector.detect` (`layout_detector.py`), the `TRAITS` /
+  `SPACE_TRAITS` / `GROUND_TRAITS` branch opening
+  `# Strategy 0: structure-driven trait grid detector with ML probe.`
+- `_merge_traits`, the closure inside the same `LayoutDetector.detect`, which
+  every MIXED equipment chain returns through
+- `_needs_matcher` in `WarpImporter._process_image` (`warp_importer.py`)
+  includes `SPACE_TRAITS` / `GROUND_TRAITS`, so `icon_matcher` and
+  `app_cache` reach `LayoutDetector.detect`
 
 ## Independence rule (CRITICAL)
 

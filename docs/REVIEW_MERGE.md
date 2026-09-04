@@ -20,10 +20,9 @@ confirmation afterwards is in [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md).
 Auto-Detect ──► RecognitionWorker ──► items
                                         │
    _recognition_items (visible rows) ──►│  pass 1: _merge_recognition
-                    (preserve_existing) │  trainer_window.py:1663
+                    (preserve_existing) │
                                         ▼
                                      merged ──► pass 2: _populate_review_panel
-                                                trainer_window.py:1833
    annotations.json (confirmed) ───────────────► _recognition_items
 ```
 
