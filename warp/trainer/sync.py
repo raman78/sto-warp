@@ -183,6 +183,7 @@ class SyncWorker(QThread):
                 self._upload()
                 self._upload_screen_types()
                 self._upload_anchors_grid()
+                self._report_upload_backlog()
             if self._mode in ("download", "both"):
                 self._download()
             self.finished.emit(True)
@@ -613,6 +614,69 @@ class SyncWorker(QThread):
 
     # ---------------------------------------------------------------- screen types
 
+    # ── Self-diagnosis ────────────────────────────────────────────────────
+
+    def _diagnose_upload_backlog(self) -> dict[str, int]:
+        """Compare what this install has confirmed against what it has sent.
+
+        Every upload fault found so far has been silent in the same way: the
+        client believed it had sent something it had not, and nothing ever
+        asked whether the two agreed. A count of confirmed-but-unsent is the
+        one number that would have shown it, so it is computed after every
+        upload pass and logged when it is not zero.
+
+        It answers "does my machine still hold work the community dataset has
+        not got", which is a question the client can settle alone — no network
+        call, no listing, just the local store against the local cache. What
+        it deliberately does *not* claim is that everything counted as sent
+        actually arrived; only the maintainer's own reconciliation against the
+        published dataset can say that.
+
+        Returns `{channel: pending}`, empty when everything is accounted for.
+        """
+        out: dict[str, int] = {}
+        try:
+            root = self._mgr._dir / 'screen_types'
+            if root.is_dir():
+                cache = self._load_screen_type_cache(
+                    self._mgr._dir / '.sync_uploaded_screen_hashes.json')
+                pending = 0
+                for type_dir in root.iterdir():
+                    if not type_dir.is_dir() or type_dir.name == 'UNKNOWN':
+                        continue
+                    for png in type_dir.glob('*.png'):
+                        try:
+                            sha = self._file_sha256(png)
+                        except Exception:
+                            continue
+                        if self._screen_needs_upload(sha, type_dir.name, cache):
+                            pending += 1
+                if pending:
+                    out['screen_types'] = pending
+        except Exception as e:
+            _slog.debug(f'HF Sync: screen backlog check skipped ({e})')
+        return out
+
+    def _report_upload_backlog(self) -> None:
+        """Say plainly what has not reached the community dataset.
+
+        Logged at WARN, because a backlog that does not shrink between syncs
+        is a fault rather than a queue — the label or the size is being
+        refused every time, and the only alternative to saying so is the
+        silence this was written to end.
+        """
+        backlog = self._diagnose_upload_backlog()
+        if not backlog:
+            _slog.debug('HF Sync: nothing pending — local store and uploads agree')
+            return
+        detail = ', '.join(f'{n} {ch}' for ch, n in sorted(backlog.items()))
+        _slog.warning(
+            f'HF Sync: {detail} confirmed here but not yet accepted by the '
+            f'community dataset. This is normal right after confirming and '
+            f'should fall to zero within a sync or two; if it does not, the '
+            f'uploads are being refused and the detection log carries the '
+            f'reason.')
+
     def _upload_screen_types(self):
         """Upload confirmed screen type screenshots via backend."""
         screen_types_dir = self._mgr._dir / 'screen_types'
@@ -626,15 +690,16 @@ class SyncWorker(QThread):
         staging_dir = f"{STAGING_ROOT}/{install_id}/screen_types"
 
         screen_cache_file = self._mgr._dir / '.sync_uploaded_screen_hashes.json'
-        existing = self._load_screen_hashes_cache(screen_cache_file)
+        existing = self._load_screen_type_cache(screen_cache_file)
         if existing:
             _slog.info(f'HF Sync: {len(existing)} screen type screenshots in local cache (skipping HF listing)')
         else:
-            existing = self._fetch_staging_screen_hashes(staging_dir)
+            existing = self._fetch_staging_screen_types(staging_dir)
             _slog.info(f'HF Sync: bootstrapped {len(existing)} screen hashes from HF listing')
 
         total_sent = 0
         oversized  = 0
+        refused    = 0
         for type_dir in sorted(type_dirs):
             stype = type_dir.name
             # 'UNKNOWN' is the not-yet-classified sentinel, not a label — the
@@ -650,7 +715,7 @@ class SyncWorker(QThread):
             shas:     list[str]  = []
             for png in sorted(type_dir.glob('*.png')):
                 sha = self._file_sha256(png)
-                if sha in existing:
+                if not self._screen_needs_upload(sha, stype, existing):
                     continue
                 try:
                     b64 = base64.b64encode(png.read_bytes()).decode('ascii')
@@ -666,7 +731,7 @@ class SyncWorker(QThread):
                     # re-read the multi-MB file nor re-warn every sync tick. A
                     # re-captured / smaller screenshot hashes differently and
                     # will be retried.
-                    existing.add(sha)
+                    existing[sha] = stype
                     oversized += 1
                     continue
                 payloads.append({'png_b64': b64})
@@ -710,33 +775,103 @@ class SyncWorker(QThread):
                 except Exception as e:
                     _slog.warning(f'HF Sync: screen-types backend POST failed: {e}')
                     break
-                total_sent += int(resp.get('accepted', 0))
-                existing.update(sub_shas)
+                accepted = int(resp.get('accepted', 0))
+                rejected = int(resp.get('rejected', 0)) or (len(sub_shas) - accepted)
+                total_sent += accepted
 
-        if not total_sent and not oversized:
+                if rejected > 0:
+                    # The backend answers with counts, not with which items it
+                    # took, so "remember only the accepted ones" cannot be done
+                    # exactly. Remember none of the batch instead: re-sending an
+                    # accepted screenshot overwrites the same path and costs a
+                    # request, while forgetting a rejected one loses it for
+                    # good — the cache is never revisited.
+                    #
+                    # This is how 10 DISCARD screenshots vanished. They were
+                    # refused at the door while that type was outside the
+                    # whitelist, the whole batch was marked as sent, and no
+                    # later sync ever looked at them again.
+                    refused += rejected
+                    _slog.warning(
+                        f'HF Sync: backend refused {rejected} of {len(sub_shas)} '
+                        f'{stype} screenshot(s) — not marking the batch as sent, '
+                        f'so the next sync retries it. Reasons: '
+                        f'{resp.get("rejected_reasons") or resp.get("reasons") or "not given"}')
+                    continue
+
+                for _sha in sub_shas:
+                    existing[_sha] = stype
+
+        if not total_sent and not oversized and not refused:
             _slog.debug('HF Sync: no new screen type screenshots to upload')
             return
 
         # Persist the cache when we either sent something or permanently
         # skipped an oversized file (so the skip sticks across restarts).
+        # Written as {sha: type}: `sorted(existing)` on a dict would have
+        # silently written the keys alone and thrown the types away.
         try:
-            screen_cache_file.write_text(json.dumps(sorted(existing)))
+            screen_cache_file.write_text(
+                json.dumps(existing, indent=0, sort_keys=True))
         except Exception:
             pass
         if total_sent:
             _slog.info(f'HF Sync: uploaded {total_sent} screen type screenshot(s)')
         if oversized:
             _slog.info(f'HF Sync: skipped {oversized} oversized screen screenshot(s)')
+        if refused:
+            # Loud, and on its own line: a refusal means the community dataset
+            # does not have something this install confirmed, which no other
+            # message would reveal.
+            _slog.warning(
+                f'HF Sync: {refused} screen screenshot(s) were refused by the '
+                f'backend and remain unpublished — they will be retried on the '
+                f'next sync. If the count does not fall, the label or the size '
+                f'is being rejected every time and needs looking at.')
 
     @staticmethod
-    def _load_screen_hashes_cache(cache_file: Path) -> set[str]:
-        try:
-            return set(json.loads(cache_file.read_text()))
-        except Exception:
-            return set()
+    def _load_screen_type_cache(cache_file: Path) -> dict[str, str]:
+        """`{sha: screen_type}` for screenshots already uploaded.
 
-    def _fetch_staging_screen_hashes(self, staging_screen_dir: str) -> set[str]:
-        """Anonymous listing of already-uploaded screen-type crops."""
+        Was a bare set of shas, which is why a re-typed screenshot never went
+        up again: the file does not change when its type does, so the sha
+        matched and the loop skipped it. Recording the type alongside is what
+        lets `_screen_needs_upload` see the difference.
+
+        A legacy list is migrated to `{sha: ''}` — the empty type differs from
+        any real one, so every screenshot in it is re-sent once, which is
+        exactly the backlog of corrections that never left.
+        """
+        try:
+            raw = json.loads(cache_file.read_text())
+        except Exception:
+            return {}
+        if isinstance(raw, dict):
+            return {str(k): str(v) for k, v in raw.items()}
+        if isinstance(raw, list):
+            return {str(sha): '' for sha in raw}
+        return {}
+
+    @staticmethod
+    def _screen_needs_upload(sha: str, stype: str, cache: dict[str, str]) -> bool:
+        """Whether this screenshot has to go up, under this type.
+
+        Split out of the upload loop so the decision can be tested without a
+        network: it is a pure function of what is on disk and what the cache
+        remembers. The crop path has had the equivalent check since it was
+        written; this one did not, and a correction made in WARP CORE could
+        not reach the backend at all.
+        """
+        if sha not in cache:
+            return True
+        return cache[sha] != stype
+
+    def _fetch_staging_screen_types(self, staging_screen_dir: str) -> dict[str, str]:
+        """Anonymous listing of already-uploaded screenshots, with their type.
+
+        The staging path is `.../screen_types/<TYPE>/<sha>.png`, so the type
+        is already there and only needed reading.
+        """
         try:
             from huggingface_hub import HfApi
             # token=False: anonymous read by design (see REMOTE_SYNC_AUDIT.md).
@@ -745,12 +880,12 @@ class SyncWorker(QThread):
                 repo_type=HF_REPO_TYPE,
             )
             return {
-                Path(f).stem
+                Path(f).stem: Path(f).parent.name
                 for f in files
                 if f.startswith(staging_screen_dir) and f.endswith('.png')
             }
         except Exception:
-            return set()
+            return {}
 
     # ---------------------------------------------------------------- download
 
