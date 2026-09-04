@@ -1,4 +1,4 @@
-"""Era-variant icon art is folded onto the item it depicts.
+"""Qualified icon art is folded onto the item it depicts.
 
 STO draws some gear differently in 23rd-century content, and the wiki files
 that second picture under its own name — `Impulse Engines (23c)` beside
@@ -9,6 +9,12 @@ name no cargo row carries and every candidate filter downstream drops it.
 The tag is not a reliable variant marker on its own: `Modified Phaser Pistol
 (23c.)` is a real item name. Cargo decides, which is also what makes the rule
 survive the wiki gaining or renaming 23c items later.
+
+The era tag was only the first of these. The wiki also qualifies art by
+environment, colour, faction and reputation, and cargo carries none of those
+in the item name — measured 2026-09-04 over the 4406-icon library, 12 such
+files entered the gallery under a label cargo has never heard of, two of them
+reaching confirmed training data. Same rule, wider tag.
 """
 from __future__ import annotations
 
@@ -90,3 +96,63 @@ def test_an_unrelated_parenthesis_is_not_a_tag():
 
 def test_a_bare_tag_with_no_item_in_front_is_left_alone():
     assert _base_item_name('(23c)', CARGO) == '(23c)'
+
+
+# ── Qualifiers other than the era tag ─────────────────────────────────
+#
+# Measured on the real library (2026-09-04): of 155 icons carrying a
+# parenthesised tag, 109 are cargo names outright and 46 fold onto a base.
+# None falls outside those two cases, which is what makes the wider rule safe.
+
+ENV_CARGO = {
+    'Adaptive Defense',
+    'Fire on my Mark',
+    'Liberated Borg Kingdom Nanoprobes',
+    'Sniper',
+}
+
+
+def test_an_environment_qualifier_folds_onto_the_base():
+    """Cargo stores the space and ground traits as two rows under one `name`,
+    so one name is all this program can emit for either."""
+    assert _base_item_name('Adaptive Defense (ground)', ENV_CARGO) == 'Adaptive Defense'
+    assert _base_item_name('Adaptive Defense (space)', ENV_CARGO) == 'Adaptive Defense'
+
+
+def test_the_qualifier_is_matched_whatever_its_case():
+    """The library spells it both ways — `(ground)` and `(Ground)`."""
+    assert _base_item_name('Fire on my Mark (Ground)', ENV_CARGO) == 'Fire on my Mark'
+
+
+def test_a_reputation_qualifier_folds():
+    assert (_base_item_name('Slippery Target (Lukari Reputation)',
+                            {'Slippery Target'}) == 'Slippery Target')
+
+
+def test_a_starship_qualifier_folds():
+    assert _base_item_name('Sniper (starship)', ENV_CARGO) == 'Sniper'
+
+
+def test_a_colour_qualifier_folds():
+    assert _base_item_name('Some Kit (Red)', {'Some Kit'}) == 'Some Kit'
+
+
+def test_a_qualified_name_cargo_carries_is_still_left_alone():
+    """The widening must not start folding names whose parenthesis is part of
+    the item — 109 of the library's 155 tagged icons are in this state."""
+    cargo = {'Modified Phaser Pistol (23c.)', 'Modified Phaser Pistol'}
+
+    assert (_base_item_name('Modified Phaser Pistol (23c.)', cargo)
+            == 'Modified Phaser Pistol (23c.)')
+
+
+def test_a_qualifier_whose_base_is_unknown_is_left_alone():
+    """Widening the tag must not widen what counts as a fold target."""
+    assert (_base_item_name('Unheard Of (space)', ENV_CARGO)
+            == 'Unheard Of (space)')
+
+
+def test_only_a_trailing_qualifier_counts():
+    """A parenthesis mid-name is not a tag."""
+    assert (_base_item_name('Console (Mk XII) Booster', ENV_CARGO)
+            == 'Console (Mk XII) Booster')

@@ -147,11 +147,26 @@ HF_RETRY_HOURS      = 24
 # article renders both pictures side by side. Our icon index is keyed by
 # filename, so a variant would otherwise enter it under a name no cargo
 # row carries and be dropped by every candidate filter downstream.
-_ERA_VARIANT_RE = re.compile(r'^(?P<base>.+?) \(23c\.?\)$')
+# Any parenthesised qualifier at the end of an icon filename, not just the
+# era tag it started as. The wiki qualifies art by era (`(23c)`), by
+# environment (`(ground)` / `(space)`), by colour, by faction and by
+# reputation; cargo carries none of those distinctions in the item name, so
+# every one of them is art for the base item as far as this program can name
+# it. Restricting the rule to `(23c)` let the other 12 enter the gallery under
+# a label cargo has never heard of — measured 2026-09-04 over the 4406-icon
+# library, and two of them reached confirmed training data, one of them
+# beating the correct cargo name in a merge vote.
+#
+# Widening is safe because of the check order in `_base_item_name`, not in
+# spite of it: a name cargo already carries is returned untouched, which
+# protects the 109 icons whose parenthesis is part of the real item name
+# (`Modified Phaser Pistol (23c.)`, `Stasis Beam (23c.)`). Measured over the
+# same library, no icon falls outside those two cases.
+_VARIANT_TAG_RE = re.compile(r'^(?P<base>.+?) \([^()]+\)$')
 
 
 def _base_item_name(icon_name: str, known_names: set[str]) -> str:
-    """Map era-variant icon art onto the item it depicts.
+    """Map qualified icon art onto the item it depicts.
 
     Driven by the item names cargo currently carries rather than by the
     spelling of the tag, because the tag is not reliably a variant marker:
@@ -165,12 +180,19 @@ def _base_item_name(icon_name: str, known_names: set[str]) -> str:
       `Matter Anti-Matter Warp Core (23c)` is in this state today, and
       starts folding by itself if that item ever gains a cargo row)
 
+    Folding a space and a ground variant onto one name is correct rather than
+    lossy: cargo stores them as two rows under a single `name`, distinguished
+    only by environment, so one name is all this program can ever emit for
+    either. The gallery holds many vectors per class by design, so the pair
+    becomes two references for one label — whichever wins the k-NN returns
+    the same, correct name.
+
     With no cargo available `known_names` is empty and nothing is folded,
     which is exactly the behaviour that predates this function.
     """
     if not known_names or icon_name in known_names:
         return icon_name
-    m = _ERA_VARIANT_RE.match(icon_name)
+    m = _VARIANT_TAG_RE.match(icon_name)
     if m and m.group('base') in known_names:
         return m.group('base')
     return icon_name

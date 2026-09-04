@@ -3628,6 +3628,15 @@ class WarpCoreWindow(QMainWindow):
                 _cross_check = not WarpImporter(sets_app=self._sets)._item_valid_for_slot(name, slot)
         except: pass
 
+        # Same gate as `_apply_auto_accept`: the program may not confirm a name
+        # the slot's candidate list does not carry. The row still appears, as
+        # pending, so the recogniser's guess is visible and correctable.
+        if _auto and not self._name_is_acceptable(slot, name):
+            log.info(f'AW.bbox: auto-confirm withheld slot={slot!r} '
+                     f'name={name!r} conf={conf:.2f} — not in the candidate '
+                     f'list for this slot')
+            _auto = False
+
         _state = 'confirmed' if _auto else 'pending'
         # _auto means "program decided based on conf threshold" → yellow (auto-confirmed),
         # to be distinguished from green user-confirmed in the canvas.
@@ -4367,6 +4376,19 @@ class WarpCoreWindow(QMainWindow):
             # conf is the self-poisoning vector — a real virtual gets
             # written, becomes a session example, and self-matches forever.
             # User must confirm virtuals manually.
+            # A name the slot's own candidate list does not carry cannot be
+            # written as ground truth, however confident the recogniser is.
+            # Confidence says "this looks like X"; it says nothing about
+            # whether X is a thing the exporter can write or the wiki can
+            # resolve. Left to a human, who can pick the real name or leave
+            # the slot unknown.
+            if not self._name_is_acceptable(slot, name):
+                _sl.info(
+                    f"auto-accept: SKIP unknown name slot={slot!r} "
+                    f"name={name!r} conf={conf:.2f} — not in the candidate "
+                    f"list for this slot, so it needs a human"
+                )
+                continue
             if name in VIRTUAL_ITEM_NAMES and ri.get('src') == 'session':
                 _sl.info(
                     f"auto-accept: SKIP poison vector slot={slot!r} "
@@ -4474,16 +4496,14 @@ class WarpCoreWindow(QMainWindow):
         # against the slot's candidate list (or empty = Unknown). NON_ICON_SLOTS
         # have their own widgets/use cases (Ship Name = free text, Ship Type/Tier
         # via combos) so they bypass.
-        if slot not in NON_ICON_SLOTS and name:
-            allowed = set(self._build_search_candidates(slot)) | set(VIRTUAL_ITEM_NAMES)
-            if name not in allowed:
-                from PySide6.QtWidgets import QMessageBox
-                QMessageBox.warning(self, 'Invalid item name',
-                    f'{name!r} is not in the allowed list for slot {slot!r}.\n'
-                    f'Pick from the dropdown or type an exact match.')
-                self._name_edit.setFocus()
-                self._name_edit.selectAll()
-                return
+        if not self._name_is_acceptable(slot, name):
+            from PySide6.QtWidgets import QMessageBox
+            QMessageBox.warning(self, 'Invalid item name',
+                f'{name!r} is not in the allowed list for slot {slot!r}.\n'
+                f'Pick from the dropdown or type an exact match.')
+            self._name_edit.setFocus()
+            self._name_edit.selectAll()
+            return
         row = self._review_list.currentRow()
         if 0 <= row < len(self._recognition_items):
             ri = self._recognition_items[row]
@@ -4770,6 +4790,35 @@ class WarpCoreWindow(QMainWindow):
         if not votes:
             return None
         return max(votes.items(), key=lambda kv: kv[1])[0]
+
+    def _name_is_acceptable(self, slot: str, name: str) -> bool:
+        """Whether `name` may be written as a confirmed label for `slot`.
+
+        Exact match against the slot's own candidate list, or a virtual class.
+        An empty name is allowed — that is how a slot is recorded as Unknown.
+
+        Applied to every path that writes a confirmation, not only to typing.
+        Typing has been checked since 2026-05-18; auto-accept was not, and
+        that is the gap the data shows. `Fire on my Mark (Ground)` and
+        `Liberated Borg Kingdom Nanoprobes (space)` are names the wiki gives
+        its *art*, which reached the gallery through art enrolment, came back
+        out of the recogniser, and were auto-confirmed without anyone typing
+        them. One of them then beat the correct cargo name in a merge vote.
+
+        `NON_ICON_SLOTS` still bypass: Ship Type and Ship Tier are OCR reads
+        edited through their own combos, not names picked from an item list.
+        """
+        if slot in NON_ICON_SLOTS or not name:
+            return True
+        candidates = set(self._build_search_candidates(slot))
+        # An empty candidate list means cargo could not be consulted — the
+        # virtual classes are added unconditionally, so they must not be part
+        # of this test or it could never be empty. Refusing everything during
+        # a cargo outage would block the trainer outright, so fall open, the
+        # same choice the backend's whitelist gates make.
+        if not candidates:
+            return True
+        return name in candidates or name in VIRTUAL_ITEM_NAMES
 
     def _build_search_candidates(self, slot: str = '') -> list[str]:
         candidates: list[str] = []
