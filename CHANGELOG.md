@@ -8,6 +8,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.35] — 2026-09-04
+
+### Fixed
+- **Recognition of inactive slots is more accurate.** Slots marked with a
+  lock symbol or a level requirement, rather than the blue cross, are now
+  recognised as inactive, and an empty bridge officer seat is no longer
+  mistaken for a locked one.
+- **Auto-accept no longer confirms a name the slot's list does not hold.**
+  High confidence means the picture was matched, not that the answer is a
+  name anything else can use. Such a result is left in the review list
+  instead of being recorded as fact — previously it could be confirmed
+  automatically, uploaded, and outvote the correct name.
+
+### Changed
+- **The notice about items SETS cannot import says what is actually true.**
+  It reported them as missing from the item tables, which is wrong for
+  items the tables do carry and the SETS importer simply passes over. It
+  now states that recognition was correct and the exported file is
+  correct, without implying a fault on either side.
+
+### Added
+- **Items SETS drops on import are counted.** Names only — no screenshots
+  and no build files — sent at most once a day and only after an export
+  produced at least one, so the count is collected across installations
+  rather than sitting on one machine.
+
 ## [1.0.34] — 2026-09-03
 
 ### Fixed
