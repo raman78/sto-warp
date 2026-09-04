@@ -129,7 +129,7 @@ returns a list of `Violation(path, rule, expected, got, severity)`.
 | `field_type`, `node_type` | captain fields and skill nodes have the right primitive types | wrong widget state on load |
 | `faction` | `captain.faction` is one SETS knows | `faction_combo_callback` indexes `SPECIES[faction]` outright (`src/buildmanager.py`) — an unknown name raises while the build loads |
 | `species` | `captain.species` is offered by that faction, and a faction is set at all | the species dropdown is filled from the faction and `load_build` sets it with `setCurrentText`; a species the list does not hold is ignored in silence |
-| `alien_trait_slot` | an eleventh personal trait requires `captain.species == 'Alien'` | `load_build` hides `traits[10]` for every other species (`src/buildmanager.py:245-247`) — the trait stays in the file and disappears from the UI |
+| `alien_trait_slot` | an eleventh personal trait requires `captain.species == 'Alien'` | `load_build`'s `species != 'Alien'` guard hides both `space.traits[10]` and `ground.traits[10]` (`src/buildmanager.py`) — the trait stays in the file and disappears from the UI |
 
 Cargo rules run only when a `cache` (`warp.data.cargo.cache_view`) is
 passed; the structural and value rules work without one.
