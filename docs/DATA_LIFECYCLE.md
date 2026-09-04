@@ -353,6 +353,21 @@ counts, not identities, so the client cannot cache "only the accepted ones"
 exactly. A batch holding a refusal is therefore cached not at all — re-sending
 an accepted item costs a request, forgetting a refused one loses it for good.
 
+**A correction is recognised as something new to send.** The client's upload
+cache records the label each item was last sent under, not merely that it was
+sent, and `SyncWorker._screen_needs_upload` compares both. Re-typing a
+screenshot in WARP CORE does not change the file, so a check on the hash alone
+matches and skips it — the correction then never leaves the machine.
+
+That was the state until 2026-09-05 for screen types, and never for crops,
+which have compared the label since they were written. Measured against the
+published dataset before the fix: 26 of 27 screenshots typed `SPACE_BOFFS`
+locally were published as `BOFFS`, the label they carried the first time, and
+all six `GROUND_TRAITS` as `GROUND_MIXED`. A cache written in the older
+format, which held no label, migrates to an empty one so every entry in it is
+re-sent once — that backlog of undelivered corrections is the point of the
+migration rather than a side effect.
+
 ## 5c. Telling a lost upload from a lost vote
 
 Two failures look identical from outside and are opposite in meaning: a

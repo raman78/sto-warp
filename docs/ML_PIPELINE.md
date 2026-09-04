@@ -165,10 +165,26 @@ Its only purpose is democratic voting (1 install = 1 vote per crop hash).
 
 ### Deduplication
 
-Each crop is identified by `sha256(crop_bytes)`. If a crop with that hash
-already exists in staging for this install_id, it is not uploaded again.
-This means the same icon appearing in multiple screenshots is uploaded exactly
-once per install.
+Each crop is identified by `sha256(crop_bytes)`, truncated to 32 hex chars —
+the same key the dataset is stored under, so anything comparing the two must
+truncate as well. The same icon appearing in several screenshots is therefore
+uploaded once per install.
+
+The hash alone is not the whole test, and treating it as such was a fault
+rather than a design. A label can change while the file does not: correcting
+an item name, or re-typing a screenshot in WARP CORE, leaves the bytes
+untouched. So the upload cache records the **label** each item was last sent
+under, and a change to it re-queues the item:
+
+| Channel | Cache | Compares |
+|---|---|---|
+| crops | `.sync_uploaded_labels.json` | `slot\|name` |
+| screen types | `.sync_uploaded_screen_hashes.json` | the screen type |
+
+Crops have compared the label since they were written. Screen types did not
+until 2026-09-05, and the consequence was that a correction never left the
+machine at all — see [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md) §5b for what
+that cost and how the old cache format migrates.
 
 ---
 
@@ -358,7 +374,14 @@ that multiple users have corrected are instantly fixed for all clients.
 
 ### model_version.json
 
-Published after each successful central training run:
+Published after each successful central training run — unless the run is
+refused. Both trainers compare their result against the version currently
+served and stop if the class count fell below 90% of it, or accuracy by more
+than ten points; the previously published model then stays in place and the
+workflow fails. See [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md) §5b for why the
+thresholds are loose.
+
+The values below show the shape, not a current release:
 
 ```json
 {
