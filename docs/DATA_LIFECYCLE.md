@@ -305,6 +305,74 @@ Two consequences:
 
 ---
 
+## 5a. When a maintainer's decision outranks the tally
+
+The review ledger (`data/reviewed_virtual.jsonl`) records both decisions a
+maintainer can take on a crop, `REJECT` and `RELABEL`, and for a long time
+only the first was read back. A relabel was written into `data/` and left
+unguarded — and since the merge is a queue, the next client to upload that
+crop under its old name overwrote the correction with a single vote.
+
+Measured 2026-09-04: `Fleet Support Cruiser (T6)` was corrected at 10:24 and
+was back under the old name by 16:28, six hours and one merge later. Every
+correction made that day had the same lifetime, and the retrained embedder
+learned the reverted labels.
+
+`democratic_merge_crops._load_relabelled` now reads those rows and `_merge`
+pins them: a reviewed sha keeps the maintainer's name whatever the tally
+says. This is the **one** exception to the dataset-as-consensus rule, and it
+is deliberate — a human looked at the picture, while a client's label is
+whatever its recogniser or its user offered. The losing votes are still
+written to `losers`, so the disagreement stays auditable rather than erased.
+
+Last ledger entry wins, which is what keeps a correction correctable:
+re-reviewing the same sha supersedes the earlier decision.
+
+The pin alone would only bite on the *next* upload of that crop, leaving
+names overwritten in the past wrong until someone photographed the same slot
+again — for a rare item, never. So `data/` is reconciled against the ledger
+on every run as well.
+
+## 5b. Guards on what leaves the pipeline
+
+Two things now refuse to proceed rather than proceeding quietly.
+
+**A collapsed model is not published.** `admin_train._publication_refusal`
+compares a finished run against the version currently served — read from the
+published repo, because what matters is what users would be downgraded from —
+and stops publication if the class count falls below 90% of the last release
+or accuracy by more than ten points. Both trainers share the one function;
+`admin_train_metric` maps its `val_recall@1` onto the shared field at the
+edge. The thresholds are loose on purpose: this is a collapse detector, not
+a quality gate, and it should be silent until something is badly wrong. A
+model carrying 1592 of roughly 3000 classes was once published and served
+because nothing compared the two.
+
+**A refused upload is not remembered as sent.** The backend answers with
+counts, not identities, so the client cannot cache "only the accepted ones"
+exactly. A batch holding a refusal is therefore cached not at all — re-sending
+an accepted item costs a request, forgetting a refused one loses it for good.
+
+## 5c. Telling a lost upload from a lost vote
+
+Two failures look identical from outside and are opposite in meaning: a
+decision that never reached the dataset, and one that reached it and lost the
+tally. The first is a fault, the second is the mechanism working.
+
+What separates them is the client's own upload cache, which records the label
+each item was last **sent** under. `admin_reconcile_local.py` uses it to split
+a comparison between a local store and the published dataset into `unsent`,
+`outvoted` and `absent`, and exits non-zero only for the first. An earlier
+version scored every difference alike, which amounts to arguing the consensus
+should be corrected to match one machine — see the invariant in §3.
+
+The client answers the narrower half of the same question by itself, with no
+network: `sync.upload_backlog` counts what this install has confirmed and not
+sent, `SyncWorker._report_upload_backlog` logs it after every upload pass, and
+WARP CORE shows it in the status bar. None of that can prove something
+counted as sent arrived; only the reconciliation against the published
+dataset can.
+
 ## 6. The audit safety net
 
 Two audits, and they answer different questions.
