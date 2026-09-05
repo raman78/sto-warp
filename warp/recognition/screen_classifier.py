@@ -184,25 +184,58 @@ class ScreenTypeClassifier:
             import torch
             from torchvision.models import mobilenet_v3_small
             import torch.nn as nn
-            # Load metadata
-            n_classes = 7  # default
-            if meta_path.exists():
-                with open(meta_path, encoding='utf-8') as f:
-                    meta = json.load(f)
-                n_classes = meta.get('n_classes', 7)
-            # Load label map
+
+            state = torch.load(str(pt_path), map_location='cpu',
+                               weights_only=True)
+
+            # How many classes the head has is a property of the weights, so
+            # it is read from the weights. It used to come from
+            # `screen_classifier_meta.json`, defaulting to 7 when that file was
+            # absent — and `ModelUpdater` never downloaded it, so the default
+            # was always what applied. When the published model grew to 8
+            # classes the client kept building a 7-class head and
+            # `load_state_dict` refused the whole model:
+            #
+            #   size mismatch for classifier.3.weight: copying a param with
+            #   shape torch.Size([8, 1024]) ... current model is [7, 1024]
+            #
+            # Screen typing then fell to its fallback ladder and misread a
+            # SPACE_EQ screenshot as GROUND_EQ. A checkpoint cannot disagree
+            # with itself, which is why the shape comes from it now.
+            head = state.get('classifier.3.weight')
+            n_classes = int(head.shape[0]) if head is not None else None
+            if n_classes is None:
+                n_classes = 7
+                if meta_path.exists():
+                    with open(meta_path, encoding='utf-8') as f:
+                        n_classes = json.load(f).get('n_classes', 7)
+                _slog.warning(
+                    'ScreenClassifier: checkpoint has no recognisable head — '
+                    f'falling back to n_classes={n_classes}')
+
             if labels_path.exists():
                 with open(labels_path, encoding='utf-8') as f:
                     raw = json.load(f)
                 self._label_map = {int(k): v for k, v in raw.items()}
             else:
                 self._label_map = {i: s for i, s in enumerate(SCREEN_TYPES)}
-            # Rebuild model architecture and load weights
+
+            # A model that can answer with a class nobody can name is worse
+            # than no model: the index would resolve to nothing downstream.
+            # Say so rather than let it through quietly.
+            if len(self._label_map) != n_classes:
+                _slog.warning(
+                    f'ScreenClassifier: the model has {n_classes} classes but '
+                    f'{len(self._label_map)} labels are known '
+                    f'({sorted(self._label_map.values())}) — an unnamed class '
+                    f'cannot be reported, so the model is not used')
+                self._ml_disabled = True
+                return
+
             model = mobilenet_v3_small(weights=None)
             in_features = model.classifier[-1].in_features
             model.classifier[-1] = nn.Linear(in_features, n_classes)
-            model.load_state_dict(torch.load(str(pt_path), map_location='cpu',
-                                              weights_only=True))
+            model.load_state_dict(state)
             model.eval()
             self._session = model  # reuse _session field as model holder
             _slog.info(f'ScreenClassifier: PyTorch model loaded — {len(self._label_map)} classes: {list(self._label_map.values())}')
