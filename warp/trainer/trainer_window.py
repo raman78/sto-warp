@@ -232,6 +232,11 @@ class WarpCoreWindow(QMainWindow):
             self._sync_timer.setInterval(5 * 60 * 1000)   # 5 minutes in ms
             self._sync_timer.timeout.connect(self._on_sync_timer)
             self._sync_timer.start()
+            # Once shortly after opening, too. A backlog that has been waiting
+            # should not wait another five minutes, and a session shorter than
+            # the interval would otherwise never send anything at all. Delayed
+            # rather than immediate so the window paints first.
+            QTimer.singleShot(20_000, self._on_sync_timer)
 
 
     def showEvent(self, event):
@@ -5206,13 +5211,53 @@ class WarpCoreWindow(QMainWindow):
         self._on_accept()
         self._review_list.setFocus()
 
+    def _upload_now(self) -> None:
+        """Send whatever this store has confirmed and not yet shared.
+
+        Standalone WARP CORE had no upload at all. The timer below refreshed
+        the community knowledge, checked for a newer model and refreshed the
+        pending counter — but nothing ever sent anything, so the counter
+        reported the same number for ever. Measured on the maintainer's
+        install: 129 screenshots pending, every one of them a screen-type the
+        user had corrected, and not a single `HF Sync` line in any log.
+
+        The docstring that explained the absence said upload was "started at
+        app launch in warp_button.py". That file is the SETS bridge and does
+        not exist in this repository — it stayed in sets-warp when this one
+        was split out. So the justification had outlived its subject, and
+        only the launcher (`gui/sync_coordinator.py`) still started an upload.
+
+        The manager is built once, lazily, and reused: it owns a QThread, and
+        a new one per tick would pile them up. `self._sets` is the cargo-backed
+        app shim the constructor synthesises, which is exactly what
+        `SyncManager._data_manager` looks the trainer window up through.
+        """
+        try:
+            if getattr(self, '_sync_mgr', None) is None:
+                from warp.trainer.sync import SyncManager
+                self._sync_mgr = SyncManager(self._sets, parent=self)
+            self._sync_mgr.check_and_upload()
+        except Exception as e:
+            # An upload must never take the window down with it, but it must
+            # not fail quietly either — a silent failure here is precisely how
+            # a backlog sits still for weeks.
+            #
+            # Through `warp.debug`, not this module's `logging.getLogger`:
+            # the stdlib logger does not reach the log files, and the way this
+            # defect was found in the first place was grepping them for
+            # `HF Sync` and finding nothing. A warning nobody can grep would
+            # repeat exactly the invisibility being fixed.
+            from warp.debug import log as _wlog
+            _wlog.warning(f'WARP CORE: upload failed: {e}')
+
     def _auto_sync(self):
-        """Upload is now handled by SyncManager (app-level background timer). No-op."""
-        pass
+        """Kept as the name the older call sites use — see `_upload_now`."""
+        self._upload_now()
 
     def _on_sync_timer(self):
-        """Called every 5 minutes — refreshes community knowledge and checks for a newer model.
-        Crop upload is handled by SyncManager (started at app launch in warp_button.py)."""
+        """Every 5 minutes: refresh community knowledge, check for a newer
+        model, send what is pending, and update the counter that says how much
+        still is."""
         # Refresh community knowledge (pHash overrides)
         if self._sync_client:
             try:
@@ -5226,6 +5271,10 @@ class WarpCoreWindow(QMainWindow):
             ModelUpdater().check_and_update()
         except Exception as e:
             log.debug(f'WARP CORE: model update check error: {e}')
+
+        # Send before counting, so the number the user reads is what is left
+        # after this tick rather than what was left before it.
+        self._upload_now()
 
         # The two directions the backlog moves in are a confirmation arriving
         # and an upload leaving. This tick covers the second; the review panel
