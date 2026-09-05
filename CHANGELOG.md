@@ -8,6 +8,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.37] — 2026-09-05
+
+### Added
+- **Every window title shows the version that is running**, in the same
+  form STO-CLARE uses — so a bug report can quote what is on screen
+  instead of guessing. A copy started from a source checkout also shows
+  how far past the last release it is and whether it has local edits.
+
 ## [1.0.36] — 2026-09-05
 
 ### Fixed
