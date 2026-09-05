@@ -54,8 +54,8 @@ against that anchor.
 
 ## 1. Anchor strategies
 
-Four passes, tried in order, all inside `extract_ship_info`. The first three
-look for a tier badge and share the `tier` anchor kind; the fourth falls back
+Five passes, tried in order, all inside `extract_ship_info`. The first four
+look for a tier badge and share the `tier` anchor kind; the fifth falls back
 to the ship-name line:
 
 | Pass | Trigger | Anchor token | Section comment |
@@ -63,6 +63,7 @@ to the ship-name line:
 | 1 — loose | `RE_TIER_LOOSE` matches, or one token holds a snappable `[...]` | the token carrying it | `Anchor 1` |
 | 1b — fused | A whole `Name [TB-X2]` line came back as one token | that token | `Anchor 1b` |
 | 1c — split | Two or three x-adjacent tokens in one row **join** into a closed `[...]` that snaps | a synthetic token spanning the fragments | `Anchor 1c` |
+| 1d — stacked | A token over `_TIER_FUSED_ROW_RATIO` × the band's median height, whose pixels **re-read alone** yield a closed `[...]` that snaps | a synthetic token boxing only the badge inside it | `Anchor 1d` |
 | 2 — name | A token that looks like a ship-name line, per `_is_name_prefix_token` | that token | `Anchor 2` |
 
 With a tier anchor the class is assembled from the tier row, or from the row
@@ -72,9 +73,15 @@ name. No anchor means no ship info at all — the log says
 `anchorless_candidates` instead and `ShipDB.find_class_by_candidates_ex` gets
 a last-resort attempt.
 
-Pass 1c exists because OCR sometimes cuts the badge itself rather than the line
-around it, and neither half is then recognisable: see
+Passes 1c and 1d exist because the badge is small and OCR mishandles it in two
+opposite ways. 1c is for a badge cut into pieces, where neither half is
+recognisable on its own: see
 [Decision 2026-08-30](#decision-2026-08-30-a-tier-badge-cut-in-half-is-still-a-tier-badge).
+1d is for a badge swallowed by the line under it, where one box holds two lines
+run together: see
+[Decision 2026-09-05](#decision-2026-09-05-a-badge-fused-with-the-line-below-it-is-still-a-badge).
+1d is the only pass that spends a second OCR call, which is why it runs last —
+by the time it is reached, the cheap readings have all failed.
 
 `_is_name_prefix_token` is misleadingly named: it does not require a prefix.
 `U.S.S. ENTERPRISE` matches, and so does a bare `Henrik Lindstrom`, which is
@@ -204,7 +211,8 @@ overstates its errors.
 |---|---|---|
 | `type='<junk> <real class>'` | a token from another panel entered the column | `_valid_type_tok` / column window, §2 |
 | `ship_type_bbox` far wider than the class line | same cause — the bbox is the union of what got in (S1) | §2 |
-| `ship_type_bbox` *narrower* than the class line, `Ship Tier` sharing it | no anchor fired, so the box is one rescue token and the tier borrowed it | §1 pass 1c, and `no anchor` in the log |
+| `ship_type_bbox` *narrower* than the class line, `Ship Tier` sharing it | no anchor fired, so the box is one rescue token and the tier borrowed it | §1 passes 1c/1d, and `no anchor` in the log |
+| `Ship Tier` at 0.45 with a box on the class line, on a screen whose badge is plainly visible | the badge was never read, so the importer inferred the tier from slot counts and anchored it to the only line it had | §1 pass 1d; `no tier on screen — inferred` in the log |
 | `[name anchor]` on a screen with no ship | `RE_NAME_PREFIX` matches a plain word: dots are optional and the separator class accepts a space, so `Die E` matches | §Open questions, item 2 |
 | `no anchor, ship info unset` | no tier bracket and no name-shaped token | expected on ground/BOFF/skills screens |
 | Class resolves to a different ship of the same family | fuzzy lookup fed a polluted string | §4, and `last_match_strategy` in the log |
@@ -454,6 +462,111 @@ for a bad ship.
 unreachable for split badges but still apply to passes 1 and 1b, so revert them
 too if the corpus is re-measured. `tests/test_tier_badge_split.py` holds the
 real token dump for the case.
+
+### Decision 2026-09-05: a badge fused with the line below it is still a badge
+
+**Change.** Anchor pass 1d re-reads a token too tall to be one line of text, on
+its own and upscaled, and re-tests the result for a closed `[...]` that
+`_fuzzy_tier` can snap. The re-read is `TextExtractor.rescan_region`, which
+returns boxes in full-image coordinates so its output can be used exactly like
+`scan_image`'s.
+
+**Why.** `scan_image` reads the screenshot in five full-width strips. That is
+what makes a whole-screen pass affordable, and it is also its limit: on a small
+window each strip is downscaled far enough that two stacked HUD lines can merge
+into one box and both come out mangled. On `image-4073e52ef5e3376f.png`
+(902×849) the badge and the registry line under it came back as a single token:
+
+```
+x  40–396  'Terran Lexington Dreadnought Cruiser'  conf 0.79  h=28
+x  36–190  '{TEX23015-8)'                          conf 0.53  h=50   ← two lines
+```
+
+`'{TEX23015-8)'` is `[T6-X2]` over `(NCC-93015-B)` run together. It has no
+closed bracket for 1/1b, its fragments are one token so 1c has nothing to join,
+and `TEX2` has no `T` followed by a digit so `RE_TIER_LOOSE` fails as well. The
+screenshot took the anchorless path with `ship_type` and `ship_tier` both empty
+and no boxes at all; the class name in the recognition report came from
+`ShipDB.find_class_by_candidates_ex`, and the tier from `_infer_x_bonus`
+measuring the slot rows. The inferred tier was right — `T6-X2` — but it arrived
+at `SHIP_TIER_CONF_INFERRED` (0.45, below the auto-accept floor) with its
+review box drawn around the class line, because that is the fallback the
+meta-slot block uses when the badge is believed to be absent.
+
+**Height is the signal** because it is the one thing the fused token cannot
+hide: two lines and the leading between them do not fit in one line's box. The
+cut is `_TIER_FUSED_ROW_RATIO = 1.6` × the median height of the top-band
+tokens — above the 10–20 % overrun a single line shows when its box clips a
+descender or a bracket, and well below the ~1.9 the fused token reached here.
+Nothing is believed on height alone: a candidate is only used if re-reading it
+produces a bracketed tier that snaps to a real value, so the ratio governs how
+much work is done, not what is trusted.
+
+**What that work costs**, counted by wrapping the real `rescan_region` over
+every screenshot in the training store (`dev/count_1d_rereads.py`, 527 images):
+
+| Re-reads spent on one screenshot | Screenshots |
+|---|---|
+| 0 | 480 |
+| 1 | 39 |
+| 2 | 8 |
+
+55 extra OCR calls in total, on 47 screenshots — a crop that small reads in
+about a tenth of a second, against the seconds a full pass takes. The
+`_TIER_FUSED_MAX_REREADS = 3` cap exists for a pathological screenshot and was
+never reached in the store.
+
+**Only the badge's box is kept**, not the fused token's. The point of reading it
+again is to be able to point at the tier; a box covering the registry line as
+well would reproduce the fault this fixes. `ship_type` is left alone here — the
+fused text is unusable as a class name, and the row above the badge is where
+the class line actually is, which the shared anchor code already reads.
+
+**Confidence, and what it changes downstream.** A 1d tier reaches
+`WarpImporter` like any other badge read and therefore carries
+`SHIP_TIER_CONF_BADGE` (0.90), not `SHIP_TIER_CONF_INFERRED` (0.45). That is
+the honest label — the characters were resolved and snapped, on a cleaner image
+than the badge reads that 0.90 was measured on, since an isolated 2× crop is a
+better view than the strip pass, not a worse one.
+
+It is still a change in what the number authorises. 0.45 sits below WARP CORE's
+auto-accept floor and 0.90 sits above it, so on a screenshot where 1d fires the
+tier stops needing a human and goes straight into the training data. The
+exposure is one screenshot in 172 and the value on it is right, but the
+direction is worth stating: if a 1d read is ever wrong it will be confirmed
+without being looked at, which is not true of the inferred tier it replaces.
+The known badge-read failure — a `[T6]` bracket read as `T1`, four of the five
+tier errors in the corpus — is a strip-resolution artefact, so the re-read is
+the case least likely to produce it.
+
+**Measured.** Full OCR pass over the 172 space screens in the training store
+(`dev/probe_ship_header.py`, `dev/probe_ship_header_nonspace.py`,
+`dev/compare_ship_header.py`), before and after:
+
+| | before | after |
+|---|---|---|
+| screenshots where 1d fires | — | 1 |
+| tier read at all | 108/172 | 109/172 |
+| class read at all | 113/172 | 114/172 |
+| tier matches the user-confirmed one | 70/75 | 70/75 |
+| class matches the user-confirmed one | 46/79 | 47/80 |
+
+One screenshot changes, and every field on it moves from empty to correct
+(`ship_type` matches the confirmed annotation exactly). Nothing else in the
+corpus moves, because the failure needs OCR to merge two lines *and* every
+cheaper pass to fail.
+
+Ground, BOFF, trait, skill and specialization screens were swept separately
+(353 images, `dev/probe_ship_header_nonspace.py`): 1d never fires on any of
+them, so it cannot have changed their reading. That sweep replaces a
+before/after pair — 1d only runs when every earlier pass failed, and a pass
+that never fires leaves the two runs identical by construction. Eighteen of
+those screens do carry a ship header and get a tier, all of it from passes
+1/1b/1c as before.
+
+**How to revert.** Delete the 1d block. `rescan_region` has no other caller and
+can go with it. `tests/test_tier_fused_row.py` holds the real token dump and
+the real re-read output for the case.
 
 ### Decision 2026-08-31: the review row shows the tier the build was sized from
 

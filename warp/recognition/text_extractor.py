@@ -162,6 +162,23 @@ _COL_PAD_ANCHOR_CAP = 150
 _TIER_FRAG_GAP_RATIO = 0.3
 _TIER_FRAG_MIN_GAP = 6
 
+# Anchor 1d — how much taller than the surrounding text a token must be before
+# it is suspected of being two stacked HUD lines read as one box. A single line
+# of text is about the median height by definition; two lines plus the leading
+# between them is a little over double. The cut sits between the two, close
+# enough to the median that a slightly tall token still qualifies (an OCR box
+# that clips a descender or a bracket runs 10-20% over) and far enough that no
+# single line reaches it. Nothing is accepted on height alone — a candidate is
+# only used if re-reading it produces a bracketed tier that snaps to a real
+# value — so the cut governs how much work is done, not what is believed.
+_TIER_FUSED_ROW_RATIO = 1.6
+
+# How many over-tall tokens are re-read per screenshot. Each costs one OCR
+# call on a small crop; the ship header holds one such line at most, and the
+# cap stops a badly-thresholded screenshot from turning the anchor search into
+# a second full scan.
+_TIER_FUSED_MAX_REREADS = 3
+
 # How far an OCR box may overrun the tier anchor's left edge and still count as
 # a token to its left. EasyOCR boxes for neighbouring glyph runs routinely
 # overlap by a few px; the old flat 2 px allowance dropped the class line of a
@@ -843,6 +860,74 @@ class TextExtractor:
                     if tier_tok:
                         break
 
+            # ── Anchor 1d: badge fused with the line under it ────────────────
+            # 1c handles a badge cut into pieces side by side. The opposite
+            # happens too: the whole-screen scan reads the badge and the
+            # registry line below it as ONE box, because at strip resolution
+            # the gap between them disappears. What comes back is a token twice
+            # the height of the text around it whose content is the two lines
+            # run together and mangled — `'{TEX23015-8)'` for `[T6-X2]` over
+            # `(NCC-93015-B)`. It has no closed bracket for 1/1b/1c to find and
+            # no `T<digit>` for the loose pattern, so the screenshot fell
+            # through to the anchorless path: the tier was never read, and the
+            # importer inferred it from the slot counts instead — the right
+            # answer on that screenshot, at half the confidence and with the
+            # review box drawn around the class line, which is not where the
+            # tier is.
+            #
+            # Height is the signal, because it is the one thing the fused token
+            # cannot hide: two lines and their leading do not fit in one line's
+            # box. Given that, ask the reader again for those pixels alone and
+            # upscaled, where the two lines separate.
+            #
+            # Only the badge's own box is kept, not the fused token's — the
+            # point of reading it again is to be able to point at the tier, and
+            # a box covering the registry line as well would repeat the fault
+            # this fixes. `ship_type` is deliberately left alone: the fused
+            # text is unusable as a class name, and the row above the badge is
+            # where the class line actually is, which the shared anchor code
+            # below already reads.
+            if tier_tok is None and rows:
+                _all_toks = [t for r in rows for t in r['tokens']]
+                _row_med_h = float(np.median([t['h'] for t in _all_toks]))
+                _rereads = 0
+                for r in rows:
+                    for tok in r['tokens']:
+                        if tok['h'] < _row_med_h * _TIER_FUSED_ROW_RATIO:
+                            continue
+                        if _rereads >= _TIER_FUSED_MAX_REREADS:
+                            break
+                        _rereads += 1
+                        for sub in self.rescan_region(
+                                img, (tok['x'], tok['y'], tok['w'], tok['h'])):
+                            m_br = re.search(
+                                r'\[([A-Za-z0-9\- ]{2,8})\]', sub['text'])
+                            if not m_br:
+                                continue
+                            snapped = _fuzzy_tier(
+                                m_br.group(1).upper().replace(' ', ''))
+                            if not snapped:
+                                continue
+                            bb = (sub['x0'], sub['y0'], sub['w'], sub['h'])
+                            tier_tok = {
+                                'x': bb[0], 'y': bb[1], 'w': bb[2], 'h': bb[3],
+                                'text': sub['text'], 'conf': sub['conf'],
+                                'dark': tok['dark'], 'cy': float(sub['cy']),
+                            }
+                            tier_row = r
+                            result['ship_tier'] = snapped
+                            result['ship_tier_bbox'] = bb
+                            _slog.info(
+                                f'TextExtractor: fused-row tier — {tok["text"]!r} '
+                                f'({tok["h"]}px vs {_row_med_h:.0f}px median) '
+                                f're-read as {sub["text"]!r} → {snapped!r} '
+                                f'bbox={bb}')
+                            break
+                        if tier_tok:
+                            break
+                    if tier_tok or _rereads >= _TIER_FUSED_MAX_REREADS:
+                        break
+
             anchor_kind = ''
             anchor_x = anchor_y = anchor_w = anchor_h = None
 
@@ -1392,6 +1477,71 @@ class TextExtractor:
         self._scan_cache_key = key
         self._scan_cache_tokens = tokens
         return tokens
+
+    def rescan_region(self, img: np.ndarray, bbox,
+                      scale: float = 2.0) -> list[dict]:
+        """Re-read one region of the image on its own, at `scale`× size.
+
+        `scan_image` reads the whole screenshot in five full-width strips.
+        That is what makes a whole-screen pass affordable, and it is also its
+        limit: on a small window each strip is downscaled hard enough that the
+        reader can merge two stacked HUD lines into a single box and garble
+        both. The ship header is where that hurts — `[T6-X2]` sitting directly
+        above `(NCC-93015-B)` came back as one 50 px box reading
+        `'{TEX23015-8)'`, which no tier pattern can match.
+
+        Given the same pixels alone and upscaled, the reader separates them
+        (measured on that screenshot: `'[T6-X2]'` and `'(NCC-93015-8)'`, two
+        boxes). So this is a second look at a region already known to be
+        interesting, not a second scan — callers are expected to have a reason
+        to spend the extra OCR call.
+
+        Coordinates come back in full-image pixel space, so the result drops
+        straight into the token lists `scan_image` produces. Returns `[]` on an
+        empty or out-of-frame region rather than raising: a re-read is always
+        an attempt to improve on something, never the only source.
+        """
+        import cv2
+
+        try:
+            x, y, w, h = (int(v) for v in bbox)
+        except (TypeError, ValueError):
+            return []
+        img_h, img_w = img.shape[:2]
+        x0, y0 = max(0, x), max(0, y)
+        x1, y1 = min(img_w, x + w), min(img_h, y + h)
+        if x1 <= x0 or y1 <= y0:
+            return []
+        try:
+            up = cv2.resize(img[y0:y1, x0:x1], None, fx=scale, fy=scale,
+                            interpolation=cv2.INTER_CUBIC)
+            raw = self._get_ocr().readtext(
+                cv2.cvtColor(up, cv2.COLOR_BGR2RGB), detail=1, paragraph=False)
+        except Exception as e:
+            _slog.debug(f'TextExtractor.rescan_region: {e}')
+            return []
+
+        out: list[dict] = []
+        for box, text, conf in raw:
+            text = text.strip()
+            if not text:
+                continue
+            xs = [p[0] / scale + x0 for p in box]
+            ys = [p[1] / scale + y0 for p in box]
+            out.append({
+                'text': text,
+                'low':  text.lower(),
+                'conf': float(conf),
+                'x0':   int(min(xs)),
+                'y0':   int(min(ys)),
+                'x1':   int(max(xs)),
+                'y1':   int(max(ys)),
+                'cx':   int(sum(xs) / len(xs)),
+                'cy':   int(sum(ys) / len(ys)),
+                'w':    int(max(xs) - min(xs)),
+                'h':    int(max(ys) - min(ys)),
+            })
+        return out
 
     def clear_scan_cache(self) -> None:
         """Drop cached scan_image results (call when switching images)."""
