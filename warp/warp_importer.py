@@ -1096,6 +1096,40 @@ class ShipDB:
         hit = self.find_class_by_candidates_ex(candidates, cutoff)
         return hit[0] if hit else None
 
+    def tier_for_class(self, class_name: str) -> int:
+        """The tier every ship of this class shares, or 0 if they differ.
+
+        A class string can identify a tier without identifying a ship. The
+        four class-only strategies (see `_CLASS_ONLY_STRATEGIES`) end with a
+        class name and no particular hull, so `resolution.matched` is False and
+        the per-ship tier is unavailable — but if every ship whose name ends
+        with that class carries the same tier in cargo, the tier is settled
+        anyway.
+
+        Measured over the roster on 2026-09-05: 725 of 791 class keywords
+        (92 %) map to exactly one tier. `Pilot Destroyer` is one of them, all
+        tier 6. `Science Vessel` is not — its ships run T1 through T6 — which
+        is why this checks rather than assumes, and returns 0 when the answer
+        is not unanimous.
+
+        Used only to settle a tier the badge could not, never to invent one.
+        """
+        needle = (class_name or '').strip().lower()
+        if not needle:
+            return 0
+        tiers: set[int] = set()
+        for e in self._ships:
+            name = str(e.get('name') or '').strip().lower()
+            if not name or not name.endswith(needle):
+                continue
+            try:
+                tiers.add(int(e.get('tier')))
+            except (TypeError, ValueError):
+                return 0
+            if len(tiers) > 1:
+                return 0
+        return tiers.pop() if len(tiers) == 1 else 0
+
     def find_class_by_candidates_ex(
         self, candidates: list[str], cutoff: float = 0.85,
     ) -> tuple[dict, str] | None:
@@ -1411,6 +1445,13 @@ SHIP_TIER_CONF_BADGE     = 0.90    # read off the tier badge by OCR
 # bound argued from pixel counts and its accuracy has never been measured, so
 # it must reach the training data only through a human.
 SHIP_TIER_CONF_INFERRED  = 0.45
+# The badge was read, but its text tied between several tiers and nothing
+# settled the tie — not cargo either, so no ship was matched. Lower than the
+# inferred figure on purpose: an inference from slot counts is at least an
+# argument, while this is one of six equally-scoring options. It used to be
+# reported at 0.90 and auto-accepted, which is how four screenshots put `T1`
+# into the training data for tier-6 ships.
+SHIP_TIER_CONF_AMBIGUOUS = 0.40
 
 
 # Canonical slot order for the detection-log table. Slots present in the
@@ -1923,6 +1964,9 @@ class WarpImporter:
         # Provenance of the tier finally emitted for review — the confidence
         # the trainer sees has to say which of the three sources produced it.
         _tier_from_user = False
+        # Set by `_fuzzy_tier_ex` when the badge text tied between several
+        # tiers. Cleared below if cargo settles it.
+        _tier_ambiguous = bool(text_info.get('ship_tier_ambiguous'))
         if _is_trainer_call:
             _confirmed_ship = self._load_confirmed_ship_info(source)
             _ct = _confirmed_ship.get('Ship Type', '')
@@ -1953,6 +1997,55 @@ class WarpImporter:
             # real DB match was found — defeats OCR typos in preview / writer.
             if resolution.matched:
                 ship_type = resolution.type
+
+            # A tier the string could not establish is settled by cargo, which
+            # knows every ship's tier for free.
+            #
+            # `_fuzzy_tier_ex` flags the case where several tiers scored the
+            # same and nothing chose between them — `[T6]` misread as `[TB]`
+            # ties at 0.50 against T1…T6, and the old code returned the first
+            # entry of the list, `T1`, at 0.90 confidence. Measured 2026-09-05,
+            # that was four of the five tier errors over 172 screenshots, and
+            # all four ships are tier 6 in cargo.
+            #
+            # Only the base number is replaced; the `-X` / `-X2` suffix stays
+            # as read, because cargo records the hull's tier and the upgrade
+            # is the player's. The slot profile is unaffected either way — the
+            # base slots come from the ship entry and only the suffix grants
+            # bonuses — so this corrects the label without resizing the grid.
+            if _tier_ambiguous and ship_tier and not _tier_from_user:
+                _base = 0
+                if resolution.matched:
+                    _entry = self._cache.ships.get(ship_type)
+                    try:
+                        _base = int((_entry or {}).get('tier'))
+                    except (TypeError, ValueError):
+                        _base = 0
+                if not _base:
+                    # No single ship, but the class may still settle it —
+                    # `tier_for_class` answers only when every ship of that
+                    # class agrees, so this cannot guess.
+                    _base = self._get_shipdb().tier_for_class(ship_type)
+                if _base:
+                    from warp.recognition.text_extractor import SHIP_TIER_VALUES
+                    _rebased = f'T{_base}{ship_tier[2:]}'
+                    if _rebased in SHIP_TIER_VALUES:
+                        if _rebased != ship_tier:
+                            _slog.info(
+                                f'WarpImporter: tier {ship_tier!r} was a tie '
+                                f'the badge could not settle — cargo records '
+                                f'{ship_type!r} as tier {_base}, so '
+                                f'{_rebased!r}')
+                        ship_tier = _rebased
+                        _tier_ambiguous = False
+            if _tier_ambiguous and ship_tier:
+                # Still unsettled: no ship matched, or cargo had no tier for
+                # it. The value keeps its shape but must not keep its
+                # authority — see SHIP_TIER_CONF_AMBIGUOUS.
+                _slog.warning(
+                    f'WarpImporter: tier {ship_tier!r} is one of several that '
+                    f'scored equally and nothing settled it — reporting it at '
+                    f'reduced confidence for review')
             # Anchorless-rescue: propagate the winning OCR token's bbox into
             # text_info so the preview overlay draws it like a normal anchor
             # hit. Bbox list is parallel to anchorless_candidates from
@@ -2175,6 +2268,10 @@ class WarpImporter:
                         _conf = SHIP_TIER_CONF_INFERRED
                     elif _tier_from_user:
                         _conf = SHIP_TIER_CONF_CONFIRMED
+                    elif _tier_ambiguous:
+                        # Read, but not established — the badge tied and
+                        # nothing settled it. Must stay under auto-accept.
+                        _conf = SHIP_TIER_CONF_AMBIGUOUS
                     else:
                         _conf = SHIP_TIER_CONF_BADGE
                 result.items.append(RecognisedItem(

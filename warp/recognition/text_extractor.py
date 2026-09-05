@@ -130,19 +130,56 @@ def _fuzzy_tier(cand: str) -> str | None:
     every case right; see `docs/SHIP_INFO_DETECTION.md` for the table and for
     how to revert.
     """
+    return _fuzzy_tier_ex(cand)[0]
+
+
+def _fuzzy_tier_ex(cand: str) -> tuple[str | None, bool]:
+    """`_fuzzy_tier`, plus whether the answer was actually established.
+
+    Returns `(tier, ambiguous)`. `ambiguous` means several canonical tiers
+    scored equally and nothing in the string chose between them, so the value
+    returned is a guess with the shape of an answer.
+
+    This is the case that produced every remaining tier error in the corpus.
+    OCR reads `[T6]` as `[TB]` — a clean 6/B substitution — and `TB` scores
+    exactly 0.50 against all of `T1` … `T6`:
+
+        'TB' -> ratios: T1 0.5, T2 0.5, T3 0.5, T4 0.5, T5 0.5, T6 0.5
+
+    A six-way tie. The old code short-circuited on `best_ratio < 0.6` and
+    returned `scored[0][0]`, and since the sort is stable that is whichever
+    entry comes first in `SHIP_TIER_VALUES` — `T1`. So **any unreadable second
+    character in a two-character badge became `T1`**, deterministically, and
+    was then reported at `SHIP_TIER_CONF_BADGE` (0.90), above the trainer's
+    auto-accept floor. Measured 2026-09-05: four of the five tier errors over
+    172 screenshots, all of them ships cargo records as tier 6.
+
+    The tie is not resolvable from the string, and this function has nothing
+    else to go on, so it does not pretend: it says so, and `WarpImporter`
+    settles it against the ship's real tier from cargo — which knows, for free,
+    that a `Kor Bird-of-Prey` is a T6.
+    """
     import difflib as _df
     scored = sorted(
         ((v, _df.SequenceMatcher(None, cand, v).ratio()) for v in SHIP_TIER_VALUES),
         key=lambda kv: kv[1], reverse=True,
     )
     if not scored or scored[0][1] < 0.5:
-        return None
+        return None, False
     best_ratio = scored[0][1]
+    tied = [v for v, r in scored if r == best_ratio]
     if best_ratio < 0.6:
-        return scored[0][0]
+        # Nothing was established. The value is still returned — a caller that
+        # can resolve it needs somewhere to start, and one that cannot is
+        # better off with a plausible tier than with none — but it is flagged.
+        return scored[0][0], len(tied) > 1
     pool = [v for v, r in scored if r >= best_ratio - 0.10]
     same_length = [v for v in pool if len(v) == len(cand)]
-    return max(same_length or pool, key=SHIP_TIER_VALUES.index)
+    picked = max(same_length or pool, key=SHIP_TIER_VALUES.index)
+    # A strong tie among equal-length candidates is still a tie: the
+    # "prefer higher" rule below 0.6 was never evidence, only a convention.
+    same_length_tied = [v for v in tied if len(v) == len(cand)]
+    return picked, len(same_length_tied or tied) > 1
 
 # ROI for ship name/type block (top-left, fraction of image)
 SHIP_INFO_ROI = (0.0, 0.0, 0.34, 0.28)
@@ -541,6 +578,11 @@ class TextExtractor:
             'ship_name_bbox': None,   # (x,y,w,h) | None
             'ship_type_bbox': None,
             'ship_tier_bbox': None,
+            # True when several tiers scored equally and the string chose
+            # between none of them — `_fuzzy_tier_ex`. The value in
+            # `ship_tier` is then a guess with the shape of an answer, and
+            # `WarpImporter` settles it against the ship's tier in cargo.
+            'ship_tier_ambiguous': False,
             'build_type': '',
             'scan_scope': 'partial',  # 'partial' or 'full' — set below
             # Plausible class-name-shaped OCR tokens populated only when the
@@ -718,11 +760,12 @@ class TextExtractor:
                     m_br = re.search(r'\[([A-Za-z0-9\- ]{2,8})\]', tok['text'])
                     if m_br:
                         cand = m_br.group(1).upper().replace(' ', '')
-                        snapped = _fuzzy_tier(cand)
+                        snapped, _amb = _fuzzy_tier_ex(cand)
                         if snapped:
                             tier_value = snapped
                             consume_start = m_br.start()
                             matched_via_bracket = True
+                            result['ship_tier_ambiguous'] = _amb
                     if tier_value is None:
                         m = RE_TIER_LOOSE.search(tok['text'])
                         if not m:
@@ -772,12 +815,13 @@ class TextExtractor:
                         if not m_br:
                             continue
                         cand = m_br.group(1).upper().replace(' ', '')
-                        snapped = _fuzzy_tier(cand)
+                        snapped, _amb = _fuzzy_tier_ex(cand)
                         if not snapped:
                             continue
                         tier_tok = tok
                         tier_row = r
                         result['ship_tier'] = snapped
+                        result['ship_tier_ambiguous'] = _amb
                         result['ship_tier_bbox'] = (
                             tok['x'], tok['y'], tok['w'], tok['h'])
                         # Same as pass 1: this token is `Name [TB-X2]` by
@@ -844,10 +888,11 @@ class TextExtractor:
                                 r'\[([A-Za-z0-9\- ]{2,8})\]', joined)
                             if not m_br:
                                 continue
-                            snapped = _fuzzy_tier(
+                            snapped, _amb = _fuzzy_tier_ex(
                                 m_br.group(1).upper().replace(' ', ''))
                             if not snapped:
                                 continue
+                            result['ship_tier_ambiguous'] = _amb
                             # A synthetic token standing for the whole badge:
                             # everything downstream treats it like any other
                             # tier token, and its bbox is the union of the
@@ -936,10 +981,11 @@ class TextExtractor:
                                 r'\[([A-Za-z0-9\- ]{2,8})\]', sub['text'])
                             if not m_br:
                                 continue
-                            snapped = _fuzzy_tier(
+                            snapped, _amb = _fuzzy_tier_ex(
                                 m_br.group(1).upper().replace(' ', ''))
                             if not snapped:
                                 continue
+                            result['ship_tier_ambiguous'] = _amb
                             bb = (sub['x0'], sub['y0'], sub['w'], sub['h'])
                             tier_tok = {
                                 'x': bb[0], 'y': bb[1], 'w': bb[2], 'h': bb[3],
