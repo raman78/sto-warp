@@ -2289,8 +2289,13 @@ class WarpCoreWindow(QMainWindow):
             status_text = 'Conflict'
             color       = self._CONFLICT_COLOR
         elif confirmed and is_virtual:
+            # The status column answers "how far along is this row", not
+            # "what is in the slot" — the item text and the colour already
+            # say the latter. Reporting `Inactive` here meant a confirmed
+            # empty slot never showed as confirmed, so a reviewer could not
+            # tell a row they had checked from one they had not.
             item_text   = '[empty slot]' if name == '__empty__' else '[inactive slot]'
-            status_text = 'Empty' if name == '__empty__' else 'Inactive'
+            status_text = 'Auto' if auto_confirmed else 'Confirmed'
             color       = self._VIRTUAL_CONFIRMED
         elif confirmed and auto_confirmed:
             item_text   = name or '—'
@@ -2301,8 +2306,10 @@ class WarpCoreWindow(QMainWindow):
             status_text = 'Confirmed'
             color       = self._CONFIRMED_COLOR
         elif is_virtual:
+            # Same rule for a row still awaiting review: what it holds is in
+            # the text, how far along it is goes here.
             item_text   = '[empty slot]' if name == '__empty__' else '[inactive slot]'
-            status_text = 'Empty' if name == '__empty__' else 'Inactive'
+            status_text = 'Pending'
             color       = self._VIRTUAL_PENDING
         elif cross_check_failed:
             item_text   = f'⚠ {name or "— unmatched —"}'
@@ -3805,7 +3812,7 @@ class WarpCoreWindow(QMainWindow):
             and conf >= self._spin_auto_conf.value()):
             if self._review_list.currentRow() != row:
                 self._review_list.setCurrentRow(row)
-            self._on_accept()
+            self._on_accept(auto=True)
 
 
     def _rematch_current_item(self, row: int, bbox: tuple):  # noqa — kept for future use
@@ -3882,7 +3889,7 @@ class WarpCoreWindow(QMainWindow):
                     and conf >= self._spin_auto_conf.value()
                     and ri.get('slot', '') not in NON_ICON_SLOTS):
                 self._review_list.setCurrentRow(row)
-                self._on_accept()
+                self._on_accept(auto=True)
         except:
             pass
 
@@ -4195,7 +4202,7 @@ class WarpCoreWindow(QMainWindow):
                     and slot not in NON_ICON_SLOTS):
                 fresh_row = self._review_list.row(litem) if litem else row
                 self._review_list.setCurrentRow(fresh_row)
-                self._on_accept()
+                self._on_accept(auto=True)
         except Exception as e:
             from warp.debug import log as _sl
             _sl.warning(f'rematch_with_slot failed: {e}')
@@ -4498,7 +4505,26 @@ class WarpCoreWindow(QMainWindow):
         _apply_auto_accept runs before _add_review_row."""
         pass
 
-    def _on_accept(self):
+    def _on_accept(self, *_qt_args, auto: bool = False):
+        """Confirm the current row.
+
+        `auto` says who decided. Three internal callers reach this after the
+        detector cleared the auto-accept threshold — `_on_ocr_finished`,
+        `_rematch_current_item` and `_rematch_with_slot` — and until
+        2026-09-05 all three recorded the result as though the user had
+        pressed Enter.
+
+        That is not a cosmetic distinction. `auto_confirmed` is what keeps
+        the detector's own answers out of the session-example seed
+        (`SETSIconMatcher.seed_from_community_crops` skips them, to stop
+        today's high-confidence match becoming tomorrow's perfect
+        self-match) and out of what the importer reads as ground truth
+        (`WarpImporter._user_confirmed`). Filing a machine answer as a human
+        one feeds it straight into the loop both guards exist to prevent.
+
+        `*_qt_args` swallows the `checked` bool Qt hands a `clicked` slot, so
+        the keyword cannot be filled positionally by a signal.
+        """
         # Locked-screenshot guard. Mirrors _on_auto_detect / _on_remove_item /
         # _on_clear_all_bboxes / the Delete key handler — all destructive
         # actions are gated on `_is_current_locked()`. Without this, Enter,
@@ -4604,7 +4630,8 @@ class WarpCoreWindow(QMainWindow):
             ri['name'] = name
             ri['slot'] = slot
             ri['state'] = 'confirmed'
-            ri['auto_confirmed'] = False  # user override → green, not yellow
+            # green when a person said so, yellow when the detector did
+            ri['auto_confirmed'] = auto
             ri['community_rejected'] = community_rejected
             if ri.get('bbox') and self._current_idx >= 0:
                 path = self._screenshots[self._current_idx]
@@ -4614,7 +4641,7 @@ class WarpCoreWindow(QMainWindow):
                     state=AnnotationState.CONFIRMED,
                     ml_conf=ri.get('conf', 0.0),
                     ml_name=ri.get('ocr_raw', '') or ri.get('orig_name', ''),
-                    auto_confirmed=False,
+                    auto_confirmed=auto,
                     community_rejected=community_rejected,
                     seat_key=ri.get('seat_key', '') or '',
                     slot_index=ri.get('slot_index')
@@ -4628,7 +4655,7 @@ class WarpCoreWindow(QMainWindow):
                 self._populate_review_item(
                     litem, name, slot, ri.get('conf', 0.0),
                     confirmed=True, cross_check_failed=False,
-                    auto_confirmed=False, conflict_disk_name='',
+                    auto_confirmed=auto, conflict_disk_name='',
                     group_label=ri.get('_group_label'),
                     inferred=(ri.get('src') == 'inferred'),
                 )
