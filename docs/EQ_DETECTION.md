@@ -237,6 +237,46 @@ previous commit so both versions ran through the same harness):
 
 12 screens unchanged, 2 corrected to zero errors, none regressed.
 
+### Why this stage reads the image a second time
+
+`detect_eq_geometry` runs its own full-image OCR pass, after
+`TextExtractor.scan_image` has already read the same screenshot. That looks
+like waste and it is expensive — measured 2026-09-05 over five screen types
+(`dev/probe_ocr_passes.py`), the second pass costs 2.1–3.0 s on a mixed screen,
+roughly a third of all the OCR a screenshot needs.
+
+Reusing the tokens `scan_image` produces was tried and **rejected on
+measurement**. The two reads are not the same read: `scan_image` reads five
+horizontal strips at higher effective resolution, `_run_ocr` reads the whole
+frame at once, and their token boxes land in slightly different places. Feeding
+the strip tokens to `detect_eq_geometry` over the 154 SPACE screens in the
+training store (`dev/probe_eq_geometry_tokens.py`, both runs through the
+shipped function):
+
+| | images |
+|---|---|
+| identical geometry | 6 |
+| **different geometry** | **119** |
+| geometry lost (found before, not after) | 0 |
+| geometry gained | 0 |
+| no geometry either way | 29 |
+
+Nothing is gained or lost outright — every screenshot that had a panel still
+has one. What moves is *where* it is: row centres shift by 1–2 px, `panel_right`
+by up to 2 px, `row_pitch` by 1. On `12.png`, `row_pitch` 51 → 50 and
+`panel_right` 751 → 749.
+
+A pixel or two sounds negligible against a 44–56 px icon box, and it may well
+be. But it moves **every crop on 95 % of screenshots**, and crop geometry is
+known to matter here by measurement rather than intuition — see the icon
+resolution work, where stretching beat letterboxing by 10.7 points. Geometry
+alone cannot say whether the shift helps or hurts; only the match rate can, and
+that is a whole-corpus recognition run, not a geometry diff.
+
+So the second pass stays until someone spends that measurement. The saving is
+real and so is the risk; what is not acceptable is trading one for the other on
+the strength of "the numbers look close".
+
 ## Open questions
 
 1. `_cluster_by_x1` keeps the **largest** x-cluster as the label column. On
@@ -250,3 +290,6 @@ previous commit so both versions ran through the same harness):
    a ship grants them by another route, §4 would read the surplus as an X
    bonus and inflate `Devices` and `Starship Traits` with it. Needs a
    cargo-side check of whether that route exists.
+3. Whether the second OCR pass can be dropped (see above). Blocked on one
+   measurement: the icon match rate over the whole corpus with strip tokens
+   against the current full-frame read. Worth 2–3 s per mixed screenshot.
