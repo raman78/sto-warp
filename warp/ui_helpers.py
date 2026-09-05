@@ -20,18 +20,15 @@ def window_title(name: str, suffix: str = '') -> str:
     Matches the format STO-CLARE uses, so the two programs read alike when
     both are open.
 
-    The number comes from the installed package's build metadata, so it is
-    the version that is *running* rather than the version in the working tree
-    — an editable install keeps showing the release it was built from until
-    it is reinstalled, and a checkout with no metadata at all reports
-    `0.0.0+unknown`. Shown as-is either way: a title claiming nothing is
-    worse than one admitting the build is old or unknown, and for the case
-    this exists for — a user reporting what they are running — the installed
-    version is the right answer.
+    The number is `warp.display_version`, which prefers what git says over
+    what the package was built with — so a working tree that has moved past
+    its last release says so in the title, `-dirty` marker and all, without
+    reinstalling. An installed copy has no repository beside it and shows a
+    plain release number.
     """
-    from warp import __version__
+    from warp import display_version
 
-    base = f'{name} V{__version__}'
+    base = f'{name} V{display_version()}'
     return f'{base} — {suffix}' if suffix else base
 
 

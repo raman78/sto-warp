@@ -18,19 +18,21 @@ from warp.ui_helpers import window_title
 
 
 def test_the_version_is_in_the_title():
-    from warp import __version__
+    """`display_version`, not `__version__`: the title says what is running,
+    which for a working tree past its last release is not what was built."""
+    from warp import display_version
 
-    assert window_title('sto-warp') == f'sto-warp V{__version__}'
+    assert window_title('sto-warp') == f'sto-warp V{display_version()}'
 
 
 def test_a_suffix_follows_the_version():
     """The version sits with the program name, not tacked on the end, so it
     stays readable when the window manager truncates a long title."""
-    from warp import __version__
+    from warp import display_version
 
     title = window_title('WARP CORE', 'ML Trainer')
 
-    assert title == f'WARP CORE V{__version__} — ML Trainer'
+    assert title == f'WARP CORE V{display_version()} — ML Trainer'
 
 
 def test_the_format_matches_the_sibling_program():

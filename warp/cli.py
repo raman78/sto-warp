@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import sys
 
-from warp import __version__
+from warp import __version__, display_version
 from warp.debug import log
 
 
@@ -19,7 +19,7 @@ def main(argv: list[str] | None = None) -> int:
         prog='sto-warp',
         description='Star Trek Online screenshot recognition (standalone WARP).',
     )
-    parser.add_argument('--version', action='version', version=f'sto-warp {__version__}')
+    parser.add_argument('--version', action='version', version=f'sto-warp {display_version()}')
     sub = parser.add_subparsers(dest='cmd')
     sub.add_parser('check', help='Verify installation and import the recognition pipeline.')
     sub.add_parser('launcher', help='Launch the combined WARP + WARP CORE tabbed window (default).')
@@ -60,7 +60,7 @@ def main(argv: list[str] | None = None) -> int:
         log.info('sto-warp check: importing recognition modules...')
         from warp.recognition import boff_keys, boff_marker, eq_geometry  # noqa: F401
         log.info('sto-warp check: OK')
-        print(f'sto-warp {__version__} — foundation modules import OK.')
+        print(f'sto-warp {display_version()} — foundation modules import OK.')
         return 0
 
     if args.cmd == 'install-desktop':
