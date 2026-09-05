@@ -45,6 +45,67 @@ _STD_IDX_TO_PROD_SLOT: dict[int, str] = {
     for name, idx in STD_ORDER.items()
 }
 
+
+def fill_unanchored_rows(row_cys: list[int], cy_to_slot: dict[int, str],
+                         expected: list[str]) -> dict[int, str]:
+    """Name the rows OCR could not read, from the rows it could.
+
+    `expected` is the sequence of slots this panel should show, top to bottom —
+    for space that is the canonical panel order filtered by the ship's profile,
+    so reading the ship and its tier already answers which rows exist. OCR
+    labels anchor whichever rows they can; every run of unanchored rows between
+    two anchors is then filled from the slots that lie between those anchors in
+    `expected`.
+
+    **Only when the count is unambiguous.** A run of two unanchored rows is
+    filled only if exactly two expected slots sit between its neighbours. If
+    the numbers disagree, the rows stay unnamed — an unnamed row costs the user
+    one manual box, a wrongly named one silently writes an item into the wrong
+    slot.
+
+    This replaces indexing a flat list by row number, which broke whenever the
+    list's order did not match the panel's. Measured on
+    `image-4e7c6849dd28da67.png`, where the Devices and Universal Consoles
+    labels are covered: the list placed `Hangars` at position 6 — because
+    `Hangars` was inserted right after `Aft Weapons`, while the game draws it
+    last — so row 6 was left empty, row 7 took `Devices`, every row below
+    shifted down one, and `Universal Consoles` was never placed at all.
+
+    Returns a new mapping; the input is not modified. Anchored rows always win.
+    """
+    out = dict(cy_to_slot)
+    if not row_cys or not expected:
+        return out
+
+    idx_of = {s: i for i, s in enumerate(expected)}
+    anchors = [(i, cy_to_slot[cy]) for i, cy in enumerate(row_cys)
+               if cy in cy_to_slot and cy_to_slot[cy] in idx_of]
+    if not anchors:
+        return out
+
+    def _assign(rows: list[int], slots: list[str]) -> None:
+        if len(rows) != len(slots) or not slots:
+            return
+        for r, s in zip(rows, slots):
+            out[row_cys[r]] = s
+
+    # Between consecutive anchors.
+    for (ra, sa), (rb, sb) in zip(anchors, anchors[1:]):
+        gap = [r for r in range(ra + 1, rb) if row_cys[r] not in cy_to_slot]
+        if not gap or idx_of[sb] <= idx_of[sa]:
+            continue
+        _assign(gap, expected[idx_of[sa] + 1:idx_of[sb]])
+
+    # Above the first anchor and below the last.
+    first_r, first_s = anchors[0]
+    _assign([r for r in range(first_r) if row_cys[r] not in cy_to_slot],
+            expected[:idx_of[first_s]])
+    last_r, last_s = anchors[-1]
+    _assign([r for r in range(last_r + 1, len(row_cys))
+             if row_cys[r] not in cy_to_slot],
+            expected[idx_of[last_s] + 1:])
+    return out
+
 from warp import config
 # Calibration file is stored in the XDG training-data dir.
 CALIBRATION_FILENAME      = 'anchors.json'
@@ -2270,38 +2331,47 @@ class LayoutDetector:
         for s in slot_order:
             if profile_known and profile.get(s, -1) == 0:
                 continue
+            if s in extended_order:
+                continue
             extended_order.append(s)
             if s == 'Deflector' and profile.get('Sec-Def', 0) > 0 and 'Sec-Def' not in extended_order:
                 extended_order.append('Sec-Def')
-            if s == 'Aft Weapons':
-                for opt in ('Experimental', 'Hangars'):
-                    if profile.get(opt, 0) > 0 and opt not in extended_order:
-                        extended_order.append(opt)
+            # Experimental only. `Hangars` used to be inserted here too, and
+            # the game draws it LAST, not after Aft Weapons — which put it at
+            # position 6 of the sequence and shifted every row below it down by
+            # one. It is already last in SPACE_SLOT_ORDER_CARRIER, so it needs
+            # no insertion; the `s in extended_order` guard above keeps it from
+            # being appended twice if a caller's order lists it early.
+            if s == 'Aft Weapons' and profile.get('Experimental', 0) > 0 \
+                    and 'Experimental' not in extended_order:
+                extended_order.append('Experimental')
+
+        # Rows OCR could not read are named from the rows it could, using the
+        # sequence the ship's profile says this panel holds — see
+        # `fill_unanchored_rows`. Anchored rows are untouched, and a run is
+        # only filled when its length matches the slots that belong in it.
+        filled = fill_unanchored_rows(geom.row_cys, cy_to_slot, extended_order)
+        for cy, name in filled.items():
+            if cy not in cy_to_slot:
+                _slog.info(
+                    f'LayoutDetector: row cy={cy} had no OCR label — '
+                    f'{name!r} from the profile sequence between the '
+                    f'anchored rows around it')
+        _unnamed = [cy for cy in geom.row_cys if cy not in filled]
+        if _unnamed:
+            # Said out loud rather than skipped quietly: an unnamed row is a
+            # slot the user will have to draw by hand, and the count is how
+            # anyone learns the sequence and the anchors disagree.
+            _slog.info(
+                f'LayoutDetector: {len(_unnamed)} row(s) left unnamed at '
+                f'cy={_unnamed} — the profile sequence does not fit the gaps '
+                f'between the OCR-anchored rows')
 
         result: dict = {}
         for i, cy in enumerate(geom.row_cys):
-            # cy_to_slot is authoritative (OCR-anchored). Fall back to
-            # positional extended_order only when no OCR mapping exists AND
-            # the row index fits within extended_order.
-            slot_name = cy_to_slot.get(cy)
+            slot_name = filled.get(cy)
             if slot_name is None:
-                if i >= len(extended_order):
-                    continue
-                slot_name = extended_order[i]
-                # The positional guess must never evict a row that OCR
-                # actually anchored: one EQ row = one slot, and an
-                # OCR-read label outranks a count-derived guess. Without
-                # this, a row whose label was missed took the name of the
-                # row above it and `result[slot_name] = bboxes` below
-                # silently replaced the real row's bboxes — the anchored
-                # row then had no bboxes at all and the user had to draw
-                # the slot by hand.
-                if slot_name in cy_to_slot.values():
-                    _slog.info(
-                        f'LayoutDetector: row {i} (cy={cy}) positional guess '
-                        f'{slot_name!r} already anchored by OCR on another '
-                        f'row — leaving this row unlabelled')
-                    continue
+                continue
             y_top = max(0, cy - icon_h // 2)
             y_bot = min(h, cy + icon_h // 2)
             pixel_count, _ = self._count_icons_in_row(
