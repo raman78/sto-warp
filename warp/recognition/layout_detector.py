@@ -3267,10 +3267,11 @@ class LayoutDetector:
         return result
 
     def _get_ocr(self):
+        # One reader per process, not one per component — see
+        # `text_extractor.shared_reader`.
         if self._ocr is None:
-            import easyocr
-            from warp.recognition.ui_translations import ocr_languages
-            self._ocr = easyocr.Reader(ocr_languages(), gpu=False, verbose=False)
+            from warp.recognition.text_extractor import shared_reader
+            self._ocr = shared_reader()
         return self._ocr
 
     def _load_calibration(self) -> dict | None:

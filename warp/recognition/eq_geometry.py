@@ -52,17 +52,15 @@ from typing import Optional
 import cv2
 import numpy as np
 
-# Lazy import to avoid circular dependency during module load
-_TEXT_EXTRACTOR = None
-
-
 def _get_easyocr_reader():
-    """Return a shared EasyOCR reader (via TextExtractor)."""
-    global _TEXT_EXTRACTOR
-    if _TEXT_EXTRACTOR is None:
-        from warp.recognition.text_extractor import TextExtractor
-        _TEXT_EXTRACTOR = TextExtractor()
-    return _TEXT_EXTRACTOR._get_ocr()
+    """The process-wide reader — see `text_extractor.shared_reader`.
+
+    This used to build a `TextExtractor` of its own purely to reach its
+    reader, which made a third one on top of the importer's and the layout
+    detector's. The extractor was never used for anything else here.
+    """
+    from warp.recognition.text_extractor import shared_reader
+    return shared_reader()
 
 
 # ----------------------------------------------------------------------------

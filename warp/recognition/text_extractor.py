@@ -99,6 +99,37 @@ SHIP_TIER_VALUES: list[str] = [
 ]
 
 
+_SHARED_READER = None
+
+
+def shared_reader():
+    """The one EasyOCR reader for this process.
+
+    Three were being built: `TextExtractor`'s, `LayoutDetector`'s, and a third
+    behind `eq_geometry`'s module-global `TextExtractor`. Each loads the text
+    detection network and the recognition network, so two of the three were
+    paying that cost for nothing — measured 2026-09-05 by counting distinct
+    reader objects during a run.
+
+    Sharing is safe because `readtext` does not mutate the reader: it is a
+    forward pass over the caller's pixels. The pipeline is also sequential —
+    one recognition worker at a time, walking a folder image by image — so
+    there is no concurrent use to serialise. Anything that changes either
+    assumption has to revisit this.
+
+    Built on first use, never torn down: the models stay resident for the
+    life of the process, which is what makes the second and later screenshots
+    cheap.
+    """
+    global _SHARED_READER
+    if _SHARED_READER is None:
+        import easyocr
+        from warp.recognition.ui_translations import ocr_languages
+        _SHARED_READER = easyocr.Reader(ocr_languages(), gpu=False,
+                                        verbose=False)
+    return _SHARED_READER
+
+
 def _fuzzy_tier(cand: str) -> str | None:
     """Fuzzy-snap an OCR token to a canonical SHIP_TIER_VALUES entry.
 
@@ -1714,7 +1745,5 @@ class TextExtractor:
 
     def _get_ocr(self):
         if self._ocr is None:
-            import easyocr
-            from warp.recognition.ui_translations import ocr_languages
-            self._ocr = easyocr.Reader(ocr_languages(), gpu=False, verbose=False)
+            self._ocr = shared_reader()
         return self._ocr
