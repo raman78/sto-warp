@@ -86,6 +86,12 @@ LABEL_TO_ROW_RATIO      = 0.46
 KM_MAX_CELLS            = 6      # STO max kit modules
 COL_LEFT_MIN_X          = 200    # filter stat-bar "Shields:" (x near 30-100)
 
+# How close an OCR string must be to a slot keyword to count as that label.
+# Same value the space detector has used all along (`eq_geometry`), for the
+# same reason: a legible label read with one wrong character used to drop its
+# whole row of slots. See `_fuzzy_slot`.
+LABEL_FUZZY_CUTOFF      = 0.65
+
 # Slot key on the SETS side ↔ canonical row index ↔ OCR keyword(s)
 SLOT_KIT_MODULES        = 'Kit Modules'
 SLOT_KIT                = 'Kit'
@@ -168,22 +174,55 @@ class GroundEQGeometry:
 # OCR helpers
 # ----------------------------------------------------------------------------
 
+def _fuzzy_slot(low: str) -> Optional[str]:
+    """Nearest EQ label keyword to an OCR string, or None if nothing is close.
+
+    The keywords were matched by exact string equality until 2026-09-05, so a
+    single mistyped character dropped a whole row of slots without a trace.
+    Measured on `Screenshot_2025-03-19_122129.png`: the reader returned
+    `'Kil Modules'` for a perfectly legible `Kit Modules` — one character in
+    eleven, similarity 0.909 — and the six Kit Module cells were lost.
+
+    The space equipment detector has fuzzed its labels all along
+    (`eq_geometry._fuzzy_best`, cutoff 0.65); the ground one simply never did.
+    Same rule, same cutoff, and the same length guard, which is what keeps the
+    tolerance from turning into invention: only keywords within two characters
+    of the token are considered, so `'devlces'` cannot reach `'kit modules'`
+    (0.444) and `'weapors'` cannot either (0.222).
+    """
+    from difflib import SequenceMatcher
+    best_name, best_ratio = None, 0.0
+    for kw, name in OCR_KEYWORD_TO_SLOT.items():
+        if abs(len(kw) - len(low)) > 2:
+            continue
+        r = SequenceMatcher(None, low, kw).ratio()
+        if r > best_ratio:
+            best_name, best_ratio = name, r
+    return best_name if best_ratio >= LABEL_FUZZY_CUTOFF else None
+
+
 def _match_label(tok: dict) -> Optional[str]:
     """Return canonical slot name if token text matches an EQ label.
 
     Filters:
       * "Shields:" (trailing colon) is a HUD stat label — reject.
       * "shields" with x0 < COL_LEFT_MIN_X is the HUD stat — reject.
+
+    An exact keyword wins outright; only when none matches is the token
+    fuzzed against them — see `_fuzzy_slot`.
     """
     low = tok['low'].rstrip(':').strip()
     # Reject HUD stat lines that begin with "shields:"
     if tok['low'].endswith(':') and low == 'shields':
         return None
-    if low in OCR_KEYWORD_TO_SLOT:
-        # "shields" must sit in the EQ column, not the stat bar
-        if low == 'shields' and tok['x0'] < COL_LEFT_MIN_X:
+    slot = OCR_KEYWORD_TO_SLOT.get(low) or _fuzzy_slot(low)
+    if slot is not None:
+        # "shields" must sit in the EQ column, not the stat bar. Checked on
+        # the resolved slot rather than the raw string, so a fuzzy hit on a
+        # misread `Shields` is filtered the same way an exact one is.
+        if slot is SLOT_PERSONAL_SHIELD and tok['x0'] < COL_LEFT_MIN_X:
             return None
-        return OCR_KEYWORD_TO_SLOT[low]
+        return slot
     # OCR sometimes merges "Body" + "EV Suit" into one token.
     if 'body' in low and ('ev' in low or 'suit' in low):
         # We can't reliably split a merged token here; flag as Body only.
@@ -211,16 +250,19 @@ def _collect_candidates(ocr: list[dict]) -> dict[str, list[dict]]:
 
     Merged 'Body EV Suit' tokens emit two virtual hits — one for Body Armor
     (at original x0) and one for EV Suit (at x0 + w × 0.4, marked `_split`).
+
+    Keyword matching goes through `_match_label` so this and `_match_label`
+    cannot drift apart: they had the same exact-string test written out twice,
+    and adding fuzzy tolerance to one of them would have left the other
+    silently strict.
     """
     out: dict[str, list[dict]] = {}
     for tok in ocr:
         low = tok['low'].rstrip(':').strip()
-        if tok['low'].endswith(':') and low == 'shields':
-            continue
-        if low in OCR_KEYWORD_TO_SLOT:
-            if low == 'shields' and tok['x0'] < COL_LEFT_MIN_X:
-                continue
-            out.setdefault(OCR_KEYWORD_TO_SLOT[low], []).append(tok)
+        slot = _match_label(tok)
+        if slot is not None and not (
+                'body' in low and ('ev' in low or 'suit' in low)):
+            out.setdefault(slot, []).append(tok)
             continue
         if 'body' in low and ('ev' in low or 'suit' in low):
             out.setdefault(SLOT_BODY_ARMOR, []).append(tok)
