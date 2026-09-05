@@ -86,6 +86,16 @@ LABEL_TO_ROW_RATIO      = 0.46
 KM_MAX_CELLS            = 6      # STO max kit modules
 COL_LEFT_MIN_X          = 200    # filter stat-bar "Shields:" (x near 30-100)
 
+# Where each row's label sits, as a multiple of the panel's row pitch, taking
+# `Kit Modules` as zero. Ground rows are NOT evenly spaced: `Weapons` holds two
+# stacked cells, so `Ground Devices` follows it about one and a half rows down.
+#
+# Measured 2026-09-06 over the 17 ground screenshots with confirmed boxes, whose
+# row pitch ranges from 58 to 106 px. Standard deviation per row was 0.013-0.024
+# of a pitch — around 1.2 px on a typical panel — so one label positions all the
+# others. See `_fill_missing_labels`.
+ROW_RATIO: dict[str, float] = {}     # populated after the slot names exist
+
 # How close an OCR string must be to a slot keyword to count as that label.
 # Same value the space detector has used all along (`eq_geometry`), for the
 # same reason: a legible label read with one wrong character used to drop its
@@ -100,6 +110,17 @@ SLOT_EV_SUIT            = 'EV Suit'
 SLOT_PERSONAL_SHIELD    = 'Personal Shield'
 SLOT_WEAPONS            = 'Weapons'
 SLOT_GROUND_DEVICES     = 'Ground Devices'
+
+# The measured row offsets — see the note beside the `ROW_RATIO` declaration.
+ROW_RATIO.update({
+    SLOT_KIT_MODULES:     0.000,
+    SLOT_KIT:             1.010,
+    SLOT_BODY_ARMOR:      2.013,
+    SLOT_EV_SUIT:         2.013,   # same row as Body Armor, right column
+    SLOT_PERSONAL_SHIELD: 3.004,
+    SLOT_WEAPONS:         4.021,
+    SLOT_GROUND_DEVICES:  5.721,
+})
 
 # OCR keyword → canonical slot (lowercased single-token match)
 OCR_KEYWORD_TO_SLOT = {
@@ -173,6 +194,45 @@ class GroundEQGeometry:
 # ----------------------------------------------------------------------------
 # OCR helpers
 # ----------------------------------------------------------------------------
+
+def _fill_missing_labels(cys: dict[str, int], row_pitch: int) -> dict[str, int]:
+    """Place the labels OCR missed, using the ones it read.
+
+    Ground rows are not evenly spaced — `Weapons` holds two stacked cells, so
+    what follows it sits about one and a half rows lower, not one. But the
+    spacing is a fixed *proportion* of the panel's scale, and a very stable one:
+    measured over 17 ground screenshots spanning row pitches from 58 to 106 px,
+    each row's offset from `Kit Modules` in units of row pitch came out as
+
+        Kit Modules 0.000   Kit 1.010   Body/EV 2.013
+        Personal Shield 3.004   Weapons 4.021   Ground Devices 5.721
+
+    with a standard deviation of 0.013–0.024 across every screenshot — about
+    1.2 px on a typical panel. Those are `ROW_RATIO`.
+
+    So any one label positions all the others. The median of the candidates is
+    taken rather than the first, so a single label that OCR placed a little low
+    cannot drag the whole panel with it.
+
+    Only missing labels are added; anything OCR read is left exactly as it was,
+    because a real reading beats a projection.
+    """
+    if not cys or row_pitch <= 0:
+        return cys
+    out = dict(cys)
+    anchors = [(ROW_RATIO[s], cy) for s, cy in cys.items() if s in ROW_RATIO]
+    if not anchors:
+        return out
+    for slot, ratio in ROW_RATIO.items():
+        if slot in out:
+            continue
+        guesses = sorted(int(round(cy + (ratio - r) * row_pitch))
+                         for r, cy in anchors)
+        cy = guesses[len(guesses) // 2]
+        if cy >= 0:
+            out[slot] = cy
+    return out
+
 
 def _fuzzy_slot(low: str) -> Optional[str]:
     """Nearest EQ label keyword to an OCR string, or None if nothing is close.
@@ -427,12 +487,12 @@ def detect_ground_eq_geometry(
     # so it projects a right column for Devices/Body row pairing).
     slot_label_cys = {s: h['cy'] for s, h in hits.items()}
 
-    # Interpolate Kit when OCR missed the short "Kit" label but Body Armor
-    # is present — Kit is always exactly 1 row_pitch above Body Armor.
-    if SLOT_KIT not in slot_label_cys and SLOT_BODY_ARMOR in slot_label_cys:
-        kit_cy = slot_label_cys[SLOT_BODY_ARMOR] - row_pitch
-        if kit_cy >= 0:
-            slot_label_cys[SLOT_KIT] = kit_cy
+    # Every label OCR missed is placed from the ones it read — see ROW_RATIO.
+    # Only `Kit` used to be recovered this way, from `Body Armor` alone; every
+    # other missing label lost its whole row of slots, which is what one
+    # mistyped character in `Kit Modules` cost before the label matcher
+    # learned to fuzz.
+    slot_label_cys = _fill_missing_labels(slot_label_cys, row_pitch)
 
     return GroundEQGeometry(
         row_pitch=row_pitch,
