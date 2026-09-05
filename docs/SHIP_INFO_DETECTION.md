@@ -556,6 +556,12 @@ One screenshot changes, and every field on it moves from empty to correct
 corpus moves, because the failure needs OCR to merge two lines *and* every
 cheaper pass to fail.
 
+The probe constructs `TextExtractor` directly, so the community correction map
+is not loaded — `load_corrections` is called by `WarpImporter._get_text`, not by
+the constructor. The absolute agreement columns are therefore the extractor's
+own, before corrections; the before/after delta is unaffected, since the same
+map (none) applies to both runs.
+
 Ground, BOFF, trait, skill and specialization screens were swept separately
 (353 images, `dev/probe_ship_header_nonspace.py`): 1d never fires on any of
 them, so it cannot have changed their reading. That sweep replaces a
