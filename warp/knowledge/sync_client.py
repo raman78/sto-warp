@@ -82,22 +82,57 @@ ICON_EQUIVALENCE_HF_REPO   = 'sets-sto/sto-icon-dataset'
 ICON_EQUIVALENCE_HF_FILE   = 'icon_equivalence.json'
 ICON_EQUIVALENCE_MAX_AGE_HOURS = 24
 
+# The backend declares `warp_version` as `Field('', max_length=20)`, and
+# Pydantic refuses the whole request when it is longer — so an over-long
+# version does not mislabel one crop, it drops the batch. A hatch-vcs dev
+# build can produce `1.0.36.dev1+g3a46caf.d20260905`, which is 30.
+_WIRE_VERSION_MAX = 20
+
+
 def _resolve_warp_version() -> str:
-    """Best-effort sto-warp version for the ``WARP/<ver>`` User-Agent and
-    the ``warp_version`` upload field. Tries installed package metadata
-    first (pipx / PyPI installs); falls back to ``warp/_version.py``
-    written by the build-time vcs-versioning hook (dev checkouts);
-    finally ``'unknown'`` so we never crash on import."""
+    """The sto-warp version for the ``WARP/<ver>`` User-Agent and the
+    ``warp_version`` upload field.
+
+    Read from the package that is actually imported. The distribution
+    metadata was tried first until 2026-09-05, and it is written once when a
+    copy is installed: on the maintainer's editable install it reported
+    1.0.18.dev1 against a package saying 1.0.32.dev7, so every crop uploaded
+    from that machine was recorded against a version eighteen releases old.
+    For an ordinary install the two agree, which is why nothing ever showed
+    it.
+
+    This is the version *built*, not the one `warp.display_version` shows a
+    person — a git description carries a commit hash and a dirty marker, and
+    neither fits the field (see `_WIRE_VERSION_MAX`).
+    """
     try:
-        from importlib.metadata import version
-        return version('sto-warp')
+        from warp import __version__
+        if __version__ and __version__ != '0.0.0+unknown':
+            return _fit_for_wire(__version__)
     except Exception:
         pass
     try:
-        from warp._version import __version__
-        return __version__
+        from importlib.metadata import version
+        return _fit_for_wire(version('sto-warp'))
     except Exception:
         return 'unknown'
+
+
+def _fit_for_wire(v: str) -> str:
+    """`v` shortened until the backend will accept it, never truncated.
+
+    A truncated version is worse than a vague one: `1.0.36.dev1+g3a46c` reads
+    as a real version and is not one. So the local segment goes first — it is
+    the part that carries build noise — and only if the release itself is
+    somehow still too long does this give up and say so.
+    """
+    v = (v or '').strip()
+    if len(v) <= _WIRE_VERSION_MAX:
+        return v
+    release = v.split('+', 1)[0]
+    if len(release) <= _WIRE_VERSION_MAX:
+        return release
+    return 'unknown'
 
 
 WARP_VERSION = _resolve_warp_version()
