@@ -90,6 +90,13 @@ TEXT_LEARNING_SLOTS: frozenset = frozenset({'Ship Type', 'Ship Tier'})
 # Crop is saved and uploaded like any icon annotation, but must NOT be written to the SETS build.
 VIRTUAL_ITEM_NAMES: frozenset = frozenset({'__empty__', '__inactive__'})
 
+# How much a `Ship Tier` box may overlap the `Ship Type` box before the two are
+# judged to be the same rectangle. A real tier badge is a fraction of the class
+# line it sits on — measured, a 74 px badge against a 292 px line overlaps at
+# 0.25 — so the bar sits far above anything a genuine badge box can reach, and
+# still catches a box that differs by a pixel of rounding.
+_SHARED_BOX_IOU = 0.90
+
 
 @dataclass
 class Annotation:
@@ -647,13 +654,60 @@ class TrainingDataManager:
 
     # ---------------------------------------------------------------- crop export
 
+    def tier_box_is_the_class_line(self, image_path: Path,
+                                    bbox: tuple | None) -> bool:
+        """Is this `Ship Tier` rectangle just the ship's class line again?
+
+        When no tier badge is found on screen, recognition falls back to giving
+        the tier row the class line's box — the whole `Verne Temporal Science
+        Vessel [T6-X2]` band rather than the `[T6-X2]` inside it. The row is
+        still useful to a human, who can read the tier off it, and it is
+        useless as a *picture of a tier*: it is a picture of a ship's name.
+
+        Worse, it is actively harmful once shared. Identical pixels give an
+        identical hash, so the tier crop and the class crop become one entry in
+        the community tally. That is how `Fleet Yamaguchi Support Cruiser` came
+        to be recorded as a `Ship Tier`, five votes strong, with the correct
+        `T6-X2` demoted to a loser.
+
+        Callers use this to refuse the crop **and say so** — the answer is
+        never to drop it quietly, because a user who is told can draw the badge
+        a box of its own, and then the tier is known to everybody instead of to
+        nobody.
+        """
+        if not bbox or len(bbox) < 4:
+            return False
+        key = self._image_id(image_path)
+        for d in self._annotations.get(key, []):
+            if d.get('slot') != 'Ship Type':
+                continue
+            other = tuple(d.get('bbox') or ())
+            if len(other) < 4:
+                continue
+            if _bbox_iou(tuple(bbox), other) >= _SHARED_BOX_IOU:
+                return True
+        return False
+
     def _export_crop(self, image_path: Path, ann: Annotation):
         """
         Crops the icon region from the original screenshot and saves it as PNG.
         Filename is derived from item name + slot (for easy dataset browsing).
         TEXT_LEARNING_SLOTS get a crop so the text region can be uploaded for OCR training.
+
+        One case is refused: a `Ship Tier` whose box is the class line — see
+        `tier_box_is_the_class_line`. The annotation is kept, so the tier is
+        still in the build and still shown for review; only the picture is not
+        written, because that picture is of the wrong thing.
         """
         import cv2
+        if ann.slot == 'Ship Tier' and self.tier_box_is_the_class_line(
+                image_path, tuple(ann.bbox or ())):
+            logger.info(
+                f'{image_path.name}: no crop for Ship Tier {ann.name!r} — its '
+                f'box {tuple(ann.bbox)} is the ship class line, not the badge. '
+                f'Draw a box around the tier badge to contribute it.')
+            ann.crop_name = ''
+            return
         img = cv2.imread(str(image_path))
         if img is None:
             return

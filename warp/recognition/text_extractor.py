@@ -179,6 +179,17 @@ _TIER_FUSED_ROW_RATIO = 1.6
 # a second full scan.
 _TIER_FUSED_MAX_REREADS = 3
 
+# `split_badge_box` — how the badge is separated from the class name it shares
+# a line with. EasyOCR groups neighbouring detections into one line when the
+# horizontal gap between them is under `width_ths` times their height; the
+# default 0.5 is generous enough to swallow the space before `[T6-X2]`. At 0.05
+# the badge comes back as its own box (measured over the corpus below), and the
+# class name splits into words, which costs nothing because only the box
+# carrying a snappable bracket is kept. The upscale is what makes the small
+# glyphs legible at that grouping.
+_BADGE_SPLIT_WIDTH_THS = 0.05
+_BADGE_SPLIT_SCALE = 3.0
+
 # How far an OCR box may overrun the tier anchor's left edge and still count as
 # a token to its left. EasyOCR boxes for neighbouring glyph runs routinely
 # overlap by a few px; the old flat 2 px allowance dropped the class line of a
@@ -722,6 +733,16 @@ class TextExtractor:
                     tier_row = r
                     result['ship_tier'] = tier_value
                     result['ship_tier_bbox'] = (tok['x'], tok['y'], tok['w'], tok['h'])
+                    # The token may carry the class line as well as the badge.
+                    # Box the badge alone when it can be found — see
+                    # `split_badge_box` for why a shared box is not cosmetic.
+                    if consume_start > 0:
+                        _tight = self.split_badge_box(img, tok)
+                        if _tight:
+                            result['ship_tier_bbox'] = _tight
+                            _slog.info(
+                                f'TextExtractor: badge boxed apart from the '
+                                f'class line — {_tight} within {tok["text"]!r}')
                     if matched_via_bracket:
                         _slog.info(
                             f'TextExtractor: tier={tier_value!r} from '
@@ -759,6 +780,17 @@ class TextExtractor:
                         result['ship_tier'] = snapped
                         result['ship_tier_bbox'] = (
                             tok['x'], tok['y'], tok['w'], tok['h'])
+                        # Same as pass 1: this token is `Name [TB-X2]` by
+                        # definition, so the badge always shares its box with
+                        # the class line unless it is boxed apart.
+                        if m_br.start() > 0:
+                            _tight = self.split_badge_box(img, tok)
+                            if _tight:
+                                result['ship_tier_bbox'] = _tight
+                                _slog.info(
+                                    f'TextExtractor: badge boxed apart from '
+                                    f'the class line — {_tight} within '
+                                    f'{tok["text"]!r}')
                         prefix = tok['text'][:m_br.start()].strip().rstrip(' [')
                         if len(prefix) > 4 and not _is_blacklisted(prefix):
                             result['ship_type'] = prefix
@@ -1478,8 +1510,67 @@ class TextExtractor:
         self._scan_cache_tokens = tokens
         return tokens
 
+    def split_badge_box(self, img: np.ndarray, tok: dict) -> tuple | None:
+        """Box the tier badge alone inside a token that also holds the class.
+
+        Anchors 1 and 1b find the tier inside a token like
+        `'Verne Temporal Science Vessel [T6-X2]'` and used to hand the whole
+        token's rectangle to *both* `ship_tier_bbox` and `ship_type_bbox`. The
+        tier string is right; the rectangle is a picture of a ship's name.
+
+        Measured 2026-09-05 over one maintainer's store: **57 % of confirmed
+        `Ship Tier` rows carried a box shared with `Ship Type`** — the normal
+        case, not an edge case. Downstream that is a crop of the wrong thing,
+        and because identical pixels give an identical hash it merged the tier
+        and class ballots on the server (see the per-slot ballot in
+        `democratic_merge_crops`).
+
+        Anchors 1c and 1d already box only the badge, each from information it
+        had anyway. This does the same for a single fused token, which has none
+        to spare: it asks the reader for those pixels again and keeps the
+        sub-box whose text carries the bracket.
+
+        **Upscaling alone does not do it, and that is the whole difficulty.**
+        Pass 1d works because there the badge and the registry line are stacked
+        *vertically*, and a bigger picture separates them. Here the badge sits
+        beside the class name on one line, so the reader is right to return it
+        as one line — measured on `1-ba54d6e861e08f02.png`, a 3x re-read still
+        gave `'Verne Temporal Science Vessel [T6-X2]'` as a single box.
+
+        What separates them is asking for a different *grouping*: EasyOCR
+        merges neighbouring detections into a line when the horizontal gap is
+        under `width_ths` of their height. Measured on the same crop:
+
+            width_ths 0.5 (default) → 'Verne Temporal Science Vessel [T6-X2]'
+            width_ths 0.15          → 'Verne' 'Temporal' 'Science' 'Vessel [T6-X2]'
+            width_ths 0.05          → 'Verne' 'Temporal' 'Science' 'Vessel' '[T6-X2]'
+
+        so the badge comes back as a box of its own. The class name splits into
+        words as well, which costs nothing — this only ever keeps the box whose
+        text holds a bracket that snaps to a real tier.
+
+        Returns `None` when nothing better than the whole token was found — the
+        caller then keeps what it had, so this can only improve a box, never
+        lose one.
+        """
+        best = None
+        for sub in self.rescan_region(
+                img, (tok['x'], tok['y'], tok['w'], tok['h']),
+                scale=_BADGE_SPLIT_SCALE, width_ths=_BADGE_SPLIT_WIDTH_THS):
+            m_br = re.search(r'\[([A-Za-z0-9\- ]{2,8})\]', sub['text'])
+            if not m_br or not _fuzzy_tier(
+                    m_br.group(1).upper().replace(' ', '')):
+                continue
+            bb = (sub['x0'], sub['y0'], sub['w'], sub['h'])
+            # Only accept a genuine tightening. A re-read that hands back
+            # something as wide as the token has told us nothing, and taking it
+            # would swap a known box for an equally wrong one.
+            if bb[2] < tok['w'] * 0.9 and (best is None or bb[2] < best[2]):
+                best = bb
+        return best
+
     def rescan_region(self, img: np.ndarray, bbox,
-                      scale: float = 2.0) -> list[dict]:
+                      scale: float = 2.0, **reader_kwargs) -> list[dict]:
         """Re-read one region of the image on its own, at `scale`× size.
 
         `scan_image` reads the whole screenshot in five full-width strips.
@@ -1495,6 +1586,11 @@ class TextExtractor:
         boxes). So this is a second look at a region already known to be
         interesting, not a second scan — callers are expected to have a reason
         to spend the extra OCR call.
+
+        `reader_kwargs` are passed to `readtext`, which is how a caller asks
+        for a different *grouping* rather than a different picture — see
+        `split_badge_box`, which lowers `width_ths` so side-by-side text is not
+        merged into one line.
 
         Coordinates come back in full-image pixel space, so the result drops
         straight into the token lists `scan_image` produces. Returns `[]` on an
@@ -1516,7 +1612,8 @@ class TextExtractor:
             up = cv2.resize(img[y0:y1, x0:x1], None, fx=scale, fy=scale,
                             interpolation=cv2.INTER_CUBIC)
             raw = self._get_ocr().readtext(
-                cv2.cvtColor(up, cv2.COLOR_BGR2RGB), detail=1, paragraph=False)
+                cv2.cvtColor(up, cv2.COLOR_BGR2RGB), detail=1, paragraph=False,
+                **reader_kwargs)
         except Exception as e:
             _slog.debug(f'TextExtractor.rescan_region: {e}')
             return []
