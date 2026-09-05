@@ -1524,11 +1524,32 @@ class TextExtractor:
     def scan_image(self, img: np.ndarray) -> list[dict]:
         """Scan full image in horizontal strips and return all OCR tokens.
 
-        Splits the image into 5 strips (~20 % height each, with small
-        overlap at boundaries) so that small labels get adequate
-        effective resolution.  Results are cached per image (by
-        ``id(img)``); call ``clear_scan_cache()`` when moving to a new
-        image.
+        Splits the image into 5 strips (~20 % height each, with small overlap
+        at boundaries). Results are cached per image (by ``id(img)``); call
+        ``clear_scan_cache()`` when moving to a new image.
+
+        **Not for resolution.** That was the reason recorded here until
+        2026-09-05 and it is false: EasyOCR's detector rescales with
+        ``resize_aspect_ratio(img, canvas_size=2560, mag_ratio=1)``, which only
+        ever scales *down*, and only when the longest side exceeds 2560 px. A
+        horizontal strip has the same width as the frame, so the longest side —
+        and therefore the scale — is identical. Instrumented on real
+        screenshots: ratio 1.0 for the whole frame and 1.0 for a strip.
+
+        Nor for speed. The remembered intent was to find the ship-header anchor
+        early and stop, but the loop below has no early exit and never had one:
+        all five strips are always read, at 1.42 s against 1.39 s for a single
+        whole-frame read.
+
+        What the split *does* buy is positional accuracy, and that is the
+        reason it stays. Feeding a whole-frame read to every consumer instead
+        was measured over 52 screenshots across all 14 screen types: the screen
+        type changed on 2 (one better, one worse, both noise), the ship class
+        and tier on none, and the equipment grid on 9. Drawing both grids on the
+        same screenshot settled it — today's strip-derived grid sits tight on
+        the icons while the whole-frame one sits 2-3 px low, clipping the top of
+        the Body Armor and EV Suit cells. Why the strips locate a label row more
+        accurately is not established; that they do is (`dev/draw_grid_compare.py`).
 
         Returns list of dicts, each with:
             text, low, conf, x0, y0, x1, y1, cx, cy, w, h

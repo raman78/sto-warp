@@ -277,6 +277,40 @@ So the second pass stays until someone spends that measurement. The saving is
 real and so is the risk; what is not acceptable is trading one for the other on
 the strength of "the numbers look close".
 
+### And the reverse — one whole-frame read for everyone — was tried and drawn
+
+The other direction is more promising on paper: keep the whole-frame read this
+stage already does, make it the *only* read, and retire
+`TextExtractor.scan_image`'s five strips. That would leave space EQ geometry
+byte-identical, since it is already the whole-frame reader, and remove the
+strip splitting, the boundary stitching and the cross-strip dedup outright.
+
+Measured over 52 screenshots spanning all 14 screen types
+(`dev/probe_one_read.py`):
+
+| | changed |
+|---|---|
+| screen type | 2 of 52 |
+| ship class and tier | **0 of 52** |
+| ship header bboxes | 4 of 52, by 1 px |
+| ground equipment geometry | 9 of 52 |
+
+The two screen-type changes are noise: one screenshot is read better, one
+worse, and on the second both readings produce only mangled tokens
+(`sterahip`, `srorahi`) with no keyword either way.
+
+The grid was the open question, and a table could not answer it — this grid was
+calibrated by eye in the first place. So both candidate grids were drawn on the
+same screenshot, today's in green and the whole-frame one in red
+(`dev/draw_grid_compare.py`). **Today's sits tight on the icons; the
+whole-frame grid sits 2–3 px low**, clipping the top of the Body Armor and EV
+Suit cells on both ground screenshots examined.
+
+So the strips stay, and the reason they stay is now the measured one rather
+than the one that used to be written in `scan_image` — which claimed
+resolution, and was false. Why a narrow band locates a label row more
+accurately than the whole frame is not established; that it does, is.
+
 ## Open questions
 
 1. `_cluster_by_x1` keeps the **largest** x-cluster as the label column. On
