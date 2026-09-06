@@ -292,6 +292,45 @@ Each step is wrapped in `try/except` so an upstream 5xx never aborts
 the next step. Failures log at WARNING and the cycle proceeds; the
 next 60 min tick retries naturally.
 
+### The daily request budget
+
+Everything that POSTs shares one budget, because the server counts them
+together. `sets-warp-backend` admits `MAX_REQ_PER_INSTALL` **requests** per
+UTC day — 500 by default — and keeps a second bucket of the same size keyed
+on the client's IP. It does not count items, and it counts a request whether
+or not it accepted what was in it.
+
+Every client counter predating this measured something else. The trainer
+counted crops it had queued (`MAX_DAILY_UPLOADS`, 1000); the knowledge client
+counted contributions the server had accepted. Neither moves on a day of
+refusals, so neither could stop one. `warp.backend_budget.DailyBudget` counts
+requests, is shared by `warp.trainer.sync` and
+`warp.knowledge.sync_client`, and lives in `~/.config/warp/backend_budget.json`
+so a restart does not hand the client a budget the server disagrees with.
+
+It stops on two independent signals, and both are needed:
+
+- **Our own count**, against `MAX_DAILY_REQUESTS` (480, deliberately under
+  the server's 500). This is a *prediction* of the per-install bucket, and it
+  is what keeps an ordinary day from ever reaching a refusal.
+- **A 429 we were actually given.** The prediction cannot stand alone: the
+  per-IP bucket is shared with everyone behind the same address and is
+  invisible from here, the buckets live in the server process so a restart
+  clears them, and the cap is an environment variable that can change under
+  us. A refusal is ground truth and is honoured until the UTC day turns.
+
+A 429 therefore ends the whole upload run — `BackendBudgetExhausted`, which
+every channel re-raises — rather than one channel. Before that, a refusal was
+a per-channel warning and the loop carried on: about fifteen POSTs per cycle
+learning the same answer, one per screen-type directory plus crops and
+anchors, each counted against the very budget that was missing. The knowledge
+client was worse: a 429 was treated as a transient outage, so each queued
+contribution was retried three times, then again after a five-minute backoff
+— on its own roughly 864 refused requests a day against a cap of 500. Between
+them, clearing the backlog was what kept the door shut: measured 2026-09-06,
+127 corrected screen types had been stuck at "not yet shared" for days while
+the install sat at 638 of its own 1000-item allowance.
+
 **`upload` goes first, and that ordering is deliberate.** It was last until
 2026-09-06, which made the only step that *sends* the user's work the first
 thing lost whenever a cycle was cut short — and it waited behind the two
@@ -335,6 +374,7 @@ noticeable UI freeze on close while an upload finishes.
 │   ├── data/crops/<ab>/<sha>.png     ← sharded by the first two characters
 │   ├── data/annotations.jsonl
 │   └── crops_manifest.json           ← dataset SHA pin for idempotent refresh
+├── backend_budget.json               ← requests sent today + any 429 received
 ├── knowledge.json                    ← community pHash entries
 ├── icon_equivalence.json             ← admin-curated equivalence classes
 └── warp_*.log                        ← per-channel logs

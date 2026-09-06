@@ -119,6 +119,16 @@ def rate_limit_file() -> Path:
     return cache_dir() / 'contribute_rate_limit.json'
 
 
+def backend_budget_file() -> Path:
+    """Requests sent to the backend today, shared by every uploader.
+
+    Separate from `rate_limit_file` on purpose: that one counts accepted pHash
+    contributions, this one counts requests, which is the unit the backend
+    actually caps. See `warp.backend_budget`.
+    """
+    return cache_dir() / 'backend_budget.json'
+
+
 def recognition_stats_file() -> Path:
     """Per-image icon-match stats sink used by WarpImporter."""
     return data_dir() / 'recognition_stats.json'

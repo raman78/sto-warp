@@ -37,7 +37,9 @@ WARP CORE confirm
 SyncManager.check_and_upload()         (registered in warp_button.py)
   • interval:        every 10 min
   • startup delay:   15 s after app launch
-  • daily rate cap:  1000 new files per install_id (corrections are free)
+  • daily item cap:  1000 new files per install_id (corrections are free)
+  • daily request budget: 480 POSTs, shared with WARPSyncClient — this is
+    the one that matches what the backend enforces (see below)
   ▼
 SyncWorker.run() — batched POSTs to the HF Spaces backend:
   • POST /contribute/bulk-crops      (≤50 items per request)
@@ -67,8 +69,11 @@ SyncWorker.run() — batched POSTs to the HF Spaces backend:
 WARP user confirms an unusual icon
   └─► WARPSyncClient.contribute(crop_bgr, item_name, …)
           • non-blocking thread
-          • local rate-limit:  200 contributions / install_id / day
-          • circuit breaker:   on 503/network error, back off 5 min
+          • local rate-limit:  200 accepted contributions / install_id / day
+          • circuit breaker:   on 503/network error, back off 5 min;
+                               on 429, stop until midnight UTC — a daily
+                               quota is not an outage and retrying it
+                               spends the budget that is missing
   ▼
 POST https://sets-sto-warp-backend.hf.space/contribute
   • 60 s read timeout (covers Space cold-start after ~48 h idle)
@@ -210,6 +215,18 @@ Space cold-starts.
 Material changes that affect the numbers above but did not invalidate the
 overall picture:
 
+- **The daily budget counts requests (2026-09-06).** The envelope in §4 was
+  written against the backend's per-install and per-IP caps, which count
+  **requests**; the client's own guards counted items (trainer) and accepted
+  contributions (knowledge client), so an install could be refused all day
+  while both guards read as having room. `warp.backend_budget.DailyBudget` is
+  now the shared counter for both paths, in the unit the server uses, and a
+  429 stops every uploader until midnight UTC instead of being retried.
+  Measured on the maintainer's install: 127 corrected screen types stuck for
+  days, every POST refused, and the retrying itself — about fifteen doomed
+  requests per sync cycle from the trainer and roughly 864 a day from the
+  knowledge client's three-attempt burst — was consuming the 500/day cap that
+  was missing. See `SYNC_ARCHITECTURE.md` § *The daily request budget*.
 - **1.0.15 — tarball cold start.** First-run community-crops download
   switched from one HTTP request per crop to a single weekly-rebuilt
   archive (`sets-sto/sto-icon-dataset` releases). The 4.1 "list 50 000

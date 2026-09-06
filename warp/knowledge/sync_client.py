@@ -36,7 +36,22 @@ from typing import Callable
 import numpy as np
 
 from warp import userdata, config
+from warp.backend_budget import DailyBudget
 from warp.debug import syslog as log
+
+
+def _end_of_utc_day() -> float:
+    """`time.time()` for the next UTC midnight.
+
+    The breaker normally reopens after five minutes, which is right for
+    an outage and wrong for a daily quota — the answer will not change
+    until the day does, and asking again costs a request that counts.
+    """
+    import datetime as _dt
+    now = _dt.datetime.now(_dt.UTC)
+    nxt = (now + _dt.timedelta(days=1)).replace(
+        hour=0, minute=0, second=0, microsecond=0)
+    return time.time() + (nxt - now).total_seconds()
 
 
 # Poison label policy — mirrors sets-warp-backend main.py (D-A.1 / D-B.3).
@@ -812,11 +827,30 @@ class WARPSyncClient:
         # (success / breaker trip) tells the user everything that
         # matters, and per-attempt lines just spam the log even at
         # DEBUG level when the backend is sleeping.
+        # A daily quota is not a cold start, and retrying one is the single
+        # biggest waste this client was capable of: three attempts per queued
+        # contribution, a five-minute wait, then three more — about 864
+        # refused requests a day against a cap of 500, which on its own kept
+        # the install permanently cut off. So the budget is consulted before
+        # the burst, and a 429 ends it immediately.
+        budget = DailyBudget()
+        reason = budget.blocked_reason()
+        if reason:
+            self._backend_unavailable_until = _end_of_utc_day()
+            if not self._outage_warned:
+                log.warning(f'WARPSync: not contributing today — {reason}. '
+                            f'{self._queue.depth()} queued; they stay on disk '
+                            f'and go up after midnight UTC.')
+                self._outage_warned = True
+                self._outage_last_log_ts = time.time()
+            return 'retry'
+
         last_err: Exception | None = None
         last_err_detail: str = ''
         result: dict | None = None
         for attempt in range(3):
             try:
+                budget.note_request()
                 result = _post()
                 break
             except _ue.HTTPError as e:
@@ -833,7 +867,14 @@ class WARPSyncClient:
                     last_err_detail = str(parsed.get('detail', body))[:200]
                 except Exception:
                     last_err_detail = body
-                if 400 <= e.code < 500 and e.code != 429:
+                if e.code == 429:
+                    # Not a transient outage: the server has said come back
+                    # tomorrow. Retrying spends the very budget that is
+                    # missing, so the burst ends here and so does the day.
+                    budget.note_refusal(last_err_detail or body)
+                    self._backend_unavailable_until = _end_of_utc_day()
+                    return 'retry'
+                if 400 <= e.code < 500:
                     log.warning(
                         f'WARPSync: contribution rejected by backend '
                         f'(HTTP {e.code}: {last_err_detail or e.reason})'

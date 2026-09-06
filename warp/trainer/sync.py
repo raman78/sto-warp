@@ -38,6 +38,7 @@ from pathlib import Path
 from PySide6.QtCore import QObject, QThread, Signal
 
 from warp.trainer.training_data import TrainingDataManager, NON_ICON_SLOTS
+from warp.backend_budget import BackendBudgetExhausted, DailyBudget
 from warp.knowledge.sync_client import DEFAULT_BACKEND_URL
 
 logger = logging.getLogger(__name__)
@@ -54,7 +55,12 @@ CROPS_DIR        = "data/crops"           # approved
 ANNOTATIONS_FILE = "data/annotations.jsonl"
 
 STAGING_ROOT     = "staging"              # user contributions land here
-MAX_DAILY_UPLOADS = 1000                  # per install_id, per UTC day
+# Items per install_id, per UTC day. A bandwidth courtesy, and *not* what the
+# backend enforces — it caps requests, which is counted in
+# `warp.backend_budget` and shared with the knowledge client. This one cannot
+# prevent a refusal: measured 2026-09-06, an install sitting at 638/1000 items
+# had every POST answered with HTTP 429.
+MAX_DAILY_UPLOADS = 1000
 MAX_NAME_LEN      = 120
 MIN_CROP_PX       = 16   # icon crops: minimum on both sides (BOFF ability icons can be ~22px)
 MIN_TEXT_CROP_H   = 10   # text crops (ship_type/ship_tier): minimum height only
@@ -176,13 +182,29 @@ class SyncWorker(QThread):
         self._mgr  = data_manager
         self._mode = mode
         self._url  = (backend_url or DEFAULT_BACKEND_URL).rstrip('/')
+        # Shared with the knowledge client — same endpoints, same server
+        # bucket, so one counter (`warp.backend_budget`).
+        self._budget = DailyBudget()
 
     def run(self):
         try:
             if self._mode in ("upload", "both"):
-                self._upload()
-                self._upload_screen_types()
-                self._upload_anchors_grid()
+                try:
+                    self._upload()
+                    self._upload_screen_types()
+                    self._upload_anchors_grid()
+                except BackendBudgetExhausted as e:
+                    # One line, once, for the whole run. Before this existed a
+                    # refusal was a per-channel warning and the loop kept
+                    # going: one cycle spent about fifteen POSTs learning the
+                    # same 429, one per screen-type directory plus crops and
+                    # anchors — and every one of them counted against the very
+                    # budget that was missing. The backlog could not clear
+                    # because clearing it is what kept the door shut.
+                    _slog.warning(
+                        f'HF Sync: nothing more will be sent today — {e}. '
+                        f'The confirmations stay on disk and go up on the '
+                        f'first sync after midnight UTC.')
                 self._report_upload_backlog()
             if self._mode in ("download", "both"):
                 self._download()
@@ -198,8 +220,15 @@ class SyncWorker(QThread):
 
         Caller is expected to catch and handle exceptions — the queued-upload
         loop logs a single WARN per failed channel and moves on, mirroring the
-        non-fatal behaviour the old direct-HF path had.
+        non-fatal behaviour the old direct-HF path had. The one exception is
+        `BackendBudgetExhausted`, which every channel re-raises: it is not a
+        failure of that channel but the end of the run.
+
+        Every POST goes through here, which is why the request budget is
+        counted here and nowhere else. A request counts whether or not the
+        backend accepted its contents — that is what the server counts too.
         """
+        self._budget.check()
         data = json.dumps(payload, ensure_ascii=False).encode('utf-8')
         req = urllib.request.Request(
             f'{self._url}{path}',
@@ -210,8 +239,21 @@ class SyncWorker(QThread):
             },
             method='POST',
         )
-        with urllib.request.urlopen(req, timeout=BACKEND_TIMEOUT_S) as resp:
-            return json.loads(resp.read().decode('utf-8'))
+        self._budget.note_request()
+        try:
+            with urllib.request.urlopen(req, timeout=BACKEND_TIMEOUT_S) as resp:
+                return json.loads(resp.read().decode('utf-8'))
+        except urllib.error.HTTPError as e:
+            if e.code == 429:
+                # The server's answer outranks our own count: it keeps a
+                # second bucket per IP that this install shares with everyone
+                # behind the same address and cannot see, so we can be well
+                # under our own budget and still be turned away.
+                body = e.read().decode('utf-8', errors='replace')[:200].strip()
+                self._budget.note_refusal(body)
+                raise BackendBudgetExhausted(
+                    f'the backend answered HTTP 429 ({body or "no body"})') from e
+            raise
 
     # ---------------------------------------------------------------- upload
 
@@ -363,6 +405,8 @@ class SyncWorker(QThread):
                     'install_id': install_id,
                     'items':      sub_items,
                 })
+            except BackendBudgetExhausted:
+                raise
             except urllib.error.HTTPError as e:
                 body = e.read().decode('utf-8', errors='replace')[:300]
                 _slog.warning(f'HF Sync: backend rejected batch (HTTP {e.code}): {body}')
@@ -583,6 +627,8 @@ class SyncWorker(QThread):
                     'install_id': install_id,
                     'grids':      sub,
                 })
+            except BackendBudgetExhausted:
+                raise
             except urllib.error.HTTPError as e:
                 body = e.read().decode('utf-8', errors='replace')[:300]
                 _slog.warning(f'HF Sync: anchors backend rejected batch (HTTP {e.code}): {body}')
@@ -731,6 +777,8 @@ class SyncWorker(QThread):
                         'screen_type': stype,
                         'items':       sub,
                     })
+                except BackendBudgetExhausted:
+                    raise
                 except urllib.error.HTTPError as e:
                     body = e.read().decode('utf-8', errors='replace')[:300]
                     _slog.warning(f'HF Sync: screen-types backend rejected (HTTP {e.code}): {body}')
