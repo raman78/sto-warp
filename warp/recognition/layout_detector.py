@@ -46,6 +46,62 @@ _STD_IDX_TO_PROD_SLOT: dict[int, str] = {
 }
 
 
+def merge_trait_boxes(result: dict, trait_grid_res: dict,
+                      in_boff_panel) -> dict:
+    """Take the trait grid's boxes for a section — unless that loses slots.
+
+    `trait_grid` is the structure-driven detector, measured at 91.5% slot IoU
+    against the OCR-header baseline, so where it finds a whole section its
+    positions win outright.
+
+    What it must not do is shrink one. It used to replace unconditionally, and
+    the counter reporting the change could come out negative. Measured on
+    `image-4391ccd9d2683d4e.png`: the grid split one Starship Traits section
+    across two row groups and dropped the second as a duplicate — a section
+    really does appear once per screen — so the merge took the survivor.
+    `Starship Traits` fell from the 7 the ship's profile says it has to 2,
+    `Space Reputation` 5 to 3, `Personal Space Traits` 11 to 10. Eight boxes
+    vanished, and the slots behind them were never drawn: nothing marked them
+    for review, so the user had to notice the gap and draw them by hand.
+
+    The rule is the one the equipment rows already follow. The profile says how
+    many slots exist; a detector that sees fewer does not get to delete the
+    rest. An extra box that turns out empty is confirmed away in a keystroke, a
+    missing one is manual work nobody is prompted to do.
+
+    `result` is modified in place and returned, as the caller expects.
+    """
+    if not trait_grid_res:
+        return result
+    added = 0
+    dropped = 0
+    kept: list[str] = []
+    for slot, bxs in trait_grid_res.items():
+        clean = [b for b in bxs if not in_boff_panel(b)]
+        dropped += len(bxs) - len(clean)
+        if not clean:
+            continue
+        have = len(result.get(slot, []))
+        if len(clean) < have:
+            kept.append(f'{slot} {len(clean)}<{have}')
+            continue
+        added += len(clean) - have
+        result[slot] = clean
+    if dropped:
+        _slog.info(f'LayoutDetector: trait_grid dropped {dropped} '
+                   f'bboxes overlapping BOFF marker panel')
+    if kept:
+        # Never set aside quietly: a count that keeps appearing here is how
+        # anyone learns the grid is splitting a section in two.
+        _slog.info(
+            f'LayoutDetector: trait_grid found fewer boxes than the '
+            f'profile-sized rows for {kept} — keeping the rows, so no slot '
+            f'goes undrawn')
+    _slog.info(f'LayoutDetector: trait_grid merged → '
+               f'{list(trait_grid_res.keys())} (+{added} bboxes)')
+    return result
+
+
 def fill_unanchored_rows(row_cys: list[int], cy_to_slot: dict[int, str],
                          expected: list[str]) -> dict[int, str]:
     """Name the rows OCR could not read, from the rows it could.
@@ -668,23 +724,8 @@ class LayoutDetector:
                 return x0 <= cx <= x1 and y0 <= cy <= y1
 
             def _merge_traits(result):
-                if not trait_grid_res:
-                    return result
-                added = 0
-                dropped = 0
-                for slot, bxs in trait_grid_res.items():
-                    clean = [b for b in bxs if not _in_boff_panel(b)]
-                    dropped += len(bxs) - len(clean)
-                    if not clean:
-                        continue
-                    added += len(clean) - len(result.get(slot, []))
-                    result[slot] = clean
-                if dropped:
-                    _slog.info(f'LayoutDetector: trait_grid dropped {dropped} '
-                               f'bboxes overlapping BOFF marker panel')
-                _slog.info(f'LayoutDetector: trait_grid merged → '
-                           f'{list(trait_grid_res.keys())} (+{added} bboxes)')
-                return result
+                return merge_trait_boxes(result, trait_grid_res,
+                                         _in_boff_panel)
 
 
             # GROUND_MIXED Strategy 1: ground EQ geometry + traits + BOFFs.
