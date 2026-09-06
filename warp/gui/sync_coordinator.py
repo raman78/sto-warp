@@ -56,6 +56,29 @@ class _RefreshWorker(QThread):
                 return True
             return False
 
+        # Upload first, and deliberately so.
+        #
+        # It used to be last, behind cargo, assets, knowledge, the model check,
+        # the community mirror, the equivalence table and the matcher seed —
+        # seven network operations, several of them slow (the seed alone walks
+        # 12 000 approved crops), each followed by an interruption check. So the
+        # one step that sends the user's own work was the first thing lost when
+        # a cycle was cut short, and a backlog of 129 corrected screen types sat
+        # untouched while every download around it kept succeeding.
+        #
+        # It depends on none of them: it reads the local training store and
+        # POSTs to the backend. Nothing downstream needs it to have run, and
+        # nothing upstream feeds it. Putting it first costs the downloads a few
+        # seconds and stops the contributions being hostage to them.
+        self.step.emit('upload')
+        log.info('SyncCoordinator: step=upload — confirmed-crop HuggingFace upload')
+        try:
+            if self._sync_manager is not None:
+                self._sync_manager.check_and_upload()
+        except Exception as e:
+            log.warning(f'SyncCoordinator: crop upload failed: {e}')
+        if _interrupted(): return
+
         # CARGO JSONs (equipment, traits, ships, …). Internally TTL-gated
         # to one network call per file per 24 h, so calling it on every
         # cycle is cheap; the bug we're closing is that nothing was
@@ -125,19 +148,17 @@ class _RefreshWorker(QThread):
             log.warning(f'SyncCoordinator: community seed failed: {e}')
         if _interrupted(): return
 
-        self.step.emit('upload')
-        log.info('SyncCoordinator: step=upload — confirmed-crop HuggingFace upload')
+        # The upload itself ran at the top of the cycle; this waits for the
+        # worker it started, so the status bar does not say "complete" while
+        # bytes are still going out. Bounded, so a hung upload cannot block
+        # shutdown — if it times out the inner worker keeps running on its own
+        # QThread and Python reaps it at exit.
         try:
-            if self._sync_manager is not None:
-                self._sync_manager.check_and_upload()
-                worker = getattr(self._sync_manager, '_worker', None)
-                # Bounded wait so a hung upload can't block app shutdown.
-                # If we time out the inner worker keeps running on its own
-                # QThread; Python will reap it on interpreter exit.
-                if worker is not None and worker.isRunning():
-                    worker.wait(2000)
+            worker = getattr(self._sync_manager, '_worker', None)
+            if worker is not None and worker.isRunning():
+                worker.wait(2000)
         except Exception as e:
-            log.warning(f'SyncCoordinator: crop upload failed: {e}')
+            log.warning(f'SyncCoordinator: waiting on the upload failed: {e}')
 
         self.step.emit('done')
         log.info('SyncCoordinator: cycle done')
