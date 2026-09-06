@@ -189,6 +189,10 @@ class SyncWorker(QThread):
     def run(self):
         try:
             if self._mode in ("upload", "both"):
+                # Once per run, and only while a block is in force: the
+                # server's counters live in its process and a restart clears
+                # them, so yesterday's refusal is not always still true.
+                self._budget.reconsider(self._url, _get_install_id())
                 try:
                     self._upload()
                     self._upload_screen_types()

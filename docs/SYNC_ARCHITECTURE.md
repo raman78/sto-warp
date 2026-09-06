@@ -319,6 +319,28 @@ It stops on two independent signals, and both are needed:
   clears them, and the cap is an environment variable that can change under
   us. A refusal is ground truth and is honoured until the UTC day turns.
 
+The server gets the last word on its own state. Those buckets are a dict in
+the backend process, so a Space restart — a deploy, or waking from idle —
+clears them, and a client holding a refusal would otherwise sit out the rest
+of the UTC day against a server that has already forgotten. Once per run, and
+only while a block is in force, `DailyBudget.reconsider` reads `GET /quota`:
+if the backend reports room in both buckets the block is lifted, and the
+request count is taken from the server, which is the number the cap is
+actually applied to. `/quota` is a read and is not rate limited, so asking is
+free. Any failure leaves the block alone — an unreachable backend is not
+evidence that it would accept anything. Verified 2026-09-06: immediately after
+a deploy, `/quota` reported 0 of 500 in both buckets on an install that had
+been refused all afternoon.
+
+That same reading settled a question the backend's code had left open. It
+resolves the caller from the **rightmost** `X-Forwarded-For` entry, which
+identifies a client only behind exactly one trusted proxy — true of the Render
+deployment it was written for, unverified since production moved to an HF
+Space. Had there been a second hop, every client would have resolved to one
+infrastructure address and the per-IP cap would have been a global 500/day for
+the whole community. It is not: the Space forwards a single entry and it is
+the caller's own public address.
+
 A 429 therefore ends the whole upload run — `BackendBudgetExhausted`, which
 every channel re-raises — rather than one channel. Before that, a refusal was
 a per-channel warning and the loop carried on: about fifteen POSTs per cycle

@@ -38,6 +38,10 @@ from warp.debug import syslog as log
 # have recorded — a retry inside urllib, or one that timed out after arriving.
 MAX_DAILY_REQUESTS = 480
 
+# `/quota` is asked once per run, and only while a block is in force. Short,
+# because a backend too slow to answer a read is not going to take an upload.
+_QUOTA_TIMEOUT_S = 10
+
 
 class BackendBudgetExhausted(Exception):
     """Nothing more may be sent today.
@@ -129,6 +133,60 @@ class DailyBudget:
                   'confirmations stay on disk.')
         self._refused_on = self._day
         self._save()
+
+    def reconsider(self, backend_url: str, install_id: str = '') -> bool:
+        """Ask the backend whether the door is open after all.
+
+        Returns True when a block was lifted. Does nothing, and costs nothing,
+        when there was no block to reconsider.
+
+        This exists because the local block can outlast the server's own
+        memory. The buckets are a dict in the backend process, so a Space
+        restart — a deploy, or waking from idle — clears them, and a client
+        that recorded a 429 would otherwise sit out the rest of the UTC day
+        against a server that has already forgotten. Verified 2026-09-06:
+        immediately after a deploy `/quota` reported 0 of 500 in both buckets
+        on an install that had been refused all afternoon.
+
+        `/quota` is a read and is not rate limited, so asking is free — which
+        is what makes it better than the estimate it corrects. On a successful
+        answer the request count is taken from the server as well: it is the
+        number the cap is actually applied to, where ours is only a tally of
+        what we believe we sent.
+
+        Any failure leaves the block exactly as it was. An unreachable backend
+        is not evidence that it would accept anything.
+        """
+        if not self.blocked_reason():
+            return False
+        import urllib.parse
+        import urllib.request
+        url = (f'{backend_url.rstrip("/")}/quota'
+               f'?install_id={urllib.parse.quote(install_id or "")}')
+        try:
+            with urllib.request.urlopen(url, timeout=_QUOTA_TIMEOUT_S) as resp:
+                body = json.loads(resp.read().decode('utf-8'))
+            ip = body.get('ip') or {}
+            inst = body.get('install') or {}
+            ip_room = int(ip.get('used', 0)) < int(ip.get('cap', 0) or 0)
+            inst_room = (not inst or
+                         int(inst.get('used', 0)) < int(inst.get('cap', 0) or 0))
+        except Exception as e:                            # noqa: BLE001
+            log.debug(f'WARP backend: quota check failed, keeping the block ({e})')
+            return False
+        if not (ip_room and inst_room):
+            return False
+        log.info(
+            f'WARP backend: the block is lifted — the server reports '
+            f'{ip.get("used")}/{ip.get("cap")} for this address and '
+            f'{inst.get("used")}/{inst.get("cap")} for this install. '
+            f'Its counters live in the Space process and a restart clears '
+            f'them, so a refusal does not always last the day.')
+        self._refused_on = ''
+        if inst:
+            self._spent = int(inst.get('used', self._spent))
+        self._save()
+        return True
 
     def _save(self) -> None:
         try:

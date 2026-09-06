@@ -184,3 +184,107 @@ def test_one_refusal_ends_every_channel_for_the_run(tmp_path, monkeypatch):
 
     w.run()
     assert len(posts) == 1
+
+
+# ── The server gets the last word ─────────────────────────────────────────
+#
+# The block can outlast the reason for it. The backend's buckets are a dict in
+# its process, so a Space restart — a deploy, or waking from idle — clears
+# them, and a client that recorded a 429 would sit out the rest of the UTC day
+# against a server that has already forgotten. Verified 2026-09-06: right
+# after a deploy `/quota` reported 0 of 500 in both buckets on an install that
+# had been refused all afternoon.
+
+import contextlib
+
+
+def _quota(monkeypatch, payload=None, fail=False):
+    """Answer `/quota` with *payload*, and record the URLs asked for."""
+    from warp import backend_budget
+    asked: list[str] = []
+
+    @contextlib.contextmanager
+    def _open(url, timeout=None):
+        asked.append(url)
+        if fail:
+            raise OSError('unreachable')
+        yield io.BytesIO(json.dumps(payload).encode())
+
+    import urllib.request
+    monkeypatch.setattr(urllib.request, 'urlopen', _open)
+    return asked
+
+
+ROOM = {'ip': {'used': 0, 'cap': 500},
+        'install': {'id': 'abc', 'used': 0, 'cap': 500}}
+
+
+def test_an_unblocked_budget_asks_nothing(tmp_path, monkeypatch):
+    """Free is not the same as free of charge — there is nothing to ask."""
+    asked = _quota(monkeypatch, ROOM)
+    assert _budget(tmp_path).reconsider('http://test', 'abc') is False
+    assert asked == []
+
+
+def test_room_on_the_server_lifts_the_block(tmp_path, monkeypatch):
+    _quota(monkeypatch, ROOM)
+    b = _budget(tmp_path)
+    b.note_refusal()
+    assert b.reconsider('http://test', 'abc') is True
+    assert b.blocked_reason() == ''
+
+
+def test_the_lift_survives_a_restart(tmp_path, monkeypatch):
+    _quota(monkeypatch, ROOM)
+    b = _budget(tmp_path)
+    b.note_refusal()
+    b.reconsider('http://test', 'abc')
+    assert not _budget(tmp_path).refused_today()
+
+
+def test_the_request_count_is_taken_from_the_server(tmp_path, monkeypatch):
+    """The server's number is the one the cap is applied to; ours is a tally
+    of what we believe we sent."""
+    _quota(monkeypatch, {'ip': {'used': 1, 'cap': 500},
+                         'install': {'id': 'abc', 'used': 12, 'cap': 500}})
+    b = _budget(tmp_path)
+    for _ in range(400):
+        b.note_request()
+    b.note_refusal()
+    b.reconsider('http://test', 'abc')
+    assert b.spent == 12
+
+
+def test_a_full_ip_bucket_keeps_the_block(tmp_path, monkeypatch):
+    """Shared with everyone behind the same address, and still full."""
+    _quota(monkeypatch, {'ip': {'used': 500, 'cap': 500},
+                         'install': {'id': 'abc', 'used': 3, 'cap': 500}})
+    b = _budget(tmp_path)
+    b.note_refusal()
+    assert b.reconsider('http://test', 'abc') is False
+    assert b.blocked_reason()
+
+
+def test_a_full_install_bucket_keeps_the_block(tmp_path, monkeypatch):
+    _quota(monkeypatch, {'ip': {'used': 1, 'cap': 500},
+                         'install': {'id': 'abc', 'used': 500, 'cap': 500}})
+    b = _budget(tmp_path)
+    b.note_refusal()
+    assert b.reconsider('http://test', 'abc') is False
+
+
+def test_an_unreachable_backend_keeps_the_block(tmp_path, monkeypatch):
+    """Not being able to ask is not an answer of yes."""
+    _quota(monkeypatch, fail=True)
+    b = _budget(tmp_path)
+    b.note_refusal()
+    assert b.reconsider('http://test', 'abc') is False
+    assert b.blocked_reason()
+
+
+def test_it_asks_the_quota_endpoint_with_the_install_id(tmp_path, monkeypatch):
+    asked = _quota(monkeypatch, ROOM)
+    b = _budget(tmp_path)
+    b.note_refusal()
+    b.reconsider('http://test/', 'abc')
+    assert asked == ['http://test/quota?install_id=abc']

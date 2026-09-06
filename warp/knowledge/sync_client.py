@@ -834,6 +834,10 @@ class WARPSyncClient:
         # the install permanently cut off. So the budget is consulted before
         # the burst, and a 429 ends it immediately.
         budget = DailyBudget()
+        # A block can outlast the server's memory of why it was imposed — the
+        # buckets are held in the Space process and a restart clears them — so
+        # the free read gets the last word before the queue waits out the day.
+        budget.reconsider(self._url, self._install_id)
         reason = budget.blocked_reason()
         if reason:
             self._backend_unavailable_until = _end_of_utc_day()
