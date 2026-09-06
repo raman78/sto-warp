@@ -46,7 +46,9 @@ substituting for the other.
   Confidence only breaks ties *within* the label column.
 - **EQ-4** — A pixel count is a lower bound on reality. It sees filled
   cells only, so it may under-report and must never be treated as an upper
-  bound or as an authority over a known profile.
+  bound or as an authority over a known profile. A *cell* count is not the
+  same measurement and not a lower bound — see §2, "Is there a cell here at
+  all?" — which is why it, and only it, may narrow a row.
 - **EQ-5** — Where the game writes, there is no slot. Enforced for every
   panel by `drop_boxes_on_text`, the last thing `LayoutDetector.detect`
   does; the rule and its three cases are described under "A slot never sits
@@ -131,13 +133,59 @@ for each cy in geom.row_cys:
   bboxes with a guessed row's, and the anchored row was left with nothing
   to confirm.
 
-`self.last_row_pixel_counts` (`layout_detector.py`, reset at
-reset in `LayoutDetector.detect`, written in `_detect_via_pixel_analysis`)
+`self.last_row_pixel_counts` (`layout_detector.py`, reset in
+`LayoutDetector.detect`, written in `_detect_via_pixel_analysis`)
 records what `_count_icons_in_row`
 (`LayoutDetector._count_icons_in_row` in `layout_detector.py`) measured per row. It is written **before** the
 profile decides what to emit, so rows the profile counts as 0 — and
 therefore skips — still leave their measurement behind. That is the input
 to §4.
+
+### Is there a cell here at all?
+
+`count = profile[slot]` above is the weak point when the profile is a guess.
+A row is emitted **right-justified** from `panel_right`, so asking for too
+few pushes the row's own leftmost cells off the panel, and asking for too
+many puts a box on bare panel — which then reads as a blank cell and is
+auto-confirmed as `__empty__` at confidence 1.00, teaching the models that
+the panel background is an empty slot.
+
+`_classify_cell` cannot help: it answers *what is in* a cell and takes for
+granted that the crop is one. Measured 2026-09-06 over 1596 grid positions
+that hold no slot, it called 60% of them `empty` and 35% `inactive` — 95% of
+the places where nothing exists came back as something.
+
+`LayoutDetector._cell_exists` is the missing question, and it reads the
+screenshot against itself so that nothing has to be assumed about
+resolution, UI scale or colour theme:
+
+| Test | What it uses | Why |
+|---|---|---|
+| frame | Canny edge density over the cell | The game draws a border round every slot, filled or not. Existing cells: 22.6% of area at the 5th percentile, 32.4% median. Bare positions: 0.0% at the 95th. |
+| band | mean absolute difference against the same region half a cell to the left | The panel is uniform along its length and a cell is not. Bare positions: 0.9 median, 18.9 at the 95th. Cells: 49.8 at the 5th percentile, 72.7 median. |
+
+Both are required. The frame test alone is fooled where a row is short,
+because the game draws **one outline around the whole run** of missing cells:
+on `SovBuild.png` a two-cell `Universal Consoles` row read as six, the bare
+positions scoring 4.1–7.5% purely from that outline. Colour was tried and
+rejected — the reading "bare is flat navy, an empty cell is near-black"
+holds on some screenshots and not others, and sized rows correctly 62% of
+the time against 96% for the frame.
+
+`_count_icons_in_row` stops at the first position the pair rejects, and the
+number of cells it walked is recorded as `last_row_cell_counts`. Rows are
+right-justified, so the missing cells are always a left prefix and stopping
+is the whole answer.
+
+**This count is not a lower bound**, which is what separates it from
+`last_row_pixel_counts` and from **EQ-4**: a cell the game drew is there
+whether or not anything is in it. So `WarpImporter._process_image` may take
+it as the row width in both directions when no ship was identified, where
+the filled count could only ever raise the guess. Measured over 666
+confirmed rows on that path: 531 correct before, 623 after, with phantom
+cells down from 93 to 16 and rows short of a cell from 42 to 27. On the
+screenshots where a ship *is* identified the profile stays authoritative and
+nothing changes — 2868 of 3085 confirmed boxes either way.
 
 ## 3. Slot profile — `ShipDB._entry_to_profile`
 

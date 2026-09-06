@@ -886,6 +886,13 @@ class LayoutDetector:
         # no slot goes undrawn. Filled by `merge_trait_boxes`, read by the
         # tier inference, reset per detect() call.
         self.last_trait_icon_counts: dict[str, int] = {}
+        # slot → how many cells the row *has*, filled or not, as measured off
+        # the panel by `_cell_exists`. Different from the count above, which
+        # is how many hold an icon: a row is laid out right-justified against
+        # the panel, so sizing it by the filled count pushes its leftmost real
+        # cells out of the row, and sizing it by a guessed profile draws boxes
+        # on bare panel. Reset per detect() call.
+        self.last_row_cell_counts: dict[str, int] = {}
 
     def _img_key(self, img: np.ndarray) -> str:
         """A key for per-image caches that survives repeated `detect()` calls.
@@ -1018,6 +1025,7 @@ class LayoutDetector:
         self._ocr_tokens = ocr_tokens
         self.last_row_pixel_counts = {}
         self.last_trait_icon_counts = {}
+        self.last_row_cell_counts = {}
         if build_type in ('TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS'):
             # Strategy 0: structure-driven trait grid detector with ML probe.
             # Multi-panel grid lock + multi-chain row extraction + per-group
@@ -2579,6 +2587,71 @@ class LayoutDetector:
         # ── Science (default: icon is dominated by background blue, no accent)
         return 'science'
 
+    # A cell that exists is drawn with a frame; where the row is shorter than
+    # the grid, the panel is bare. Measured 2026-09-06 over 2496 confirmed
+    # cells and 1596 grid positions left of a confirmed row, across 104 space
+    # screenshots: an existing cell carries Canny edges over 22% of its area
+    # at the 5th percentile and 32.4% at the median, while a bare position
+    # sits at 0.0% at the 95th. The cut is therefore not a fitted threshold
+    # but the absence of any signal at all.
+    _CELL_FRAME_EDGE_MIN = 0.5
+    # Edges alone are not enough, because the game draws one outline around
+    # the *whole run* of missing cells: on `SovBuild.png` a two-cell Universal
+    # Consoles row read as six, the bare positions scoring 4.1-7.5% purely
+    # from that outline. The panel has a property no cell has — it is uniform
+    # along its length — so a bare position barely changes when the same
+    # region is sampled half a cell to the left, while a cell changes a great
+    # deal. Measured over the same corpus: bare positions sit at 0.9 mean
+    # absolute difference (median) and 18.9 at the 95th percentile, cells at
+    # 49.8 at the 5th and 72.7 at the median. The two together size a row
+    # correctly on 663 of 683 confirmed rows against 657 for edges alone, and
+    # the six it gains are all phantoms removed — no row loses a cell.
+    _CELL_BAND_DIFF_MIN = 8.0
+
+    @staticmethod
+    def _cell_exists(img, x: int, y: int, w: int, h: int, dx: float) -> bool:
+        """Whether the game drew a slot here, filled or not.
+
+        A question the three-way `_classify_cell` does not ask, and cannot:
+        it takes for granted that the crop is a cell and reports what is in
+        it. On a grid position the row does not reach, it answered `empty`
+        60% of the time and `inactive` 35% — so 95% of the places where no
+        slot exists came back as a slot, which is how a box ends up on bare
+        panel and is auto-confirmed as `__empty__` at confidence 1.00.
+
+        Both tests read the screenshot against itself rather than against a
+        stored reference, which is what makes them free of any assumption
+        about resolution, UI scale or colour theme. Colour was tried and does
+        not decide it: the obvious reading — a bare position is the flat navy
+        panel showing through, an empty cell near-black — holds on some
+        screenshots and not others, and sized a row correctly 62% of the time
+        against 96% for the frame.
+        """
+        import cv2
+        import numpy as _np
+        if img is None or w <= 0 or h <= 0 or x < 0 or y < 0:
+            return False
+        crop = img[y:y + h, x:x + w]
+        if crop.size == 0 or crop.shape[0] != h or crop.shape[1] != w:
+            return False
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+        density = float(cv2.Canny(gray, 40, 120).mean()) / 255.0 * 100.0
+        if density < LayoutDetector._CELL_FRAME_EDGE_MIN:
+            return False
+        # Uniform along its length → the panel, not a cell. Sampled to the
+        # left because a row is right-justified, so a bare position always has
+        # panel on that side; off the image, there is nothing to compare with
+        # and the frame test above is left to answer alone.
+        xs = int(round(x - dx / 2))
+        if xs < 0:
+            return True
+        ref = img[y:y + h, xs:xs + w]
+        if ref.shape != crop.shape:
+            return True
+        diff = float(_np.abs(crop.astype(_np.int16)
+                             - ref.astype(_np.int16)).mean())
+        return diff >= LayoutDetector._CELL_BAND_DIFF_MIN
+
     @staticmethod
     def _classify_cell(crop_bgr) -> str:
         """
@@ -2704,6 +2777,12 @@ class LayoutDetector:
             crop = img[y1:y2, x1:x2]
             if crop.size == 0:
                 break
+            if not self._cell_exists(img, x1, y1, x2 - x1, y2 - y1, cell_w):
+                # The row ends here. Rows are right-justified against the
+                # panel, so the positions past this one are bare panel too,
+                # and every one of them would otherwise be classified as a
+                # slot that happens to be empty.
+                break
             state = self._classify_cell(crop)
             cell_states.append(state)
             if state == 'active':
@@ -2826,7 +2905,7 @@ class LayoutDetector:
                 continue
             y_top = max(0, cy - icon_h // 2)
             y_bot = min(h, cy + icon_h // 2)
-            pixel_count, _ = self._count_icons_in_row(
+            pixel_count, _cell_states = self._count_icons_in_row(
                 img, y_top, y_bot, panel_right, cell_w, slot_name,
                 panel_x_start=panel_x_start)
             # Record before the profile decides what to emit: a row the
@@ -2834,6 +2913,8 @@ class LayoutDetector:
             # exactly the evidence that the profile is missing a bonus.
             self.last_row_pixel_counts[slot_name] = max(
                 self.last_row_pixel_counts.get(slot_name, 0), pixel_count)
+            self.last_row_cell_counts[slot_name] = max(
+                self.last_row_cell_counts.get(slot_name, 0), len(_cell_states))
             profile_count = profile.get(slot_name, SLOT_DEFAULT_COUNTS.get(slot_name, 1))
             # ShipDB profile already includes tier bonuses (T6-X +1 Universal,
             # T6-X2 +1 Device, etc.) via warp_importer. Trust profile_count;

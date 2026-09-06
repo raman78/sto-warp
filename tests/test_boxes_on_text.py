@@ -259,3 +259,77 @@ def test_a_move_into_free_space_is_still_allowed():
         res, [tok('Sterehlp Trelte', 880, 190, 1016, 214)], img)
     assert len(out['Personal Space Traits']) == 6
     assert out['Personal Space Traits'][-1][1] > 173
+
+
+# ── Is there a cell here at all? ──────────────────────────────────────────
+#
+# A different question from "what is in this cell", and the one the row
+# layout needs: rows are right-justified against the panel, so sizing one by
+# the count of *filled* cells pushes its leftmost real cells out of the row,
+# and sizing it by a guessed profile draws boxes on bare panel.
+
+from warp.recognition.layout_detector import LayoutDetector  # noqa: E402
+
+
+CELL_W, CELL_H, DX = 35, 45, 37.0
+
+
+def _panel(w=400, h=90, fill=40):
+    """A strip of bare panel — flat, and uniform along its length."""
+    return np.full((h, w, 3), fill, np.uint8)
+
+
+def _draw_cell(img, x, y, framed=True, fill=3):
+    """Paint a slot at *x*: a dark cell with the border the game draws."""
+    img[y:y + CELL_H, x:x + CELL_W] = fill
+    if framed:
+        img[y, x:x + CELL_W] = 200
+        img[y + CELL_H - 1, x:x + CELL_W] = 200
+        img[y:y + CELL_H, x] = 200
+        img[y:y + CELL_H, x + CELL_W - 1] = 200
+    return img
+
+
+def _exists(img, x, y=10):
+    return LayoutDetector._cell_exists(img, x, y, CELL_W, CELL_H, DX)
+
+
+def test_a_framed_cell_exists_even_with_nothing_in_it():
+    """An empty slot is still a slot: the game draws its border."""
+    img = _draw_cell(_panel(), 200, 10)
+    assert _exists(img, 200)
+
+
+def test_bare_panel_is_not_a_cell():
+    assert not _exists(_panel(), 200)
+
+
+def test_an_outline_around_the_whole_gap_is_not_a_row_of_cells():
+    """The measured failure of the frame test on its own. Where a row is
+    short the game draws one outline around the entire run of missing cells,
+    so Canny finds edges where no cell is. On `SovBuild.png` that made a
+    two-cell row read as six. The panel is uniform along its length; a cell
+    is not."""
+    img = _panel()
+    img[10, :] = 120              # one outline across the whole gap
+    img[10 + CELL_H - 1, :] = 120
+    assert not _exists(img, 200)
+
+
+def test_a_cell_next_to_the_image_edge_still_counts():
+    """With nothing to the left to compare against, the frame test answers
+    alone rather than the cell being lost."""
+    img = _draw_cell(_panel(), 0, 10)
+    assert _exists(img, 0)
+
+
+def test_a_missing_or_clipped_crop_is_not_a_cell():
+    assert not LayoutDetector._cell_exists(None, 0, 0, CELL_W, CELL_H, DX)
+    assert not _exists(_panel(w=10, h=10), 0)
+
+
+def test_the_frame_cut_is_the_absence_of_signal_not_a_fitted_threshold():
+    """Measured over 4092 cells: an existing cell carries edges over 22% of
+    its area at the 5th percentile, a bare position 0.0% at the 95th. The
+    constant sits just above nothing at all."""
+    assert LayoutDetector._CELL_FRAME_EDGE_MIN <= 1.0

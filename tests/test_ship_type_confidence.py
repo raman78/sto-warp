@@ -186,6 +186,7 @@ class _FakeLayout:
 
     last_row_pixel_counts: dict = {}
     last_trait_icon_counts: dict = {}
+    last_row_cell_counts: dict = {}
 
     def __getattr__(self, name):
         return lambda *args, **kwargs: {}

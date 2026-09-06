@@ -83,6 +83,10 @@ class _FakeLayout:
     def __init__(self):
         self.last_row_pixel_counts = dict(_MEASURED)
         self.last_trait_icon_counts: dict = {}
+        # How many cells each row *has*. These fakes describe rows that are
+        # entirely filled, so it equals the count of icons seen; a real panel
+        # can have more cells than icons.
+        self.last_row_cell_counts = dict(_MEASURED)
 
     def detect(self, img, build_type, profile=None, **k):
         profile = profile or {}

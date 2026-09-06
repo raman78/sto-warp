@@ -96,6 +96,7 @@ class _FakeLayout:
     def __init__(self, measured: dict):
         self.last_row_pixel_counts = dict(measured)
         self.last_trait_icon_counts: dict = {}
+        self.last_row_cell_counts = dict(measured)
 
     def detect(self, img, build_type, profile=None, **k):
         profile = profile or {}
