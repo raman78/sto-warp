@@ -584,6 +584,24 @@ _MEDIUM_TYPE_TOKENS: frozenset[str] = frozenset({
 
 _BASE_STARSHIP_TRAITS = 5
 
+# The equipment rows whose geometry `LayoutDetector._cell_exists` was measured
+# on. The BOFF tray and the trait panels draw their empty cells differently
+# and were not part of that corpus, so the check is not applied to them —
+# a rule is only worth what it was measured against.
+_EQ_GRID_SLOTS = frozenset({
+    'Fore Weapons', 'Aft Weapons', 'Deflector', 'Sec-Def', 'Engines',
+    'Warp Core', 'Shield', 'Experimental', 'Devices', 'Hangars',
+    'Universal Consoles', 'Engineering Consoles', 'Science Consoles',
+    'Tactical Consoles',
+})
+
+# What a virtual label is worth when the panel says there is no cell under it.
+# Below the trainer's 0.75 auto-accept bar and below its 0.35 low-confidence
+# warning, so the row reaches a human instead of entering the training set on
+# its own. It is not dropped: a box nobody is shown is a mistake nobody can
+# correct, and the user deleting it is worth more than its silent absence.
+_NO_CELL_VIRTUAL_CONF = 0.30
+
 
 def _infer_x_bonus(profile: dict[str, int],
                    row_pixel_counts: dict[str, int],
@@ -2731,13 +2749,36 @@ class WarpImporter:
                     cell_state = _LD._classify_cell(crop)
                     if cell_state in ('empty', 'inactive'):
                         vname = '__empty__' if cell_state == 'empty' else '__inactive__'
-                        _slog.debug(
-                            f'  [{slot_name}][{idx}] bbox={bbox} cell={cell_state} → {vname}')
+                        # `_classify_cell` reports what is *in* a cell and
+                        # takes for granted that the crop is one. Where the
+                        # row does not reach, it answers `empty` — and at
+                        # confidence 1.00, which the trainer auto-accepts, so
+                        # a patch of bare panel enters the training set as an
+                        # example of an empty slot. Measured over 1596 such
+                        # positions: 95% came back as a slot.
+                        #
+                        # So the certainty is made to match the evidence. What
+                        # was established is "flat, no icon"; whether a slot
+                        # is there at all is a different question, and
+                        # `_cell_exists` is the one that answers it.
+                        vconf = 1.0
+                        if not self._cell_is_really_there(img, bbox, slot_name):
+                            vconf = _NO_CELL_VIRTUAL_CONF
+                            _slog.warning(
+                                f'  [{slot_name}][{idx}] bbox={bbox} reads as '
+                                f'{cell_state}, but the panel shows no cell '
+                                f'there — reporting {vname} at {vconf:.2f} so '
+                                f'it needs a human. Confirming it would teach '
+                                f'the models that bare panel is an empty slot.')
+                        else:
+                            _slog.debug(
+                                f'  [{slot_name}][{idx}] bbox={bbox} '
+                                f'cell={cell_state} → {vname}')
                         result.items.append(RecognisedItem(
                             slot        = slot_name,
                             slot_index  = idx,
                             name        = vname,
-                            confidence  = 1.0,
+                            confidence  = vconf,
                             thumbnail   = None,
                             source_file = source,
                             bbox        = bbox,
@@ -3807,6 +3848,33 @@ class WarpImporter:
         if img is None:
             raise ValueError(f'Cannot read image: {path}')
         return img
+
+    def _cell_is_really_there(self, img, bbox, slot_name: str) -> bool:
+        """Whether the equipment panel actually draws a cell at this box.
+
+        Answers True whenever it cannot tell, which is the safe direction:
+        the caller uses it only to *lower* a virtual label's confidence, so
+        an unsure answer leaves today's behaviour untouched.
+
+        Deliberately narrow. `LayoutDetector._cell_exists` was measured on the
+        space equipment grid, where a cell has a border and the panel beside
+        it is uniform. The BOFF tray and the trait panels draw their empty
+        cells differently and were not in that corpus, so they are left alone
+        — a rule is worth what it was measured against and no more.
+        """
+        if slot_name not in _EQ_GRID_SLOTS or len(bbox) < 4:
+            return True
+        try:
+            geom = self._get_layout()._get_eq_geometry(img)
+            if geom is None or not geom.final_dx:
+                return True
+            from warp.recognition.layout_detector import LayoutDetector as _LD
+            x, y, w, h = bbox[:4]
+            return _LD._cell_exists(img, int(x), int(y), int(w), int(h),
+                                    float(geom.final_dx))
+        except Exception as e:                        # noqa: BLE001
+            _slog.debug(f'WarpImporter: cell-presence check skipped ({e})')
+            return True
 
     def _crop(self, img: np.ndarray, bbox: tuple) -> np.ndarray | None:
         x, y, w, h = bbox
