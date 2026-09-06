@@ -10,6 +10,41 @@ from __future__ import annotations
 from PySide6.QtCore import Qt
 
 
+# ── Colours for the two states that are not an item ───────────────────────
+#
+# `__empty__` and `__inactive__` mean different things — an open slot the
+# player has not filled, against one the ship or the character has not
+# unlocked yet — and both used to be drawn in the same grey, so the review
+# list could not tell them apart at a glance.
+#
+# Muted on purpose. The vivid colours are taken and each already means
+# something: blue is auto-confirmed, mint is user-confirmed, orange is a
+# community conflict, gold a slot-type mismatch, red unmatched. These two are
+# states of *nothing being there*, so they sit quieter than any of them while
+# still being two clearly different hues — lilac against sage.
+#
+# Defined here, where both the review list and the canvas tooltip can reach
+# them, so the two views cannot drift apart on what an empty slot looks like.
+VIRTUAL_COLOURS: dict[str, dict[str, str]] = {
+    '__empty__':    {'confirmed': '#b3a6dd', 'pending': '#d0c8ec'},
+    '__inactive__': {'confirmed': '#8fb8b0', 'pending': '#b6d4ce'},
+}
+
+# What the user reads instead of the internal marker.
+VIRTUAL_LABELS: dict[str, str] = {
+    '__empty__':    '[empty slot]',
+    '__inactive__': '[inactive slot]',
+}
+
+
+def virtual_colour(name: str, confirmed: bool = True) -> str | None:
+    """Colour for `__empty__` / `__inactive__`, or None for a real item."""
+    entry = VIRTUAL_COLOURS.get(name)
+    if entry is None:
+        return None
+    return entry['confirmed' if confirmed else 'pending']
+
+
 def env_for_slot(slot: str, build_type: str = '') -> str | None:
     """Best-effort 'space' / 'ground' for a review item, for env-aware icons.
 
@@ -110,22 +145,37 @@ def slot_tooltip_html(slot: str, name: str, conf: float, *,
     from warp.recognition.boff_keys import pretty_slot
 
     slot_disp = pretty_slot(slot or '?')
-    name_disp = name or '— unmatched —'
     colour = ('#7effc8' if conf >= 0.85 else
               '#e8c060' if conf >= 0.70 else '#ff9966')
+
+    # The item's name is what the card is about, so it carries the emphasis.
+    # The slot is context — which row this is — and had the bold until
+    # 2026-09-06, which put the weight on the one line the reader already
+    # knows from where they are hovering.
+    #
+    # `__empty__` / `__inactive__` are shown as the words a user reads, in the
+    # same two colours the review list uses, so a glance at either view says
+    # the same thing.
+    v_colour = virtual_colour(name, confirmed=True)
+    if v_colour:
+        name_disp = (f'<span style="color:{v_colour}">'
+                     f'<b>{VIRTUAL_LABELS[name]}</b></span>')
+    else:
+        name_disp = f'<b>{name}</b>' if name else '— unmatched —'
 
     if confirmed:
         status = ('auto-confirmed by detector' if auto_confirmed
                   else 'confirmed by user')
-        lines = [f'<b>{slot_disp}</b>', name_disp, f'<i>{status}</i>']
+        lines = [slot_disp, name_disp, f'<i>{status}</i>']
         if conf > 0.0:
-            ml_text = orig_name if orig_name and orig_name != name else name_disp
+            ml_text = orig_name if orig_name and orig_name != name else name
+            ml_text = VIRTUAL_LABELS.get(ml_text, ml_text) or '— unmatched —'
             lines.append(f'ML: <span style="color:{colour}">{ml_text} ({conf:.1%})</span>')
         else:
             lines.append('<span style="color:#888">ML: unknown (previous session)</span>')
         info_html = '<br>'.join(lines)
     else:
-        info_html = (f'<b>{slot_disp}</b><br>{name_disp}'
+        info_html = (f'{slot_disp}<br>{name_disp}'
                      f'<br>Confidence: <span style="color:{colour}">{conf:.1%}</span>')
 
     note = _variant_note(name, variant)
@@ -144,10 +194,17 @@ def _tooltip_html(thumb, name: str, info_html: str,
     *thumb*) the plain *info_html* is returned unwrapped. *env* disambiguates
     same-named space/ground traits when the icon is resolved from *name*.
     """
+    # `white-space:nowrap` so the card grows sideways instead of folding a
+    # long item name over three lines. Qt sizes a rich-text tooltip to its
+    # content and clamps it to the screen, so the only thing this gives up is
+    # a narrow card for the longest names — and those are exactly the ones
+    # that were unreadable wrapped. `Console - Advanced Engineering -
+    # Isomagnetic Plasma Distribution Manifold` is 71 characters.
+    nowrap = 'white-space:nowrap;vertical-align:middle'
     icon_html = _tooltip_icon_html(thumb, name, env=env)
     if not icon_html:
-        return info_html
+        return f'<div style="white-space:nowrap">{info_html}</div>'
     return (f'<table cellspacing="0" cellpadding="0"><tr>'
             f'<td style="vertical-align:middle;padding-right:6px">{icon_html}</td>'
-            f'<td style="vertical-align:middle">{info_html}</td>'
+            f'<td style="{nowrap}">{info_html}</td>'
             f'</tr></table>')

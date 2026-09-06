@@ -2260,8 +2260,10 @@ class WarpCoreWindow(QMainWindow):
     _AUTO_COLOR        = '#5cbfff'   # light blue — Auto-confirmed (matches canvas)
     _CONFIRMED_COLOR   = '#7effc8'   # green — user-confirmed
     _CONFLICT_COLOR    = '#ff9a3c'   # orange — community conflict
-    _VIRTUAL_CONFIRMED = '#888888'   # grey — confirmed empty/inactive
-    _VIRTUAL_PENDING   = '#aaaaaa'   # lighter grey — pending virtual
+    # Empty and inactive are different states — an open slot against a locked
+    # one — and shared a single grey until 2026-09-06, so the list could not
+    # tell them apart. The two hues live in `warp.gui.VIRTUAL_COLOURS`, which
+    # the canvas tooltip reads as well, so the views cannot drift.
     _CROSS_CHECK_COLOR = '#ffcc00'   # gold — slot type mismatch
     _UNMATCHED_COLOR   = '#ff5555'   # red — no name / low conf
     _MED_COLOR         = '#ff8888'   # medium conf
@@ -2299,9 +2301,10 @@ class WarpCoreWindow(QMainWindow):
             # say the latter. Reporting `Inactive` here meant a confirmed
             # empty slot never showed as confirmed, so a reviewer could not
             # tell a row they had checked from one they had not.
-            item_text   = '[empty slot]' if name == '__empty__' else '[inactive slot]'
+            from warp.gui import VIRTUAL_LABELS, virtual_colour
+            item_text   = VIRTUAL_LABELS.get(name, name)
             status_text = 'Auto' if auto_confirmed else 'Confirmed'
-            color       = self._VIRTUAL_CONFIRMED
+            color       = virtual_colour(name, confirmed=True)
         elif confirmed and auto_confirmed:
             item_text   = name or '—'
             status_text = 'Auto'
@@ -2313,9 +2316,10 @@ class WarpCoreWindow(QMainWindow):
         elif is_virtual:
             # Same rule for a row still awaiting review: what it holds is in
             # the text, how far along it is goes here.
-            item_text   = '[empty slot]' if name == '__empty__' else '[inactive slot]'
+            from warp.gui import VIRTUAL_LABELS, virtual_colour
+            item_text   = VIRTUAL_LABELS.get(name, name)
             status_text = 'Pending'
-            color       = self._VIRTUAL_PENDING
+            color       = virtual_colour(name, confirmed=False)
         elif cross_check_failed:
             item_text   = f'⚠ {name or "— unmatched —"}'
             status_text = 'Type ✕'

@@ -116,12 +116,19 @@ def test_tooltip_html_wraps_icon_when_present(monkeypatch):
 
 
 def test_tooltip_html_falls_back_without_icon(monkeypatch):
-    """No resolvable icon → plain info_html returned unwrapped."""
+    """No resolvable icon → the info alone, with no icon table around it.
+
+    Still wrapped, in the non-wrapping div every card gets: a long item name
+    must widen the tooltip rather than fold over three lines, and that has to
+    hold whether or not an icon resolved.
+    """
     import warp.gui as gui
     monkeypatch.setattr(gui, "_tooltip_icon_html",
                         lambda thumb, name, size=48, env=None: "")
     out = gui._tooltip_html(None, "", "<b>info</b>")
-    assert out == "<b>info</b>"
+    assert "<b>info</b>" in out
+    assert "<table" not in out
+    assert "nowrap" in out
 
 
 def test_env_for_slot_from_trait_slot_name():

@@ -889,7 +889,7 @@ Where it still gets it wrong is worth knowing, because you can see it coming: if
 2. In the **Item** field, type `__empty__` (for an unoccupied slot) or `__inactive__` (for a locked/unavailable slot).
 3. Press **Enter** to confirm.
 
-The review list shows these with grey labels `[empty slot]` / `[inactive slot]`. They write nothing to your SETS build but are uploaded to the community dataset so the model learns to recognise these slot states.
+The review list shows these as `[empty slot]` and `[inactive slot]`, each in its own soft colour — lilac for empty, sage for inactive — so the two states can be told apart at a glance rather than both reading as grey. A row you have not reviewed yet uses a paler shade of the same colour. The canvas tooltip names and colours them the same way. They write nothing to your SETS build but are uploaded to the community dataset so the model learns to recognise these slot states.
 
 > **Why bother?** WARP uses the position of all detected icons — including empty and inactive ones — to determine which ability belongs in which seat slot. Annotating gaps makes the positioning more accurate, especially for Commander seats (4 slots) where only 1–2 abilities are present.
 

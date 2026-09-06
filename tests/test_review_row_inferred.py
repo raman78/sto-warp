@@ -15,9 +15,10 @@ pytest.importorskip('PySide6')
 from warp.trainer.trainer_window import WarpCoreWindow  # noqa: E402
 
 _visuals = WarpCoreWindow._review_row_visuals
+# The virtual states no longer take their colour from the window; it comes
+# from `warp.gui.VIRTUAL_COLOURS`, which the canvas tooltip reads too.
 _STUB = SimpleNamespace(_AUTO_COLOR='#c0ffee', _CONFIRMED_COLOR='#000000',
-                        _CONFLICT_COLOR='#ff0000', _VIRTUAL_CONFIRMED='#111111',
-                        _VIRTUAL_PENDING='#222222')
+                        _CONFLICT_COLOR='#ff0000')
 
 
 def _row(name='T6-X2', conf=1.0, **kw):
