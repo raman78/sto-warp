@@ -1524,32 +1524,34 @@ class TextExtractor:
     def scan_image(self, img: np.ndarray) -> list[dict]:
         """Scan full image in horizontal strips and return all OCR tokens.
 
-        Splits the image into 5 strips (~20 % height each, with small overlap
-        at boundaries). Results are cached per image (by ``id(img)``); call
-        ``clear_scan_cache()`` when moving to a new image.
+        One read of the whole frame. Results are cached per image (by
+        ``id(img)``); call ``clear_scan_cache()`` when moving to a new image.
+        This is the only place the pipeline reads a screenshot in full, and
+        everything that needs text takes these tokens: screen typing, the ship
+        header, and both equipment panels.
 
-        **Not for resolution.** That was the reason recorded here until
-        2026-09-05 and it is false: EasyOCR's detector rescales with
-        ``resize_aspect_ratio(img, canvas_size=2560, mag_ratio=1)``, which only
-        ever scales *down*, and only when the longest side exceeds 2560 px. A
-        horizontal strip has the same width as the frame, so the longest side —
-        and therefore the scale — is identical. Instrumented on real
-        screenshots: ratio 1.0 for the whole frame and 1.0 for a strip.
+        **It used to be five horizontal strips**, and all three reasons offered
+        for that turned out to be false:
 
-        Nor for speed. The remembered intent was to find the ship-header anchor
-        early and stop, but the loop below has no early exit and never had one:
-        all five strips are always read, at 1.42 s against 1.39 s for a single
-        whole-frame read.
+        * *Resolution.* EasyOCR's detector rescales with
+          ``resize_aspect_ratio(img, canvas_size=2560, mag_ratio=1)``, which
+          only ever scales *down*, and only above 2560 px on the longest side.
+          A horizontal strip has the same width as the frame, so the scale is
+          identical — instrumented on real screenshots, ratio 1.0 either way.
+        * *Speed.* The intent was to find the ship-header anchor early and
+          stop, but the loop had no early exit and never had one. All five were
+          always read, at 1.42 s against 1.39 s for one whole-frame read.
+        * *Accuracy.* A first comparison suggested the strips placed the ground
+          grid better. That was the label matcher, not the reading: one
+          mistyped character (`Kil Modules`) dropped a whole row because ground
+          labels were matched by exact string equality. With that fixed, both
+          readings score 298 of 299 against the confirmed ground boxes, and the
+          ship class and tier are identical on all 52 screenshots measured.
 
-        What the split *does* buy is positional accuracy, and that is the
-        reason it stays. Feeding a whole-frame read to every consumer instead
-        was measured over 52 screenshots across all 14 screen types: the screen
-        type changed on 2 (one better, one worse, both noise), the ship class
-        and tier on none, and the equipment grid on 9. Drawing both grids on the
-        same screenshot settled it — today's strip-derived grid sits tight on
-        the icons while the whole-frame one sits 2-3 px low, clipping the top of
-        the Body Armor and EV Suit cells. Why the strips locate a label row more
-        accurately is not established; that they do is (`dev/draw_grid_compare.py`).
+        What the split did cost was real: text straddling a boundary had to be
+        stitched back together, the two panels ended up reading the same
+        picture differently — ground on strips, space on its own second pass —
+        and the whole screenshot was read two or three times over.
 
         Returns list of dicts, each with:
             text, low, conf, x0, y0, x1, y1, cx, cy, w, h
@@ -1565,41 +1567,36 @@ class TextExtractor:
         reader = self._get_ocr()
         raw_tokens: list[dict] = []
 
-        _STEP = 0.20
-        _MARGIN = 0.03  # 3 % overlap on each side of a boundary
-        for i in range(5):
-            y_start = max(0.0, i * _STEP - (0.0 if i == 0 else _MARGIN))
-            y_end = min(1.0, (i + 1) * _STEP + (0.0 if i == 4 else _MARGIN))
-            y0_px = int(h * y_start)
-            y1_px = int(h * y_end)
-            strip = img[y0_px:y1_px, :]
-            if strip.size == 0:
+        try:
+            rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+            raw = reader.readtext(rgb, detail=1, paragraph=False)
+        except Exception as e:
+            _slog.warning(f'TextExtractor: scan_image read failed: {e}')
+            raw = []
+        for box, text, conf in raw:
+            text = text.strip()
+            if not text:
                 continue
-            try:
-                rgb = cv2.cvtColor(strip, cv2.COLOR_BGR2RGB)
-                raw = reader.readtext(rgb, detail=1, paragraph=False)
-            except Exception:
-                continue
-            for box, text, conf in raw:
-                text = text.strip()
-                if not text:
-                    continue
-                xs = [p[0] for p in box]
-                ys = [p[1] for p in box]
-                raw_tokens.append({
-                    'text': text,
-                    'low':  text.lower(),
-                    'conf': float(conf),
-                    'x0':   int(min(xs)),
-                    'y0':   int(min(ys)) + y0_px,
-                    'x1':   int(max(xs)),
-                    'y1':   int(max(ys)) + y0_px,
-                    'cx':   int(sum(xs) / len(xs)),
-                    'cy':   int(sum(ys) / len(ys)) + y0_px,
-                    'w':    int(max(xs) - min(xs)),
-                    'h':    int(max(ys) - min(ys)),
-                })
+            xs = [p[0] for p in box]
+            ys = [p[1] for p in box]
+            raw_tokens.append({
+                'text': text,
+                'low':  text.lower(),
+                'conf': float(conf),
+                'x0':   int(min(xs)),
+                'y0':   int(min(ys)),
+                'x1':   int(max(xs)),
+                'y1':   int(max(ys)),
+                'cx':   int(sum(xs) / len(xs)),
+                'cy':   int(sum(ys) / len(ys)),
+                'w':    int(max(xs) - min(xs)),
+                'h':    int(max(ys) - min(ys)),
+            })
 
+        # The dedup pass is kept although one read cannot produce the
+        # boundary duplicates it was written for: the reader can still return
+        # two boxes for the same word, and removing a guard because its
+        # original cause is gone is how the next one gets found the hard way.
         tokens = self._dedup_tokens(raw_tokens)
         _slog.info(f'TextExtractor: scan_image → {len(tokens)} tokens '
                    f'({len(raw_tokens)} raw, {len(raw_tokens) - len(tokens)} deduped)')

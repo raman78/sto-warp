@@ -108,7 +108,9 @@ def test_positional_guess_never_steals_an_ocr_anchored_slot(monkeypatch):
             eg.STD_ORDER['Aft Weapons']:  354,
         },
     )
-    monkeypatch.setattr(ld, 'detect_eq_geometry', lambda img: geom)
+    # `**_` because the detector now hands the shared OCR tokens down as a
+    # keyword; what this test asserts is unchanged by that.
+    monkeypatch.setattr(ld, 'detect_eq_geometry', lambda img, **_: geom)
 
     img = np.zeros((700, 900, 3), dtype=np.uint8)
     profile = {'Fore Weapons': 5, 'Deflector': 1, 'Sec-Def': 1, 'Engines': 1,

@@ -420,6 +420,10 @@ class LayoutDetector:
 
     def __init__(self):
         self._ocr = None
+        # Tokens for the screenshot `detect()` is working on, set there. None
+        # outside a detect() call, in which case the space panel reads for
+        # itself — the standalone behaviour the dev probes rely on.
+        self._ocr_tokens: list[dict] | None = None
         self._calibration = self._load_calibration()
         self._community_anchors: list | None = None  # instance cache for community_anchors.json (P11)
         # Per-detect()-call cached EQ geometry result (keyed by id(img)).
@@ -469,7 +473,8 @@ class LayoutDetector:
         if key in self._eq_geom_cache:
             return self._eq_geom_cache[key]
         try:
-            geom = detect_eq_geometry(img)
+            geom = detect_eq_geometry(
+                img, ocr_tokens=getattr(self, '_ocr_tokens', None))
         except Exception as e:
             _slog.warning(f'LayoutDetector: detect_eq_geometry crashed: {e}')
             geom = None
@@ -552,6 +557,12 @@ class LayoutDetector:
                        self._ocr_labels_cache):
             while len(_cache) > 3:
                 _cache.pop(next(iter(_cache)))
+        # Held for this call so `_get_eq_geometry` can hand them to the space
+        # panel without threading a parameter through its five call sites. The
+        # ground panel already receives them directly; this is what makes both
+        # read the same tokens instead of the space one opening the screenshot
+        # a second time.
+        self._ocr_tokens = ocr_tokens
         self.last_row_pixel_counts = {}
         if build_type in ('TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS'):
             # Strategy 0: structure-driven trait grid detector with ML probe.
@@ -2520,18 +2531,34 @@ class LayoutDetector:
         if key in self._ocr_labels_cache:
             return self._ocr_labels_cache[key]
 
-        try:
-            results = self._get_ocr().readtext(img)
-        except Exception:
-            return {}
+        # The shared tokens when `detect()` supplied them — this was the last
+        # place that opened the screenshot for itself, and it did so in BGR,
+        # handing a reader that expects RGB the red and blue channels
+        # swapped. Reading for itself is kept for callers outside detect().
+        tokens = getattr(self, '_ocr_tokens', None)
+        if tokens is None:
+            import cv2
+            try:
+                rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+                tokens = [
+                    {'text': t.strip(),
+                     'conf': float(c),
+                     'cx': float(np.mean([p[0] for p in b])),
+                     'cy': float(np.mean([p[1] for p in b]))}
+                    for b, t, c in self._get_ocr().readtext(rgb)
+                    if t.strip()
+                ]
+            except Exception:
+                return {}
 
         # Extract raw candidates with positions
         raw: list[tuple[float, float, str]] = []
-        for (bbox_pts, text, conf) in results:
+        for tok in tokens:
+            text, conf = tok['text'], tok['conf']
             if conf < config.OCR_CONF_THRESHOLD:
                 continue
-            cx = float(np.mean([pt[0] for pt in bbox_pts]))
-            cy = float(np.mean([pt[1] for pt in bbox_pts]))
+            cx = float(tok['cx'])
+            cy = float(tok['cy'])
             raw.append((cx, cy, text.strip()))
 
         # Merge stacked fragments: same column (cx within 25px), close below (cy gap 5..30).

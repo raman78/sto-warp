@@ -521,14 +521,25 @@ def _rows_from_filtered_hits(filtered: list[dict], row_pitch: int) -> list[int]:
 # Public entry point
 # ----------------------------------------------------------------------------
 
-def detect_eq_geometry(img: np.ndarray) -> Optional[EQGeometry]:
-    """Full pipeline. Returns None when OCR yields no usable EQ labels."""
+def detect_eq_geometry(img: np.ndarray,
+                       ocr_tokens: list[dict] | None = None
+                       ) -> Optional[EQGeometry]:
+    """Full pipeline. Returns None when OCR yields no usable EQ labels.
+
+    *ocr_tokens* — the tokens `TextExtractor.scan_image` already read from this
+    image. Supplying them is the normal path and skips a second full pass over
+    pixels somebody has just read; the ground panel has always worked this way
+    and this one now does too, so both read the same picture the same way.
+
+    Reading for itself is kept as the fallback for a caller with no tokens to
+    hand — `dev/` probes and any future direct use.
+    """
     if img is None or img.size == 0:
         return None
     H, W = img.shape[:2]
     img_hsv = cv2.cvtColor(img, cv2.COLOR_BGR2HSV)
 
-    ocr = _run_ocr(img)
+    ocr = ocr_tokens if ocr_tokens is not None else _run_ocr(img)
     if not ocr:
         return None
     classified = _classify_tokens(ocr)
