@@ -85,10 +85,17 @@ class _FakeText:
 
 
 class _FakeLayout:
-    """Stands in for the row detector: reports fixed pixel counts."""
+    """Stands in for the row detector: reports fixed pixel counts.
+
+    `last_trait_icon_counts` is what `trait_grid` measured for the trait
+    sections. It has to be a real dict, not the `__getattr__` stub below: the
+    tier inference reads it as a mapping, and these screens carry no trait
+    measurement, so it stays empty.
+    """
 
     def __init__(self, measured: dict):
         self.last_row_pixel_counts = dict(measured)
+        self.last_trait_icon_counts: dict = {}
 
     def detect(self, img, build_type, profile=None, **k):
         profile = profile or {}

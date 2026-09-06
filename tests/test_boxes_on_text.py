@@ -226,3 +226,36 @@ def test_a_blank_screenshot_still_moves_the_box_clear():
 def test_no_tokens_leaves_the_layout_alone(tokens):
     res = {'Devices': [(698, 277, 31, 41)]}
     assert drop_boxes_on_text(res, tokens, blank()) is res
+
+
+# ── Two slots are never the same icon ─────────────────────────────────────
+
+def test_a_box_is_dropped_rather_than_moved_onto_another_section():
+    """The heading that ends a section is normally what stops a projected row
+    from running on — but the reader has to get it right. On
+    `image-8ee54291302414af.png` `Starship Traits` came back as
+    `'Sterehlp Trelte'`, which names no slot, so the band read as an ordinary
+    divider and the eleventh personal-trait box was moved onto the first
+    starship trait. Geometry says what the text could not."""
+    img = with_icon(831, 221, 42, 56)
+    res = {
+        'Personal Space Traits': _row(49, x0=831, w=41, h=52, pitch=48)
+                                 + _row(111, x0=831, w=41, h=52, pitch=48)
+                                 + [(831, 173, 41, 52)],
+        'Starship Traits': _row(221, x0=831, w=42, h=56, pitch=48),
+    }
+    out = drop_boxes_on_text(
+        res, [tok('Sterehlp Trelte', 880, 190, 1016, 214)], img)
+    assert len(out['Personal Space Traits']) == 10
+    assert out['Starship Traits'] == res['Starship Traits']
+
+
+def test_a_move_into_free_space_is_still_allowed():
+    """Same shape, but nothing owns the destination."""
+    img = with_icon(831, 221, 42, 56)
+    res = {'Personal Space Traits': _row(49, x0=831, w=41, h=52, pitch=48)
+                                    + [(831, 173, 41, 52)]}
+    out = drop_boxes_on_text(
+        res, [tok('Sterehlp Trelte', 880, 190, 1016, 214)], img)
+    assert len(out['Personal Space Traits']) == 6
+    assert out['Personal Space Traits'][-1][1] > 173

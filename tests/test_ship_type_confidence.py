@@ -179,11 +179,13 @@ class _FakeText:
 class _FakeLayout:
     """Stands in for LayoutDetector: finds no equipment rows.
 
-    `last_row_pixel_counts` is read as a mapping by `_infer_x_bonus`, so it
-    has to be a real dict rather than another stub method.
+    `last_row_pixel_counts` and `last_trait_icon_counts` are read as mappings
+    by `_infer_x_bonus`, so they have to be real dicts rather than another
+    stub method.
     """
 
     last_row_pixel_counts: dict = {}
+    last_trait_icon_counts: dict = {}
 
     def __getattr__(self, name):
         return lambda *args, **kwargs: {}

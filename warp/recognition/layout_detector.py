@@ -192,6 +192,33 @@ def drop_boxes_on_text(result: dict, ocr_tokens: list[dict] | None,
                 return band
         return None
 
+    def _lands_on_another_section(slot: str, x: int, y: int,
+                                  w: int, h: int) -> str:
+        """The section already holding this cell, or `''`.
+
+        Two slots cannot be the same icon, so a box that comes to rest with
+        its centre inside another section's box is not a slot of its own
+        section — whatever the writing above it said.
+
+        This is the check that does not depend on reading anything. The
+        heading that ends a section is normally what stops a projected row
+        from running on, but the reader has to get it right: on
+        `image-8ee54291302414af.png` `Starship Traits` came back as
+        `'Sterehlp Trelte'`, which resolves to no slot at all, so the band was
+        taken for an ordinary divider and the eleventh personal-trait box was
+        moved *onto* the first starship trait. The geometry says what the text
+        could not — the destination is one and a half row pitches below the
+        section's last row, and occupied.
+        """
+        cx, cy = x + w // 2, y + h // 2
+        for other, boxes in result.items():
+            if other == slot:
+                continue
+            for bx, by, bw, bh in (b[:4] for b in boxes):
+                if bx <= cx <= bx + bw and by <= cy <= by + bh:
+                    return other
+        return ''
+
     _icon_blobs: list = []
 
     def _blobs():
@@ -285,7 +312,16 @@ def drop_boxes_on_text(result: dict, ocr_tokens: list[dict] | None,
             snaps = row_snaps.get((slot, y)) or []
             shifted_y = (sorted(snaps)[len(snaps) // 2] if snaps
                          else fallback_y)
-            if (shifted_y + h <= img_h
+            taken = _lands_on_another_section(slot, x, shifted_y, w, h)
+            if taken:
+                # Moving it would put two names on one icon. A box with
+                # nowhere of its own to go is a box the section does not have.
+                _slog.info(
+                    f'LayoutDetector: [{slot}] box at y={y} not moved to '
+                    f'y={shifted_y} — that cell already belongs to '
+                    f'{taken!r}; dropping it instead')
+                dropped += 1
+            elif (shifted_y + h <= img_h
                     and _band_at(shifted_y + h // 2, bands) is None):
                 kept.append((x, shifted_y, w, h) + tuple(box[4:]))
                 moved += 1
@@ -304,7 +340,8 @@ def drop_boxes_on_text(result: dict, ocr_tokens: list[dict] | None,
 
 
 def merge_trait_boxes(result: dict, trait_grid_res: dict,
-                      in_boff_panel) -> dict:
+                      in_boff_panel, icon_counts: dict | None = None,
+                      profile: dict | None = None) -> dict:
     """Take the trait grid's boxes for a section — unless that loses slots.
 
     `trait_grid` is the structure-driven detector, measured at 91.5% slot IoU
@@ -326,7 +363,31 @@ def merge_trait_boxes(result: dict, trait_grid_res: dict,
     rest. An extra box that turns out empty is confirmed away in a keystroke, a
     missing one is manual work nobody is prompted to do.
 
+    **"Fewer" is measured against the profile, not against the drawn row** —
+    that is what *profile* is for. The row in `result` is padded to the game
+    maximum so no slot goes undrawn, seven for `Starship Traits` whatever the
+    ship, so comparing against it rejected the grid on any ship with fewer.
+    Measured on `image-8ee54291302414af.png`, a T6 with five starship traits:
+    the grid had the row at y=221, exactly on the icons, and it was thrown
+    away as "5 < 7" in favour of a projection 15 px low — the label was never
+    read on that screen, so the section's position had been interpolated
+    between the two around it. With the profile as the yardstick, 5 is not
+    fewer than 5 and the measured row wins. The case the rule was written for
+    is untouched: on `image-4391ccd9d2683d4e.png` the profile says 7 and the
+    grid found 2, which is still a shrink and still refused.
+
+    Without a profile the drawn row is all there is, and the old comparison
+    stands.
+
     `result` is modified in place and returned, as the caller expects.
+
+    *icon_counts*, when given, is filled with `{slot: icons the grid found}`.
+    That number leaves the function because it is the only *measurement* of
+    how many trait slots a screenshot holds — what `result` carries after
+    this is the profile-sized row, drawn at the game maximum so nothing goes
+    undrawn. The two are easy to confuse and were: the tier inference read
+    the drawn row as evidence, and since `Starship Traits` is always drawn
+    with 7, every ship below `-X2` came out one upgrade too high.
     """
     if not trait_grid_res:
         return result
@@ -336,13 +397,19 @@ def merge_trait_boxes(result: dict, trait_grid_res: dict,
     for slot, bxs in trait_grid_res.items():
         clean = [b for b in bxs if not in_boff_panel(b)]
         dropped += len(bxs) - len(clean)
+        if icon_counts is not None:
+            icon_counts[slot] = len(clean)
         if not clean:
             continue
-        have = len(result.get(slot, []))
+        drawn = len(result.get(slot, []))
+        have = (profile or {}).get(slot, drawn)
         if len(clean) < have:
             kept.append(f'{slot} {len(clean)}<{have}')
             continue
-        added += len(clean) - have
+        # Counted against what was actually drawn, since that is what the
+        # number of bboxes changes by. The comparison above is a different
+        # question and uses a different yardstick.
+        added += len(clean) - drawn
         result[slot] = clean
     if dropped:
         _slog.info(f'LayoutDetector: trait_grid dropped {dropped} '
@@ -813,6 +880,12 @@ class LayoutDetector:
         # warp_importer uses it to recover the T6-X/X2 bonus when the tier
         # badge is not on screen. Reset per detect() call.
         self.last_row_pixel_counts: dict[str, int] = {}
+        # The same idea for trait sections: how many icons `trait_grid`
+        # actually found, which is *not* how many boxes the section ends up
+        # with — those come from the profile, padded to the game maximum so
+        # no slot goes undrawn. Filled by `merge_trait_boxes`, read by the
+        # tier inference, reset per detect() call.
+        self.last_trait_icon_counts: dict[str, int] = {}
 
     def _img_key(self, img: np.ndarray) -> str:
         """A key for per-image caches that survives repeated `detect()` calls.
@@ -944,6 +1017,7 @@ class LayoutDetector:
         # a second time.
         self._ocr_tokens = ocr_tokens
         self.last_row_pixel_counts = {}
+        self.last_trait_icon_counts = {}
         if build_type in ('TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS'):
             # Strategy 0: structure-driven trait grid detector with ML probe.
             # Multi-panel grid lock + multi-chain row extraction + per-group
@@ -1049,7 +1123,9 @@ class LayoutDetector:
 
             def _merge_traits(result):
                 return merge_trait_boxes(result, trait_grid_res,
-                                         _in_boff_panel)
+                                         _in_boff_panel,
+                                         self.last_trait_icon_counts,
+                                         profile)
 
 
             # GROUND_MIXED Strategy 1: ground EQ geometry + traits + BOFFs.

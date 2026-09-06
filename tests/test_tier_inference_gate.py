@@ -74,10 +74,15 @@ class _FakeLayout:
     `last_row_pixel_counts` is what it measured off the panel;
     `detect` returns the boxes it emitted, which follow the profile it was
     given — that asymmetry is the whole subject of these tests.
+
+    `last_trait_icon_counts` is the same kind of thing for trait sections and
+    has to be a real dict for the same reason: `__getattr__` below would hand
+    back a function, and the inference reads it as a mapping.
     """
 
     def __init__(self):
         self.last_row_pixel_counts = dict(_MEASURED)
+        self.last_trait_icon_counts: dict = {}
 
     def detect(self, img, build_type, profile=None, **k):
         profile = profile or {}

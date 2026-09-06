@@ -10,7 +10,13 @@ rule is max, not majority.
 """
 from __future__ import annotations
 
+from warp.recognition.layout_detector import merge_trait_boxes
 from warp.warp_importer import _infer_x_bonus
+
+
+def _bonus(profile, px, traits):
+    """The bonus alone — the function also returns its evidence for the log."""
+    return _infer_x_bonus(profile, px, traits)[0]
 
 
 def _profile(devices=4, universal=0):
@@ -19,27 +25,27 @@ def _profile(devices=4, universal=0):
 
 
 def test_no_evidence_leaves_the_profile_alone():
-    assert _infer_x_bonus(_profile(), {}, {}) == 0
+    assert _bonus(_profile(), {}, {}) == 0
 
 
 def test_measurements_matching_the_profile_mean_no_bonus():
     px = {'Devices': 4, 'Universal Consoles': 0}
-    assert _infer_x_bonus(_profile(), px, {'Starship Traits': [0] * 5}) == 0
+    assert _bonus(_profile(), px, {'Starship Traits': 5}) == 0
 
 
 def test_two_extra_devices_and_consoles_infer_x2():
     px = {'Devices': 6, 'Universal Consoles': 2}
-    assert _infer_x_bonus(_profile(), px, {}) == 2
+    assert _bonus(_profile(), px, {}) == 2
 
 
 def test_one_extra_infers_x1():
     px = {'Devices': 5, 'Universal Consoles': 1}
-    assert _infer_x_bonus(_profile(), px, {}) == 1
+    assert _bonus(_profile(), px, {}) == 1
 
 
 def test_starship_trait_count_alone_is_enough():
     """Traits are detected on MIXED screens even when EQ rows are absent."""
-    assert _infer_x_bonus(_profile(), {}, {'Starship Traits': [0] * 7}) == 2
+    assert _bonus(_profile(), {}, {'Starship Traits': 7}) == 2
 
 
 def test_max_wins_over_majority_when_a_slot_is_left_empty():
@@ -49,31 +55,30 @@ def test_max_wins_over_majority_when_a_slot_is_left_empty():
     evidence are right and must not be outvoted by an under-filled row.
     """
     px = {'Devices': 5, 'Universal Consoles': 2}
-    layout = {'Starship Traits': [0] * 7}
-    assert _infer_x_bonus(_profile(), px, layout) == 2
+    assert _bonus(_profile(), px, {'Starship Traits': 7}) == 2
 
 
 def test_a_partly_filled_row_never_lowers_the_bonus():
     """An empty slot makes evidence smaller, never larger — it must not veto."""
     px = {'Devices': 4, 'Universal Consoles': 2}   # devices reads +0
-    assert _infer_x_bonus(_profile(), px, {}) == 2
+    assert _bonus(_profile(), px, {}) == 2
 
 
 def test_impossible_evidence_is_discarded_not_clamped():
     """The game grants at most +2; a larger reading means a miscount."""
     px = {'Devices': 9}
-    assert _infer_x_bonus(_profile(), px, {}) == 0
+    assert _bonus(_profile(), px, {}) == 0
 
 
 def test_a_negative_reading_is_ignored():
     px = {'Devices': 2}          # fewer filled than the base profile
-    assert _infer_x_bonus(_profile(), px, {}) == 0
+    assert _bonus(_profile(), px, {}) == 0
 
 
 def test_miracle_worker_base_console_is_not_counted_as_a_bonus():
     """MW ships already carry +1 Universal in the profile before the tier."""
     px = {'Devices': 4, 'Universal Consoles': 1}
-    assert _infer_x_bonus(_profile(universal=1), px, {}) == 0
+    assert _bonus(_profile(universal=1), px, {}) == 0
 
 
 # ── composing the tier string ─────────────────────────────────────────────
@@ -149,7 +154,7 @@ def test_measuring_less_than_the_badge_claims_is_not_evidence():
     profile = {'Devices': 5, 'Universal Consoles': 2, 'Starship Traits': 7}
     px = {'Devices': 4, 'Universal Consoles': 1}
 
-    assert _infer_x_bonus(profile, px, {'Starship Traits': [0] * 6}) == 0
+    assert _bonus(profile, px, {'Starship Traits': 6}) == 0
 
 
 def test_a_screen_agreeing_with_the_read_tier_reports_no_surplus():
@@ -159,7 +164,7 @@ def test_a_screen_agreeing_with_the_read_tier_reports_no_surplus():
     profile = {'Devices': 4, 'Universal Consoles': 1, 'Starship Traits': 6}
     px = {'Devices': 4, 'Universal Consoles': 1}
 
-    assert _infer_x_bonus(profile, px, {'Starship Traits': [0] * 6}) == 0
+    assert _bonus(profile, px, {'Starship Traits': 6}) == 0
 
 
 def test_a_genuine_surplus_over_a_read_tier_is_still_seen():
@@ -167,4 +172,89 @@ def test_a_genuine_surplus_over_a_read_tier_is_still_seen():
     profile = {'Devices': 4, 'Universal Consoles': 1, 'Starship Traits': 6}
     px = {'Devices': 5, 'Universal Consoles': 2}
 
-    assert _infer_x_bonus(profile, px, {'Starship Traits': [0] * 7}) == 1
+    assert _bonus(profile, px, {'Starship Traits': 7}) == 1
+
+
+# ── The trait evidence has to be a measurement ────────────────────────────
+#
+# It was not. The third argument used to be the finished layout, and the
+# trait projector draws `Starship Traits` at the game maximum so that no slot
+# goes undrawn — always 7, whatever the ship. The evidence therefore read
+# `7 - profile`, at least 1 for every ship below `-X2`, and the max rule
+# promoted it. The tests above did not catch it because they chose that count
+# freely; production never does.
+
+def test_the_measured_count_comes_from_the_grid_not_from_the_drawn_row():
+    """`merge_trait_boxes` reports what `trait_grid` found. The row it leaves
+    in `result` is profile-sized and says nothing about the ship."""
+    counts: dict[str, int] = {}
+    result = {'Starship Traits': [(0, 0, 9, 9)] * 7}          # drawn at max
+    merge_trait_boxes(result, {'Starship Traits': [(0, 0, 9, 9)] * 5},
+                      lambda b: False, counts)
+    assert counts['Starship Traits'] == 5
+    assert len(result['Starship Traits']) == 7
+
+
+def test_boxes_dropped_into_the_boff_panel_are_not_counted():
+    counts: dict[str, int] = {}
+    merge_trait_boxes({}, {'Starship Traits': [(0, 0, 9, 9), (50, 0, 9, 9)]},
+                      lambda b: b[0] == 50, counts)
+    assert counts['Starship Traits'] == 1
+
+
+def test_a_t6x_ship_whose_grid_finds_fewer_traits_keeps_its_tier():
+    """`image-817e2e37c01aed8c.png`, a T6-X Terran Adamant: devices 3-3 = 0,
+    universal consoles 1-1 = 0, and the grid found 5 trait icons against a
+    profile of 6. Reading the drawn row instead gave 7-6 = 1 and raised it."""
+    profile = {'Devices': 3, 'Universal Consoles': 1, 'Starship Traits': 6}
+    px = {'Devices': 3, 'Universal Consoles': 1}
+    assert _bonus(profile, px, {'Starship Traits': 5}) == 0
+
+
+# ── The log reports the evidence, not the outcome ─────────────────────────
+
+def test_the_evidence_names_every_measurement_it_used():
+    _x, seen = _infer_x_bonus({'Devices': 4, 'Universal Consoles': 0,
+                               'Starship Traits': 5},
+                              {'Devices': 6, 'Universal Consoles': 2},
+                              {'Starship Traits': 7})
+    assert 'Devices 6-4' in seen
+    assert 'Universal Consoles 2-0' in seen
+    assert 'Starship Traits 7-5' in seen
+
+
+def test_no_measurement_says_so_rather_than_printing_zeros():
+    _x, seen = _infer_x_bonus(_profile(), {}, {})
+    assert seen == 'nothing measured'
+
+
+# ── "Fewer" is measured against the profile, not the drawn row ────────────
+
+def test_the_grid_wins_when_it_matches_the_profile():
+    """`image-8ee54291302414af.png`, a T6 with five starship traits: the grid
+    had the row exactly on the icons and it was refused as `5 < 7`, because
+    the row it was compared against is padded to the game maximum. Against
+    the profile, five is not fewer than five."""
+    grid = [(831, 221, 42, 56)] * 5
+    result = {'Starship Traits': [(0, 0, 41, 52)] * 7}       # drawn at max
+    merge_trait_boxes(result, {'Starship Traits': grid}, lambda b: False,
+                      None, {'Starship Traits': 5})
+    assert result['Starship Traits'] == grid
+
+
+def test_a_real_shrink_is_still_refused():
+    """The case the rule exists for: the grid split a section and kept two of
+    seven. `image-4391ccd9d2683d4e.png`."""
+    rows = [(0, 0, 41, 52)] * 7
+    result = {'Starship Traits': list(rows)}
+    merge_trait_boxes(result, {'Starship Traits': [(9, 9, 42, 56)] * 2},
+                      lambda b: False, None, {'Starship Traits': 7})
+    assert result['Starship Traits'] == rows
+
+
+def test_without_a_profile_the_drawn_row_is_the_yardstick():
+    rows = [(0, 0, 41, 52)] * 7
+    result = {'Starship Traits': list(rows)}
+    merge_trait_boxes(result, {'Starship Traits': [(9, 9, 42, 56)] * 5},
+                      lambda b: False)
+    assert result['Starship Traits'] == rows

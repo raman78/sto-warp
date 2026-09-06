@@ -587,7 +587,7 @@ _BASE_STARSHIP_TRAITS = 5
 
 def _infer_x_bonus(profile: dict[str, int],
                    row_pixel_counts: dict[str, int],
-                   layout: dict) -> int:
+                   trait_icon_counts: dict[str, int]) -> tuple[int, str]:
     """Recover the T6-X / T6-X2 bonus when the tier badge is not on screen.
 
     Many screenshots simply do not show `[T6-X2]` — the header is cropped or
@@ -600,7 +600,7 @@ def _infer_x_bonus(profile: dict[str, int],
 
         pixel_count(Devices)            - profile['Devices']
         pixel_count(Universal Consoles) - profile['Universal Consoles']
-        detected(Starship Traits)       - 5
+        icons_found(Starship Traits)    - profile['Starship Traits']
 
     Each is a LOWER bound — a pixel count only sees slots the player has
     filled, so an empty slot makes the evidence too small but never too
@@ -609,31 +609,48 @@ def _infer_x_bonus(profile: dict[str, int],
     device slots were empty, while max was right on all 9 screens with a
     known tier (dev/diag_tier_inference.py).
 
+    **All three have to be measurements**, and the third was not. It counted
+    the boxes the layout ended up with for `Starship Traits`, and those are
+    drawn from the profile at the game maximum — the trait projector's own
+    comment says "use game maximums; downstream truncates per profile/tier"
+    — so the number was 7 whatever the ship was. The evidence then read
+    `7 - profile`, which is at least 1 for every ship below `-X2`, and the
+    max rule promoted it. Measured on `image-817e2e37c01aed8c.png`, a T6-X
+    Terran Adamant: devices 3-3 = 0, universal consoles 1-1 = 0, traits
+    7-6 = 1 → raised to T6-X2. The count that *was* a measurement sat in the
+    same run — `trait_grid` had found 5 icons, giving -1, which this function
+    discards as out of range, leaving the tier alone.
+
+    (An older revision subtracted the constant `_BASE_STARSHIP_TRAITS`
+    instead of the profile. That was changed for a real reason — it
+    double-counts a bonus the OCR tier already granted — but it could not
+    fix this, because the fault is the value, not what is subtracted.)
+
     Evidence outside 0..2 is discarded rather than clamped: the game grants
     at most +2, so a larger value means the measurement is wrong (a
     decoration counted as an icon) and should not be trusted to size a row.
 
-    Returns 0 when nothing usable was measured — the caller then leaves the
-    profile exactly as ShipDB built it.
+    Returns `(bonus, evidence)` — 0 when nothing usable was measured, and the
+    caller then leaves the profile exactly as ShipDB built it. The second
+    element is the readable evidence for the log, built here so the message
+    reports what was measured rather than the profile after the raise.
     """
     evidence: list[int] = []
+    seen: list[str] = []
     for slot in ('Devices', 'Universal Consoles'):
         counted = row_pixel_counts.get(slot)
         if counted:
             evidence.append(counted - profile.get(slot, 0))
-    n_traits = len(layout.get('Starship Traits') or ())
+            seen.append(f'{slot} {counted}-{profile.get(slot, 0)}')
+    n_traits = (trait_icon_counts or {}).get('Starship Traits')
     if n_traits:
         # Against the profile, like the other two, and for the same reason:
         # every reading here is a surplus over what the build already claims.
-        # Subtracting the constant instead was equivalent while this only ran
-        # with no tier read — the profile holds exactly the base then — but it
-        # double-counts once a tier the OCR did read has already added its
-        # bonus. A correct `-X` screen showing six starship traits would have
-        # read as one more upgrade and promoted the ship to `-X2`.
-        evidence.append(n_traits - profile.get('Starship Traits',
-                                               _BASE_STARSHIP_TRAITS))
+        have = profile.get('Starship Traits', _BASE_STARSHIP_TRAITS)
+        evidence.append(n_traits - have)
+        seen.append(f'Starship Traits {n_traits}-{have}')
     usable = [v for v in evidence if 0 <= v <= 2]
-    return max(usable) if usable else 0
+    return (max(usable) if usable else 0), ', '.join(seen) or 'nothing measured'
 
 
 def _compose_inferred_tier(ship_entry: dict | None, x_bonus: int) -> str:
@@ -2176,8 +2193,9 @@ class WarpImporter:
             # `_infer_x_bonus` subtracts the profile, which already carries
             # whatever bonus the OCR tier granted — so what comes back is the
             # surplus beyond that tier, not the absolute level.
-            _x = _infer_x_bonus(
-                profile, self._get_layout().last_row_pixel_counts, layout)
+            _x, _measured = _infer_x_bonus(
+                profile, self._get_layout().last_row_pixel_counts,
+                self._get_layout().last_trait_icon_counts)
             _raised_to = min(2, _ocr_x + _x)
             if _x and _raised_to > _ocr_x:
                 _delta = _raised_to - _ocr_x
@@ -2197,11 +2215,13 @@ class WarpImporter:
                 # tier the OCR did read is the newer and less certain of the
                 # two, and telling them apart is what makes it possible to
                 # count how often it is wrong.
-                _measured = (f'Universal Consoles='
-                             f'{profile.get("Universal Consoles", 0)}, '
-                             f'Devices={profile.get("Devices", 0)}, '
-                             f'Starship Traits='
-                             f'{profile.get("Starship Traits", 0)}')
+                #
+                # `_measured` comes back from `_infer_x_bonus`, i.e. from
+                # before the raise. It used to be read off `profile` here,
+                # after `_apply_ship_and_tier_bonuses` had already grown it —
+                # so the line offered `Starship Traits=7` as the reason for
+                # having just made it 7. That is a consequence printed as
+                # evidence, and it is what made this bug hard to see.
                 if _tier_before:
                     _slog.info(
                         f'WarpImporter: tier {_tier_before!r} raised to '

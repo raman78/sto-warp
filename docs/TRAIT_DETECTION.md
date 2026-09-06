@@ -185,6 +185,30 @@ every trait-bearing build type:
 | `SPACE_TRAITS` / `GROUND_TRAITS` | Strategy 0 trait_grid (≥5 bboxes), falls back to OCR-header `_detect_traits` |
 | `SPACE_MIXED` / `GROUND_MIXED` | trait_grid runs once and is merged into whichever equipment chain wins (learned / OCR-anchored / full_scan). Trait sections **overwrite** any equipment-chain trait output, since trait_grid classifies each row-group independently and is more accurate. |
 
+### What the merge may and may not replace
+
+`merge_trait_boxes` takes the grid's boxes for a section because they are
+measured rather than projected — the equipment chain places a trait section
+from its label, and when the label is not read it *interpolates* the position
+from the sections above and below, which is approximate by construction.
+
+The one thing it may not do is lose slots. The profile says how many exist; a
+detector that sees fewer does not get to delete the rest, because an extra box
+that turns out empty is confirmed away in a keystroke while a missing one is
+manual work nobody is prompted to do.
+
+**"Fewer" means fewer than the profile, not fewer than the row already
+drawn.** Those rows are padded to the game maximum precisely so nothing goes
+undrawn — `Starship Traits` is always laid out with seven — so comparing
+against them refused the grid on every ship with fewer than the maximum.
+Measured on `image-8ee54291302414af.png`, a T6 with five starship traits: the
+grid had the row at y=221, exactly on the icons; it was rejected as "5 < 7"
+and the emitted boxes came from an interpolated anchor 15 px lower, cutting
+the top off every icon. Against the profile the same comparison keeps the
+measured row, and the case the rule was written for is unaffected — on
+`image-4391ccd9d2683d4e.png` the profile says seven and the grid found two,
+still a shrink and still refused.
+
 Implementation:
 
 - `LayoutDetector.detect` (`layout_detector.py`), the `TRAITS` /
@@ -240,6 +264,22 @@ multi-word section name that is not this box's own. One word is never enough,
 because `Weapons` resolves to `Aft Weapons` and is also the second line of
 the fore weapons label — a single-word test would delete the fore weapons row
 of every space screenshot.
+
+**A box is never moved onto another section's cell.** Two slots cannot be the
+same icon, so if the destination's centre falls inside a box that already
+belongs to a different section, the box is dropped instead of moved — a box
+with nowhere of its own to go is a box the section does not have.
+
+This is the check that needs nothing read. The heading is what normally stops
+a projected row from running past the end of its section, but the reader has
+to get it right, and on `image-8ee54291302414af.png` `Starship Traits` came
+back as `'Sterehlp Trelte'`. That resolves to no slot, so the band was taken
+for an ordinary divider, and the eleventh personal-trait box — projected
+because the profile says eleven where the screen shows ten — was moved
+*onto* the first starship trait, one and a half row pitches below its own
+section's last row. Both then went to the matcher as different slots holding
+the same picture. With the geometric check the box is dropped and the section
+comes out at the ten the screen actually has.
 
 Two more details decide where a moved box actually lands. First, it is
 snapped onto the icon below the writing rather than parked under it: a

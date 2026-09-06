@@ -177,10 +177,27 @@ three measurements the same run already produced:
 |---|---|
 | `last_row_pixel_counts['Devices'] - profile['Devices']` | §2 |
 | `last_row_pixel_counts['Universal Consoles'] - profile['Universal Consoles']` | §2 |
-| `len(layout['Starship Traits']) - 5` | [trait grid](TRAIT_DETECTION.md) |
+| `last_trait_icon_counts['Starship Traits'] - profile['Starship Traits']` | [trait grid](TRAIT_DETECTION.md) |
 
 By **EQ-4** each is a lower bound, so the answer is their **max**, not a
-majority. Measured against tiers read from the screenshots
+majority.
+
+All three have to be **measurements**, and the third was not until
+2026-09-06: it counted the boxes the finished layout carried for
+`Starship Traits`, and those are drawn from the profile at the game maximum
+so that no slot goes undrawn — seven, whatever the ship. The evidence
+therefore read `7 - profile`, which is at least 1 for every ship below
+`-X2`, and the max rule promoted it. Measured on
+`image-817e2e37c01aed8c.png`, a `T6-X` Terran Adamant: devices `3-3 = 0`,
+universal consoles `1-1 = 0`, traits `7-6 = 1` → raised to `T6-X2`. The
+count that *was* a measurement sat in the same run — `trait_grid` had found
+5 icons — and gives `-1`, out of range and discarded, leaving the tier
+alone. `LayoutDetector.last_trait_icon_counts` now carries it, filled by
+`merge_trait_boxes`, which is the one place the grid's own boxes are known.
+
+The distinction is the same one **EQ-4** draws for equipment rows: a
+detector's count and a profile-sized row answer different questions, and
+only the first is evidence about the ship. Measured against tiers read from the screenshots
 (`dev/diag_tier_inference.py`, 22 SPACE_EQ / SPACE_MIXED screens):
 
 | Rule | Correct | Wrong |
@@ -204,9 +221,19 @@ and `T6-X2` both grant +2 — so the base number comes from cargo's `tier`
 field, which is populated for all 797 ships. The result is validated
 against `SHIP_TIER_VALUES` (`warp/recognition/text_extractor.py`).
 
-The call site (`WarpImporter._process_image` in `warp_importer.py`) runs only when OCR found no tier at
-all, only for `SPACE` / `SPACE_MIXED`, and re-runs detection so the
-recovered rows get bboxes. A tier OCR did read stays authoritative.
+The call site (`WarpImporter._process_image` in `warp_importer.py`) runs for
+`SPACE` / `SPACE_MIXED` only, and re-runs detection so the recovered rows
+get bboxes. It fires in two situations: no tier on screen at all, and a tier
+the OCR did read that the rows overshoot. The second is the newer and less
+certain of the two, which is why the log tells them apart — a raise names
+the tier it started from — and why the evidence is printed with it, as
+`slot counted-profile` for each measurement that spoke. That line reports
+what was measured *before* the raise; reading it off the profile afterwards
+described the consequence and made the defect above invisible.
+
+The surplus is measured against the profile, which already carries whatever
+the read tier granted, so what comes back is the amount by which the screen
+exceeds that tier — never the absolute level.
 
 **Asymmetry to preserve:** `x_bonus == 0` means *no evidence of an
 upgrade*, never *not upgraded* — an unfilled build looks identical to an
