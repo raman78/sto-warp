@@ -177,6 +177,30 @@ number of cells it walked is recorded as `last_row_cell_counts`. Rows are
 right-justified, so the missing cells are always a left prefix and stopping
 is the whole answer.
 
+#### When the measurement is allowed to reach the boxes
+
+A changed profile has to be re-projected or the measurement is a number in
+the log and nothing else. That re-projection used to be skipped whenever the
+screenshot carried *any* confirmed annotation, on the reasoning that
+re-detecting would overwrite the user's pixel-perfect bboxes. It does not:
+the confirmed merge puts them back, preferring a confirmed box wherever one
+overlaps a detected one, and keeping the rest so a corrected row can gain a
+cell.
+
+What the old condition did instead was freeze a screenshot's layout the
+moment its first row was confirmed. A row that gained a cell could never gain
+a box, and a phantom the user deleted came back on the next run because the
+profile still asked for it — the correction was undone by the program.
+
+The state that means "this layout is settled" is the one the user sets and
+can see: the screenshot marked done (`screenshots_done.json`, written by the
+trainer beside `annotations.json`). Anything else is work in progress and
+gets a fresh scan with the confirmed boxes merged back on top. Measured on
+`image-939dc3ed9dd1eb95.png`, a cropped panel the maintainer had already
+annotated: not done → Devices 6, Science Consoles 2, Aft Weapons 4 (the four
+confirmed ones surviving a detection that found three); marked done → the
+previous 5 and 3.
+
 **This count is not a lower bound**, which is what separates it from
 `last_row_pixel_counts` and from **EQ-4**: a cell the game drew is there
 whether or not anything is in it. So `WarpImporter._process_image` may take

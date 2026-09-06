@@ -2327,9 +2327,18 @@ class WarpImporter:
             f'{sum(len(v) for v in layout.values())} bboxes ({build_type})'
         )
 
-        if confirmed_layout:
-            _slog.info(f'WarpImporter: merging confirmed layout ({build_type}) — '
-                       f'{sum(len(v) for v in confirmed_layout.values())} bboxes from annotations')
+        def _apply_confirmed(layout: dict) -> dict:
+            """Put the user's own bboxes back on top of a detected layout.
+
+            A function rather than a straight-line block because the layout is
+            recomputed when the measured row width changes the profile, and
+            the confirmed boxes have to survive that. Idempotent: run twice on
+            the same layout and the second pass finds every confirmed box
+            already in place at IoU 1.0.
+            """
+            nonlocal confirmed_layout
+            if not confirmed_layout:
+                return layout
             # BOFF reconciliation: confirmed annotations are saved under
             # canonical names (`Boff Tactical`, `Boff Engineering`, …) but
             # the marker detector emits raw seat keys (`Boff Seat L[T]_NNN`).
@@ -2385,6 +2394,13 @@ class WarpImporter:
                         _prev = _y
                     merged.sort(key=lambda b: (_row_of_y[b[1]], b[0]))
                 layout[slot] = merged
+            return layout
+
+        if confirmed_layout:
+            _slog.info(f'WarpImporter: merging confirmed layout ({build_type}) — '
+                       f'{sum(len(v) for v in confirmed_layout.values())} bboxes '
+                       f'from annotations')
+            layout = _apply_confirmed(layout)
 
         # If ShipDB gave generic fallback (ship_name empty), refine profile
         # using actual icon counts from layout + keyword profile matching.
@@ -2473,14 +2489,32 @@ class WarpImporter:
                             profile[slot] = measured
                             changed = True
                 if changed:
-                    # Keep confirmed layout — re-detection would overwrite pixel-perfect bboxes
-                    if not confirmed_layout:
+                    # A changed profile has to reach the layout, or the
+                    # measurement is a number in the log and nothing else.
+                    #
+                    # This used to be skipped whenever *any* confirmed
+                    # annotation existed for the screenshot, on the reasoning
+                    # that re-detecting would overwrite the user's
+                    # pixel-perfect bboxes. It does not: `_apply_confirmed`
+                    # puts them back, preferring a confirmed box wherever one
+                    # overlaps. What the old condition actually did was freeze
+                    # a screenshot's layout the moment its first row was
+                    # confirmed — so a row that gained a cell could never gain
+                    # a box, and a phantom the user deleted came back on the
+                    # next run because the profile still asked for it.
+                    #
+                    # The state that means "this layout is settled" is the one
+                    # the user sets and can see: the screenshot marked done.
+                    # Anything else is work in progress and gets a fresh scan,
+                    # with the confirmed boxes merged back on top.
+                    if not self._screenshot_is_done(source):
                         layout = self._get_layout().detect(
                             img, build_type, profile,
                             icon_matcher=self._get_matcher() if _needs_matcher else None,
                             app_cache=self._cache if _needs_matcher else None,
                             ocr_tokens=ocr_tokens,
                         )
+                        layout = _apply_confirmed(layout)
                     _slog.info(f'WarpImporter: refined profile from pixel counts: '
                                f'{dict((k,v) for k,v in profile.items() if v)}')
 
@@ -3848,6 +3882,33 @@ class WarpImporter:
         if img is None:
             raise ValueError(f'Cannot read image: {path}')
         return img
+
+    def _screenshot_is_done(self, source: str) -> bool:
+        """Has the user marked this screenshot finished?
+
+        That is the only state that means "this layout is settled". A
+        screenshot carrying confirmed rows is not the same thing — it is one
+        the user is part-way through, and freezing its layout on the first
+        confirmation is what stopped a corrected row width from ever reaching
+        the boxes.
+
+        Written by the trainer as `screenshots_done.json`, beside
+        `annotations.json` in the training store. Unreadable or absent reads
+        as "not done", which is the safe direction: a fresh scan followed by
+        the confirmed merge, rather than a layout nothing can correct.
+        """
+        try:
+            from warp import userdata as _userdata
+            p = _userdata.training_data_dir() / 'screenshots_done.json'
+            if not p.exists():
+                return False
+            import json as _json
+            data = _json.loads(p.read_text(encoding='utf-8'))
+            return Path(source).name in set(data) if isinstance(data, list) \
+                else False
+        except Exception as e:                        # noqa: BLE001
+            _slog.debug(f'WarpImporter: done-list check skipped ({e})')
+            return False
 
     def _cell_is_really_there(self, img, bbox, slot_name: str) -> bool:
         """Whether the equipment panel actually draws a cell at this box.
