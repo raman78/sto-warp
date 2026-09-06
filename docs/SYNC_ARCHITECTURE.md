@@ -276,6 +276,7 @@ cycle is skipped — the periodic 60 min timer is still armed.
 ```python
 # warp/gui/sync_coordinator.py — abbreviated
 def run(self):
+    self.step.emit('upload');    sync_manager.check_and_upload()
     self.step.emit('cargo');     cargo.refresh_all(force=self._force)
     self.step.emit('assets');    AssetSyncManager().run()
     self.step.emit('knowledge'); sync_client._download_knowledge_bg(force=…)
@@ -283,13 +284,23 @@ def run(self):
     self.step.emit('community'); CommunityCropsClient().fetch()
     self.step.emit('equiv');     sync_client._download_icon_equivalence_bg(force=…)
     self.step.emit('seed');      SETSIconMatcher.seed_from_community_crops()
-    self.step.emit('upload');    sync_manager.check_and_upload()
+    #                            then wait, bounded, on the upload worker
     self.step.emit('done')
 ```
 
 Each step is wrapped in `try/except` so an upstream 5xx never aborts
 the next step. Failures log at WARNING and the cycle proceeds; the
 next 60 min tick retries naturally.
+
+**`upload` goes first, and that ordering is deliberate.** It was last until
+2026-09-06, which made the only step that *sends* the user's work the first
+thing lost whenever a cycle was cut short — and it waited behind the two
+slowest phases, `community` and `seed` (the seed walks some 12 000 approved
+crops). A backlog of 129 corrected screen types sat untouched on the
+maintainer's install while every download around it kept succeeding. Upload
+depends on no other phase: it reads the local training store and POSTs to the
+backend. The bounded wait on its worker stays at the end of the cycle so the
+status bar does not report `done` while bytes are still going out.
 
 ### Interruption
 
