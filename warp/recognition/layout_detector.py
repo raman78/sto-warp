@@ -46,6 +46,263 @@ _STD_IDX_TO_PROD_SLOT: dict[int, str] = {
 }
 
 
+def drop_boxes_on_text(result: dict, ocr_tokens: list[dict] | None,
+                       img: np.ndarray, label_width_ratio: float = 2.0) -> dict:
+    """A slot never sits on a label. Move it onto its icon, or drop it.
+
+    The game writes a section's name on a band across its panel, and the
+    panel's slots live between one band and the next. A projected slot that
+    lands on a band is therefore wrong twice over: there is no icon under it,
+    and the band is exactly the evidence that the section ended above it.
+
+    Measured on `image-4391ccd9d2683d4e.png`. `Personal Space Traits` is 11 on
+    this character, so eleven boxes were projected — but the screenshot shows
+    ten, and the eleventh landed level with the `Starship Traits` heading. The
+    two boxes of the second `Starship Traits` row landed on the
+    `U.S.S. FURY Traits` divider while the real icons sat one row lower. All
+    three were then read as blank cells and **auto-confirmed as `__inactive__`
+    at confidence 1.00** — teaching the models that a heading is an empty slot.
+
+    Shift before dropping. A row on a divider usually means the icons are just
+    below it, so the box is moved and kept if that lands it somewhere clean; a
+    box with nowhere to go is dropped. Losing a slot costs the user one box
+    drawn by hand, keeping a wrong one costs a poisoned label.
+
+    Where it moves *to* is read off the screenshot, not guessed. Clearing the
+    writing is not the same as landing on the artwork: a divider does not
+    push the next row down by a fixed amount, and putting the box one pixel
+    under the text left it 5 px above the icon and 9 px short of its bottom —
+    close enough to match at 0.64 instead of cleanly. So the box is snapped
+    onto the icon-shaped blob below the band in its own column, which
+    `trait_grid` already finds for its own purposes. The projected size is
+    kept and only the position moves, so nothing downstream sees a box of an
+    unexpected shape.
+
+    Measured on the same screenshot: the real second `Starship Traits` row
+    starts at y=425 and is 40 px tall, and the blob detector returns it as
+    `(658, 425, 30, 40)` and `(691, 425, 31, 40)`. Without a blob to snap to
+    the box still moves clear of the writing, which is the old behaviour.
+
+    **Only bands, never marks.** A token counts as a label only if it is at
+    least `label_width_ratio` times the slot's width. The game prints `Mk XV`
+    and `LOC` *inside* icons, and treating those as bands would delete the very
+    slots they sit on. Measured on that screenshot: the four headings run
+    74-132 px against a 27 px slot, and every in-icon mark 28-46 px, so a 2x
+    cut separates them with room on both sides.
+    """
+    if not ocr_tokens or not result:
+        return result
+
+    def _same_slot(a: str, b: str) -> bool:
+        """`Shield`/`Shields`, `Hangar`/`Hangars` — the alias table and the
+        production slot names disagree on the plural of two rows."""
+        return a.lower().rstrip('s') == b.lower().rstrip('s')
+
+    def _heading_kind(text: str, own_slot: str, tok: dict, box) -> str:
+        """`own` / `other` / `plain` — the three are treated differently.
+
+        Two things decide it, and neither is enough alone: **which section
+        the text names**, and **where it sits relative to the box**.
+
+        **`other`: another section's heading, so the box is past the end of
+        its own section.** Drop it. This is the only destructive answer and it
+        asks for the most: the text has to resolve to a section that is not
+        this box's, *and* be the multi-word form the game prints over a block
+        — `Personal Space Traits`, `Space Reputation`. One word is never
+        enough, because the equipment column labels its rows with the short
+        form and `Weapons` alone resolves to `Aft Weapons`: a single-word test
+        here would delete the fore weapons row of every space screenshot.
+
+        **`own`: the row's own label, beside its icons.** The space equipment
+        panel writes `Fore Weapons`, `Impulse`, `Warp` in a column to the
+        *left* of the row they name, so every equipment row shares a band with
+        its own label and none of them is a boundary. (The ground and trait
+        panels put the label *above* the block instead; the two layouts are
+        described in `docs/EQ_DETECTION.md`.) Keep the box.
+
+        Position is required here too. A heading can end up beside a box
+        rather than over it — the phantom eleventh `Personal Space Traits`
+        box ends 3 px before `Starship Traits` begins — which is why the
+        section it names is checked first.
+
+        **`plain`: everything else** — the `U.S.S. FURY Traits` divider inside
+        the starship traits block, an item name, a stat line, and any label
+        text over a box that did not earn a drop. The icons are usually just
+        below, so the row is moved rather than lost.
+
+        Both tests read the same alias table the OCR-header strategy reads.
+        Doing this by hand is what broke it once already: the game labels the
+        engines row `Impulse` and the shield row `Shields`, and wraps
+        `Engineering Consoles` onto two lines, so nothing that compares the
+        text to a slot *name* survives contact with the real panel.
+        """
+        x, _y, w, _h = box[:4]
+        low = (text or '').strip().rstrip(':').lower()
+        named = match_slot_label(low)
+        if (named and not _same_slot(named, own_slot)
+                and len(low.split()) >= 2):
+            return 'other'
+        beside = tok['x1'] < x or tok['x0'] > x + w
+        if beside and (named or is_slot_label_text(low)):
+            return 'own'
+        return 'plain'
+
+    # The columns each section occupies — its leftmost cell's left edge to its
+    # rightmost cell's right edge. This is the panel the section is drawn in,
+    # and it is what decides whether a piece of text has anything to do with
+    # that section (see `_bands_for`).
+    spans = {s: (min(b[0] for b in bs), max(b[0] + b[2] for b in bs))
+             for s, bs in result.items() if bs}
+
+    def _bands_for(box) -> list[tuple[int, int]]:
+        """Text lying across this section's columns, top to bottom.
+
+        A band is local, not full width. A screenshot holds several panels
+        side by side, and `Personal Space Traits` over the trait column says
+        nothing about the equipment column 200 px to its left — treating every
+        wide token as a full-width band deleted 27 good boxes on the first
+        attempt at this.
+
+        Locality is measured against the **section**, not the single box. A
+        heading belongs to the panel whose columns it is printed over, so that
+        is the test; asking instead whether text is near *a box* needs a
+        tolerance, and any tolerance wide enough for a heading that misses its
+        own leftmost cell by 3 px is also wide enough to reach into the panel
+        next door. Measured over 145 space screenshots with confirmed boxes,
+        a padding of twice the slot width cost 85 of them: every loss was a
+        row's rightmost cell, struck out by the trait panel's heading or by a
+        tooltip 24-150 px to its right.
+        """
+        w = box[2]
+        need = w * label_width_ratio
+        lo, hi = spans.get(slot, (box[0], box[0] + w))
+        out = []
+        for t in ocr_tokens:
+            if t.get('w', 0) < need:
+                continue
+            if t['x1'] < lo or t['x0'] > hi:
+                continue
+            out.append((t['y0'], t['y1'],
+                        _heading_kind(t.get('text', ''), slot, t, box)))
+        return sorted(out)
+
+    def _band_at(cy: int, bands):
+        for band in bands:
+            if band[0] <= cy <= band[1]:
+                return band
+        return None
+
+    _icon_blobs: list = []
+
+    def _blobs():
+        """Icon-shaped blobs, found once per call and only if something moves.
+
+        `trait_grid._detect_icon_ccs` is the detector that already knows what
+        an icon looks like on this UI — a threshold, connected components, and
+        the height and aspect-ratio cuts calibrated for the trait panels. It
+        is called, never copied: a second copy of those cuts would drift from
+        the first and the drift would read as a finding.
+        """
+        if not _icon_blobs:
+            try:
+                _icon_blobs.extend(_trait_grid._detect_icon_ccs(img) or [])
+            except Exception as e:                        # noqa: BLE001
+                _slog.warning(f'LayoutDetector: icon blobs unavailable, '
+                              f'moved boxes land under the label instead: {e}')
+            _icon_blobs.append(None)                      # "already looked"
+        return [b for b in _icon_blobs if b is not None]
+
+    def _snap_below(box, band_bottom: int) -> int | None:
+        """Top edge that puts *box* on the nearest icon below *band_bottom*.
+
+        The blob has to overlap the box's column and be roughly its size, so a
+        stray component cannot drag a row across the panel. Within two row
+        heights of the writing, because a divider separates a row from the
+        next one, not from the far end of the section.
+        """
+        x, _y, w, h = box[:4]
+        best = None
+        for bx, by, bw, bh in _blobs():
+            if by < band_bottom or by - band_bottom > 2 * h:
+                continue
+            if bx + bw <= x or bx >= x + w:
+                continue
+            if not (0.6 * h <= bh <= 1.6 * h):
+                continue
+            if best is None or by < best[1]:
+                best = (bx, by, bw, bh)
+        if best is None:
+            return None
+        return max(band_bottom + 1, best[1] + (best[3] - h) // 2)
+
+    img_h = int(img.shape[0])
+
+    # ── Pass 1: decide, per box ───────────────────────────────────────────
+    # 'keep', 'drop', or a move with the top edge the blobs argue for and the
+    # one to use if they argue for nothing.
+    plans: dict[str, list] = {}
+    row_snaps: dict[tuple, list[int]] = {}
+    for slot, boxes in result.items():
+        row = []
+        for box in boxes:
+            y, h = box[1], box[3]
+            bands = _bands_for(box)
+            hit = _band_at(y + h // 2, bands)
+            if hit is None or hit[2] == 'own':
+                # No writing under it, or the row's own label level with it.
+                row.append(('keep', box, bands, 0))
+                continue
+            if hit[2] == 'other':
+                # Another section's heading — this box is past the end of its
+                # own section, and moving it would only put it on the next
+                # section's slots.
+                row.append(('drop', box, bands, 0))
+                continue
+            snap = _snap_below(box, hit[1])
+            if snap is not None:
+                row_snaps.setdefault((slot, y), []).append(snap)
+            row.append(('move', box, bands, hit[1] + 1))
+        plans[slot] = row
+
+    # ── Pass 2: a row moves as a row ──────────────────────────────────────
+    # An unlit cell has no blob to snap to — `__inactive__` slots are drawn
+    # dark on purpose — so on the screenshot this came from one box of the
+    # pair landed on its icon and the other stayed 8 px high, splitting a row
+    # that the game draws on one line. The cells that did find their icon
+    # answer for the ones that could not.
+    out: dict = {}
+    moved = dropped = 0
+    for slot, row in plans.items():
+        kept = []
+        for what, box, bands, fallback_y in row:
+            if what == 'keep':
+                kept.append(box)
+                continue
+            if what == 'drop':
+                dropped += 1
+                continue
+            x, y, w, h = box[:4]
+            snaps = row_snaps.get((slot, y)) or []
+            shifted_y = (sorted(snaps)[len(snaps) // 2] if snaps
+                         else fallback_y)
+            if (shifted_y + h <= img_h
+                    and _band_at(shifted_y + h // 2, bands) is None):
+                kept.append((x, shifted_y, w, h) + tuple(box[4:]))
+                moved += 1
+            else:
+                dropped += 1
+        if kept:
+            out[slot] = kept
+        elif slot in result:
+            # An emptied slot is still reported, so a caller can tell "this
+            # section has no boxes" from "this section was never detected".
+            out[slot] = []
+    if moved or dropped:
+        _slog.info(f'LayoutDetector: {moved} slot box(es) moved clear of a '
+                   f'label, {dropped} dropped — a slot never sits on one')
+    return out
+
+
 def merge_trait_boxes(result: dict, trait_grid_res: dict,
                       in_boff_panel) -> dict:
     """Take the trait grid's boxes for a section — unless that loses slots.
@@ -243,6 +500,58 @@ def _extend_slot_aliases() -> None:
 
 
 _extend_slot_aliases()
+
+
+def match_slot_label(text_lower: str) -> str | None:
+    """The slot an on-screen label names, or None.
+
+    The one place that answers "is this text a slot label?". It has to be
+    shared, because what the game prints is routinely *not* the slot name:
+    the engines row is labelled `Impulse`, the warp core row `Warp`, the
+    shield row `Shields`, and a label too wide for its column is wrapped, so
+    `Engineering Consoles` arrives as `Engineering` over `Consoles`. All of
+    that lives in `SLOT_LABEL_ALIASES`, together with the localized UI.
+
+    Anything that compares OCR text to a slot name directly gets those wrong
+    — measured on `image-73df6ced341f3b5f.png`, where a similarity test
+    against the full name scored `'engineering'` at 0.71, below the cutoff,
+    and a console row was moved 24 px off its grid as a result.
+    """
+    if text_lower in SLOT_LABEL_ALIASES:
+        return SLOT_LABEL_ALIASES[text_lower]
+    matches = get_close_matches(text_lower, list(SLOT_LABEL_ALIASES.keys()),
+                                n=1, cutoff=config.LABEL_FUZZY_CUTOFF)
+    return SLOT_LABEL_ALIASES.get(matches[0]) if matches else None
+
+
+# Every word that appears in a label the game prints. Derived from the alias
+# table, so it cannot drift from it.
+_LABEL_WORDS = frozenset(
+    w for key in SLOT_LABEL_ALIASES for w in key.replace('-', ' ').split()
+    if len(w) >= 3)
+
+
+def is_slot_label_text(text_lower: str) -> bool:
+    """True when the text reads as a slot label, or one wrapped line of one.
+
+    A weaker question than `match_slot_label`, and a different one: *which*
+    slot a label names is unanswerable for `Consoles` — four slots end in it —
+    but *whether* it is label text is not in doubt. That is all a caller needs
+    when it is deciding whether a box has landed on writing.
+
+    Every word has to be a word the game uses in a label, so the
+    `U.S.S. FURY Traits` divider fails on `fuay` while `Consoles` passes.
+    """
+    words = [w for w in text_lower.replace('-', ' ').replace('.', ' ').split()
+             if len(w) >= 3]
+    if not words:
+        return False
+    return all(
+        w in _LABEL_WORDS
+        or get_close_matches(w, _LABEL_WORDS, n=1,
+                             cutoff=config.LABEL_FUZZY_CUTOFF)
+        for w in words)
+
 
 # ── Full-scan constants ───────────────────────────────────────────────────────
 _SCAN_CONF_MIN  = 0.45   # min ML confidence to keep a sliding-window detection
@@ -604,6 +913,21 @@ class LayoutDetector:
                icon_matcher=None, app_cache=None,
                ocr_tokens: list[dict] | None = None,
                ) -> dict[str, list[tuple[int, int, int, int]]]:
+        """Detect every slot's boxes, then take them off the labels.
+
+        A thin wrapper so the rule holds for whichever of the strategies below
+        answered — there are twenty-two ways out of `_detect_raw`, and a guard
+        applied at one of them is a guard that does not exist. See
+        `drop_boxes_on_text`.
+        """
+        result = self._detect_raw(img, build_type, ship_profile,
+                                  icon_matcher, app_cache, ocr_tokens)
+        return drop_boxes_on_text(result, ocr_tokens, img)
+
+    def _detect_raw(self, img: np.ndarray, build_type: str, ship_profile: dict | None = None,
+                    icon_matcher=None, app_cache=None,
+                    ocr_tokens: list[dict] | None = None,
+                    ) -> dict[str, list[tuple[int, int, int, int]]]:
         # The geometry caches deliberately survive this call — they are keyed
         # on pixel content (`_img_key`), so they cannot answer for a different
         # image, and the importer re-enters `detect()` on the same screenshot
@@ -3251,9 +3575,7 @@ class LayoutDetector:
         return found
 
     def _match_label(self, text_lower: str) -> str | None:
-        if text_lower in SLOT_LABEL_ALIASES: return SLOT_LABEL_ALIASES[text_lower]
-        matches = get_close_matches(text_lower, list(SLOT_LABEL_ALIASES.keys()), n=1, cutoff=config.LABEL_FUZZY_CUTOFF)
-        return SLOT_LABEL_ALIASES.get(matches[0]) if matches else None
+        return match_slot_label(text_lower)
 
     SPACE_ANCHORS_REL: dict[str, tuple[float, int]] = {
         'Fore Weapons': (0.036, 5), 'Deflector': (0.107, 1), 'Engines': (0.178, 1), 'Warp Core': (0.249, 1), 'Shield': (0.325, 1),

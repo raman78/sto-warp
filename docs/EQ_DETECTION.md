@@ -47,6 +47,14 @@ substituting for the other.
 - **EQ-4** — A pixel count is a lower bound on reality. It sees filled
   cells only, so it may under-report and must never be treated as an upper
   bound or as an authority over a known profile.
+- **EQ-5** — Where the game writes, there is no slot. Enforced for every
+  panel by `drop_boxes_on_text`, the last thing `LayoutDetector.detect`
+  does; the rule and its three cases are described under "A slot never sits
+  on a label" in `TRAIT_DETECTION.md`. The equipment panel is the reason
+  that rule needs a position test at all: **it writes each row's label to
+  the left of its icons, on the same line**, where the ground and trait
+  panels put a heading above the block. A label level with its own row is
+  therefore normal here and never a section boundary.
 
 ## 1. Panel geometry — `eq_geometry.detect_eq_geometry`
 

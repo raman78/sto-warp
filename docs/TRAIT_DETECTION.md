@@ -196,6 +196,77 @@ Implementation:
   includes `SPACE_TRAITS` / `GROUND_TRAITS`, so `icon_matcher` and
   `app_cache` reach `LayoutDetector.detect`
 
+## A slot never sits on a label
+
+Whatever chain produced the layout, `LayoutDetector.detect` finishes by
+handing it to `drop_boxes_on_text`. The rule it enforces is simple to state
+and applies to every panel, not just traits: **where the game writes, there
+is no slot.**
+
+It matters because a projected row can overshoot. When the profile says a
+character has 11 personal space traits and the screen shows 10, the eleventh
+is projected anyway and lands on the `Starship Traits` heading below. Nothing
+downstream notices: there is no icon there, the cell reads as blank, and the
+result is auto-confirmed as `__inactive__` at confidence 1.00 — a heading
+taught to the models as an empty slot.
+
+The idea is to use the writing as evidence rather than to work around it. A
+band of text across a slot's column says one of three things, and the three
+have different answers:
+
+- **Another section's heading** — the box has run past the end of its own
+  section, because that is what a heading means. Drop it.
+- **The row's own label, beside its icons** — normal. The space equipment
+  column labels each row to its left, on the same line, so sharing a band
+  with a label is how that panel is drawn. Keep the box.
+- **Anything else** — a divider such as `U.S.S. FURY Traits` inside the
+  starship trait block. The icons are usually just below, so move the box
+  rather than lose it.
+
+Telling the first two apart needs both the text and its position, and neither
+alone is enough. Position alone fails because a heading can end up beside a
+box instead of over it — the phantom eleventh trait ends 3 px before
+`Starship Traits` begins. Text alone fails because the game does not label a
+row with its slot name: the engines row reads `Impulse`, the shield row
+`Shields`, and a label too wide for its column is wrapped, so
+`Engineering Consoles` arrives as `Engineering` over `Consoles`. Both
+questions are therefore answered from `SLOT_LABEL_ALIASES`, the same table
+the OCR-header strategy uses — `match_slot_label` for "which section", and
+`is_slot_label_text` for the weaker "is this label text at all", which is all
+one can ask of a single wrapped line.
+
+Only the drop is destructive, so only the drop demands the strong answer: a
+multi-word section name that is not this box's own. One word is never enough,
+because `Weapons` resolves to `Aft Weapons` and is also the second line of
+the fore weapons label — a single-word test would delete the fore weapons row
+of every space screenshot.
+
+Two more details decide where a moved box actually lands. First, it is
+snapped onto the icon below the writing rather than parked under it: a
+divider does not push the next row down by a fixed amount, and one pixel
+under the text left the box 5 px above the real icon. The blobs come from
+`trait_grid`'s own `_detect_icon_ccs`, called rather than copied. Second, a
+row moves as a row — an `__inactive__` cell is drawn dark and has no blob to
+snap to, so the cells that found their icon answer for the ones that could
+not, and a row the game draws on one line stays on one line.
+
+Bands are local to the **section**, not to the single box: a token counts
+only if it lies across the columns that section occupies, from its leftmost
+cell to its rightmost. A screenshot holds several panels side by side, and a
+trait heading says nothing about the equipment column 200 px to its left.
+Asking instead whether text is near *a box* requires a tolerance, and that is
+the trap — a tolerance wide enough for a heading that misses its own leftmost
+cell by 3 px also reaches into the panel next door. Measured over 145 space
+screenshots: a padding of twice the slot width cost 85 confirmed boxes, every
+one of them a row's rightmost cell struck out by the trait panel's heading or
+a tooltip 24–150 px to its right.
+
+Only text at least twice the slot's width counts, which separates headings
+(74–132 px against a 27 px slot) from the `Mk XV` and `LOC` marks the game
+prints inside icons (28–46 px).
+
+Tests: `tests/test_boxes_on_text.py`.
+
 ## Independence rule (CRITICAL)
 
 Each row-group is classified on its own merits. The detector NEVER

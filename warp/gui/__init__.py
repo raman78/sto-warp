@@ -21,13 +21,13 @@ from PySide6.QtCore import Qt
 # something: blue is auto-confirmed, mint is user-confirmed, orange is a
 # community conflict, gold a slot-type mismatch, red unmatched. These two are
 # states of *nothing being there*, so they sit quieter than any of them while
-# still being two clearly different hues — lilac against sage.
+# still being two clearly different hues — lilac against pale brown.
 #
 # Defined here, where both the review list and the canvas tooltip can reach
 # them, so the two views cannot drift apart on what an empty slot looks like.
 VIRTUAL_COLOURS: dict[str, dict[str, str]] = {
     '__empty__':    {'confirmed': '#b3a6dd', 'pending': '#d0c8ec'},
-    '__inactive__': {'confirmed': '#8fb8b0', 'pending': '#b6d4ce'},
+    '__inactive__': {'confirmed': '#c0a482', 'pending': '#dbc8ae'},
 }
 
 # What the user reads instead of the internal marker.
