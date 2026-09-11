@@ -984,7 +984,19 @@ class TrainingDataManager:
         dest_dir = self._dir / 'screen_types' / screen_type
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / image_path.name
-        shutil.copy2(image_path, dest)
+        if dest.exists() and image_path.samefile(dest):
+            # The source already *is* the training copy, so there is nothing
+            # to copy and `shutil.copy2` would raise `SameFileError` rather
+            # than do nothing. Reachable whenever a caller hands over a path
+            # inside the store — pointing WARP CORE at the training folder
+            # itself is enough — and the caller is a click handler, so the
+            # exception would surface as a dead button. The label above is
+            # already written and the stale sweep below still has work to do:
+            # this screenshot may sit under other types too.
+            logger.debug(f'Screen type set: {image_path.name} is already the '
+                         f'{screen_type!r} training copy — nothing to copy')
+        else:
+            shutil.copy2(image_path, dest)
         for stale in self._stale_screen_type_copies(image_path, screen_type):
             try:
                 stale.unlink()

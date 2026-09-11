@@ -94,6 +94,36 @@ def test_setting_the_same_type_twice_keeps_the_file(store, tmp_path):
     assert _files(store) == {'BOFFS': ['shot.png']}
 
 
+# ── The source is already the training copy ───────────────────────────────
+#
+# Reachable whenever a caller hands over a path inside the store — pointing
+# WARP CORE at the training folder itself is enough. `shutil.copy2` raises
+# `SameFileError` rather than doing nothing, and the caller is a click
+# handler, so the exception would surface as a dead button.
+
+def test_confirming_the_training_copy_itself_does_not_raise(store, tmp_path):
+    shot = _shot(tmp_path)
+    placed = store.set_screen_type(shot, 'BOFFS')
+    assert store.set_screen_type(placed, 'BOFFS') == placed
+    assert _files(store) == {'BOFFS': ['shot.png']}
+    assert placed.read_bytes() == PNG
+
+
+def test_the_stale_sweep_still_runs_when_there_is_nothing_to_copy(store,
+                                                                 tmp_path):
+    """The early return is only for the copy. This screenshot may still sit
+    under other types, and those copies are what the sweep exists to remove."""
+    shot = _shot(tmp_path)
+    store.set_screen_type(shot, 'SPACE_BOFFS')
+    placed = store.set_screen_type(shot, 'BOFFS')
+
+    stale = store._dir / 'screen_types' / 'SPACE_BOFFS' / 'shot.png'
+    stale.write_bytes(PNG)                    # it came back, e.g. from a sync
+    store.set_screen_type(placed, 'BOFFS')    # source *is* the destination
+    assert not stale.exists()
+    assert _files(store) == {'BOFFS': ['shot.png'], 'SPACE_BOFFS': []}
+
+
 # ── Reconciling what is already on disk ───────────────────────────────────
 
 def _stale_store(store, tmp_path):
