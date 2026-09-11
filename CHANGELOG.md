@@ -8,6 +8,70 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.38] — 2026-09-11
+
+### Fixed
+
+- **Corrections made in WARP CORE now reach the community dataset.**
+  Opening the trainer on its own, rather than through the launcher,
+  sent nothing at all — confirmations piled up locally with no way
+  out, and no amount of waiting cleared them.
+- **The "not yet shared" counter now falls as work is sent.** In the
+  launcher it was worked out once, when the window opened, and never
+  again, so it could stand at the same number for days while uploads
+  ran normally in the background. That looked exactly like uploads
+  being refused, and was not.
+- **A screenshot now has exactly one screen type.** Correcting the
+  type left the original guess behind as a second copy, so both were
+  shared and the community vote became an arbitrary pick between the
+  correction and the mistake it replaced. Copies already on disk are
+  cleared as each screenshot is corrected.
+- **Sharing stops cleanly when the daily server limit is reached, and
+  resumes on its own.** The attempt used to repeat against a closed
+  door for the rest of the day, and a limit the server had already
+  lifted went unnoticed.
+- **Screen type detection works again.** A newer community model could
+  not be loaded at all, so every screenshot quietly fell back to a
+  rougher guess.
+- **Ship tier is read more reliably.** A tier printed tight against the
+  line below it is now read rather than missed, and a badge that cannot
+  be read is no longer reported as Tier 1 with high confidence — it is
+  marked for review instead.
+- **Equipment rows are named correctly far more often.** A label misread
+  by a single character used to drop its whole row of slots; a label
+  hidden behind a tooltip or cut off used to shift every row below it by
+  one. Rows are also measured to the panel's real width now, instead of
+  being sized from a ship that was never identified.
+- **Trait sections land on their icons.** A section the detector measured
+  correctly but counted short was replaced wholesale by a rough estimate,
+  which put whole blocks on the wrong part of the screen and sized them
+  wrongly. The measurement is now kept and only the missing slots are
+  filled in.
+- **Slots are no longer drawn on top of panel headings.** A row that
+  overshoots its panel used to place its last slot over the heading of
+  the section below.
+- **Bare panel is no longer treated as an empty slot.** Where a row
+  reaches past the last real slot, the result is flagged for review
+  rather than accepted automatically, so it no longer teaches the models
+  that panel background is an empty slot.
+
+### Changed
+
+- **Empty and inactive slots are easier to tell apart.** Each has its own
+  colour in the review list and its own wording in the tooltip, and a
+  slot that has been checked is now distinguishable from one nobody has
+  looked at yet.
+- **Unmarking a screenshot as done makes it fully reviewable again.** It
+  is treated like any other unfinished screenshot and rescanned, keeping
+  whatever was already confirmed.
+- **Screen type detection declines rather than guesses.** When the names
+  for a model's categories are unavailable, no screen type is reported at
+  all, instead of reporting a confidently wrong one.
+- **Screenshots are analysed noticeably faster.** The image used to be
+  read for text several times over per screenshot, and the text reader
+  itself was built more than once per session. Both now happen once and
+  are shared.
+
 ## [1.0.37] — 2026-09-05
 
 ### Added
