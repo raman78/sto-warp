@@ -255,14 +255,50 @@ the next run's skip-if-unchanged check compares against this.
 
 File: `sets-warp-backend/admin_train.py` — `train_screen_classifier()`
 
-Same flow with MobileNetV3-Small. 9-class output: `SPACE_EQ`, `GROUND_EQ`,
-`TRAITS`, `BOFFS`, `SPECIALIZATIONS`, `SKILLS`, `SPACE_MIXED`, `GROUND_MIXED`,
-`DISCARD`. `SKILLS` covers the captain skill tree (space/ground tabs);
-`SPACE_SKILLS` and `GROUND_SKILLS` are post-hoc environment refinements
-(same pattern as `BOFFS` → `SPACE_BOFFS` / `GROUND_BOFFS`). Both `SKILLS`
-and `DISCARD` skip all recognition — WARP returns an empty `ImportResult`
-for images classified into either (conf ≥ 0.50). Fine-tunes from previous
+Same flow with MobileNetV3-Small, fine-tuning from the previous
 `screen_classifier.pt` backbone.
+
+**The class count is a property of each training run, not a constant.** Two
+things vary it, and nothing downstream may assume either:
+
+- `admin_train.SCREEN_TYPES` filters which screen types are admitted at all
+  (11 entries). It does **not** set the head order.
+- The head is built over `sorted(set(labels))` — alphabetically, across only
+  the classes that survived `SC_MIN_CLASS_SAMPLES`. A type nobody has
+  contributed enough examples of is dropped from the run entirely, so adding
+  or filling a class changes both the size *and* the index of every class
+  after it alphabetically.
+
+That is why the committed `warp/models/screen_classifier.pt` has a 7-class
+head with labels `BOFFS, GROUND_EQ, GROUND_MIXED, SPACE_EQ, SPACE_MIXED,
+SPECIALIZATIONS, TRAITS` — alphabetical, and four short of the admitted list.
+
+`ScreenTypeClassifier` therefore reads `n_classes` from the checkpoint's
+`classifier.3.weight` rather than from a constant or a metadata file. Before
+that it assumed 7, a central run published an 8-class head, and the classifier
+stopped loading altogether:
+
+```
+ScreenClassifier: model load failed: size mismatch for classifier.3.weight:
+copying a param with shape torch.Size([8, 1024]) from checkpoint, the shape
+in current model is torch.Size([7, 1024])
+```
+
+Every screenshot then took the non-ML path, and nothing in the UI said so.
+
+Names come from `screen_classifier_labels.json`, published beside the weights.
+The client's own `SCREEN_TYPES` list is used only when that file is absent, and
+it is **not** a safe substitute — it is in declaration order, not alphabetical,
+so index 0 would read `SPACE_EQ` where the model means `BOFFS`. The classifier
+logs a warning when the label count and the head size disagree. See
+[Open question 1](#open-questions).
+
+`SKILLS` covers the captain skill tree (space/ground tabs). `SPACE_SKILLS` and
+`GROUND_SKILLS` are post-hoc environment refinements of it — they are not
+trained classes. `SPACE_BOFFS` and `GROUND_BOFFS`, despite following the same
+naming pattern, *are* trained classes in the backend list. Both `SKILLS` and
+`DISCARD` skip all recognition: WARP returns an empty `ImportResult` for images
+classified into either (conf ≥ 0.50).
 
 ### Central training process (ArcFace embedder)
 
@@ -701,3 +737,30 @@ flow as in §4. After upload, **central training resumes normal operation**
 on community-contributed real crops — no further local intervention.
 
 The upload is a one-time admin action; users do not run this themselves.
+
+---
+
+## 10. Open questions
+
+1. **The client's `SCREEN_TYPES` fallback cannot be trusted by position.**
+   `ScreenTypeClassifier` falls back to `{i: s for i, s in
+   enumerate(SCREEN_TYPES)}` when `screen_classifier_labels.json` is absent.
+   But the head is ordered alphabetically over the classes present in the
+   training data, while `SCREEN_TYPES` is in declaration order — two different
+   ordering principles, so the mapping is wrong at almost every index, not
+   merely truncated. Against the committed 7-class model, index 0 would be
+   reported as `SPACE_EQ` when the model means `BOFFS`.
+
+   That makes the fallback worse than no classifier: it yields *confidently
+   wrong* screen types, and a wrong screen type sends the whole screenshot
+   down the wrong recognition path. Nothing in the UI distinguishes it from a
+   correct answer.
+
+   Needs a decision from whoever owns the backend training job. Either make
+   the label map a hard requirement and have the client refuse to classify
+   without it, or have the run publish its label order and drop the
+   client-side list. Blocking nothing today — the labels file does ship — so
+   this is about what happens the first time it does not.
+
+   Related: the count itself is read from the weights, not assumed. See
+   [Central training process (screen classifier)](#central-training-process-screen-classifier).

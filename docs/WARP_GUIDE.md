@@ -731,23 +731,37 @@ Lists all items detected in the current screenshot, one row per slot. Each row s
 - Slot name (e.g. "Fore Weapon 3")
 - Recognised item name (or "???" if not matched)
 - Confidence percentage, colour-coded:
-  - **Green** ≥ 75% — confident match
-  - **Yellow** 40–74% — uncertain, review recommended
-  - **Red** < 40% — poor match, manual correction needed
-- Status — where the row stands, and where its value came from:
+  - **Green** ≥ 85% — confident match
+  - **Yellow** 70–84% — uncertain, review recommended
+  - **Red** < 70% — poor match, manual correction needed
+- Status — how far along the row is.
+
+The two columns answer different questions, and it is worth knowing which is
+which. **What the slot holds** is the item name, plus the row's colour. **How
+far the row has got** is the Status. An empty slot you have checked and an
+empty slot nobody has looked at say the same thing in the name column —
+`[empty slot]` — and differ only in Status. That split is why you can tell a
+reviewed row from an unreviewed one at a glance, whatever is in it.
 
 | Status | What it means |
 |---|---|
-| **Match** | Recognised, waiting for you to accept it. |
-| **Low** | Recognised, but the confidence is poor — check this one before accepting. |
+| **Match** | Recognised at 70% or better, waiting for you to accept it. |
+| **Low** | Recognised, but under 70% — check this one before accepting. |
 | **Unmatched** | Nothing was recognised inside this box. |
+| **Pending** | The program decided this slot holds nothing — empty or inactive — and is waiting for you to agree. |
 | **Auto** | Accepted for you, because the confidence was above the auto-accept threshold. |
 | **Confirmed** | You accepted this row yourself. |
-| **Empty** | The slot is empty in the game. |
-| **Inactive** | The slot exists but is locked or switched off in the game. |
 | **Inferred** | Not read off the screenshot — worked out from what the rest of the picture shows. See [When the tier is not on the screenshot at all](#when-the-tier-is-not-on-the-screenshot-at-all). |
 | **Type ✕** | The item was recognised, but it does not belong in this kind of slot. |
 | **Conflict** | Your saved answer and the community's answer disagree. See [Community conflicts](#community-conflicts). |
+
+"Empty" and "Inactive" are not statuses. They describe what is in the slot, so
+they appear in the name column as `[empty slot]` and `[inactive slot]` — see
+[Annotating empty and inactive Bridge Officer slots](#annotating-empty-and-inactive-bridge-officer-slots).
+Accepting one moves its
+Status to **Confirmed** like any other row; while it was listed as a status
+instead, a confirmed empty slot went on reading "Empty" for ever and there was
+no way to see you had already checked it.
 
 Every status can be changed. Pick the row, correct the name, and accept it — an **Inferred** or **Auto** row is no more final than any other.
 

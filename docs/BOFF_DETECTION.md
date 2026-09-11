@@ -262,10 +262,10 @@ equipment cells too — e.g. locked equipment slots (padlock icon on
 near-black background) and unequipped positions that `_detect_via_pixel_analysis`
 projects from the ship profile count.
 
-`LayoutDetector._classify_cell(crop_bgr)`
-(`LayoutDetector._detect_spec` in `warp/recognition/layout_detector.py`) samples the **inner 60%**
-of the crop (20% margin on each side to avoid border contamination) and
-computes four HSV statistics:
+`LayoutDetector._classify_cell(crop_bgr)`, in
+`warp/recognition/layout_detector.py`, samples the **inner 60%** of the crop
+(20% margin on each side to avoid border contamination) and computes four HSV
+statistics:
 
 | Statistic | Variable | What it captures |
 |---|---|---|

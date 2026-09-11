@@ -53,11 +53,22 @@ except Exception:
     _slog = log
 
 # ── Constants ──────────────────────────────────────────────────────────────────
-# Mirrors the shipped 7-class model (warp/models/screen_classifier_labels.json).
-# Environment-specific variants (SPACE_TRAITS / GROUND_TRAITS / SPACE_BOFFS /
-# GROUND_BOFFS) are NOT model output — they are post-hoc refinements applied
-# by the trainer's folder-environment rule and the importer's OCR/ML rescue
-# ladder. See warp.trainer.trainer_window._folder_environment.
+# Last-resort names for the model's outputs, used only when the label map
+# published beside the weights is missing.
+#
+# It does NOT mirror the shipped model and must not be relied on by position.
+# The backend builds the head over `sorted(set(labels))` -- alphabetically,
+# across whatever classes had enough training samples -- so both the count and
+# every index move between runs. The shipped 7-class model reads BOFFS,
+# GROUND_EQ, GROUND_MIXED, SPACE_EQ, SPACE_MIXED, SPECIALIZATIONS, TRAITS;
+# against that, index 0 here says SPACE_EQ and means BOFFS. Always prefer
+# LABELS_FILENAME. See docs/ML_PIPELINE.md "Open questions".
+#
+# SPACE_TRAITS / GROUND_TRAITS are never model output -- they are post-hoc
+# refinements from the trainer's folder-environment rule and the importer's
+# OCR/ML rescue ladder (see warp.trainer.trainer_window._folder_environment).
+# SPACE_BOFFS / GROUND_BOFFS follow the same naming pattern but are admitted
+# as trainable classes by the backend, so a future run may emit them directly.
 SCREEN_TYPES = [
     'SPACE_EQ', 'GROUND_EQ', 'TRAITS', 'BOFFS',
     'SPECIALIZATIONS', 'SKILLS', 'SPACE_MIXED', 'GROUND_MIXED', 'DISCARD',
