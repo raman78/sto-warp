@@ -24,7 +24,19 @@
 #   stype, conf = classifier.classify(img_bgr)          # full pipeline
 #   classifier.add_session_example(img_bgr, stype)      # call on user correction
 #
-# Training data is NOT managed here — see screen_type_trainer.py.
+# Training data is NOT managed here, and neither is training. A user
+# correction writes the screenshot into `screen_types/<TYPE>/` through
+# `TrainingDataManager.set_screen_type`; the trainer uploads that folder; the
+# backend merges the votes and trains `models/screen_classifier.pt` from the
+# merged result (`admin_train.py` in sets-warp-backend, reading
+# `data/screen_types/metadata.jsonl`), and `ModelUpdater` downloads it.
+#
+# There used to be a second, local trainer — `screen_type_trainer.py`, a
+# MobileNetV3 fine-tune over the same folder — and it had lost its last caller
+# long before it was removed on 2026-09-11. It is named here because its
+# leftovers are still on disk in some stores: it saved a 224x224 thumbnail on
+# every correction, which is why a training folder can hold two files for one
+# screenshot. `warp.tools.reconcile_screen_types` sweeps those.
 
 from __future__ import annotations
 

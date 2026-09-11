@@ -33,8 +33,11 @@ reported and left alone.
 
 It sweeps a second kind of duplicate at the same time, for the same reason:
 one file per screenshot per type. The folder holds two generations —
-``set_screen_type`` used to save a 224x224 thumbnail, which is the shape
-``screen_type_trainer`` still documents, and now copies the screenshot whole.
+``set_screen_type`` used to save a 224x224 thumbnail, because a local
+MobileNetV3 fine-tune (`screen_type_trainer.py`, removed 2026-09-11 after
+losing its last caller) took the folder as its dataset and 224 is the model's
+input size. It now copies the screenshot whole, and the classifier is trained
+centrally from the merged community data instead.
 Where both survive, the thumbnail is not merely similar to its full-size twin.
 The classifier resizes every input with a plain ``cv2.resize`` to 224x224, so
 the two are the *same tensor*: measured over all 74 such pairs in the
@@ -177,7 +180,7 @@ def reconcile(training_dir: Path, apply: bool) -> int:
     # ── One file per screenshot per type ─────────────────────────────────
     #
     # The training folder held two generations. `set_screen_type` used to save
-    # a 224x224 thumbnail — the shape `screen_type_trainer` still documents —
+    # a 224x224 thumbnail, for a local trainer that has since been removed,
     # and now copies the screenshot whole. Where both exist, the thumbnail is
     # not merely similar to its full-size twin: the classifier resizes every
     # input with a plain `cv2.resize` to 224x224, so the two are the *same
