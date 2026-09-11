@@ -339,6 +339,66 @@ def drop_boxes_on_text(result: dict, ocr_tokens: list[dict] | None,
     return out
 
 
+def _extend_on_grid(boxes: list, want: int) -> list | None:
+    """Lay *want* cells on the grid *boxes* already describe, or None.
+
+    The grid detector reports the cells it could see. When the profile lists
+    more, the missing ones belong on the same grid — same columns, same step,
+    same size — not in whatever place a projection from OCR headers happened
+    to pick. Reading order, wrapping into the next row once the five columns
+    are used, which is how the game lays a trait block out.
+
+    None when there is nothing to extrapolate from: a single cell gives no
+    step, and inventing one would put a box at a guessed distance, which is
+    the failure this exists to avoid.
+    """
+    import statistics as _st
+    if not boxes or want <= len(boxes):
+        return list(boxes) if boxes else None
+    xs = sorted({b[0] for b in boxes})
+    ys = sorted({b[1] for b in boxes})
+    if len(xs) < 2:
+        return None
+    w = int(_st.median(b[2] for b in boxes))
+    h = int(_st.median(b[3] for b in boxes))
+
+    def _unit(gap: int, size: int) -> int:
+        """The single-cell step behind a gap that may span several cells.
+
+        The detector reports the cells it could see, and they need not be
+        adjacent: on `image-4391ccd9d2683d4e.png` it found columns 0 and 3 of
+        a `Starship Traits` row, 100 px apart. Taking that as the step laid
+        the row out at 658, 758, 858, 958, 1058 — three cells past the right
+        edge of the panel. A gap is a whole number of steps, and a step is a
+        little wider than a cell, so the multiple can be recovered.
+        """
+        floor = max(1, int(size * 1.15))
+        k = max(1, int(round(gap / floor)))
+        unit = int(round(gap / k))
+        return unit if unit >= size else floor
+
+    step = _unit(min(b - a for a, b in zip(xs, xs[1:])), w)
+    pitch = (_unit(min(b - a for a, b in zip(ys, ys[1:])), h)
+             if len(ys) >= 2 else int(round(h * 1.21)))
+    if step <= 0 or pitch <= 0:
+        return None
+    x0, y0 = xs[0], ys[0]
+    n_cols = max(len(xs), 5)
+    out = []
+    for i in range(want):
+        out.append((x0 + (i % n_cols) * step, y0 + (i // n_cols) * pitch,
+                    w, h))
+    # Keep the detector's own boxes wherever it found one: they are measured,
+    # the extrapolated ones are not.
+    for b in boxes:
+        cx, cy = b[0] + b[2] // 2, b[1] + b[3] // 2
+        for j, o in enumerate(out):
+            if o[0] <= cx <= o[0] + o[2] and o[1] <= cy <= o[1] + o[3]:
+                out[j] = tuple(b[:4])
+                break
+    return out
+
+
 def merge_trait_boxes(result: dict, trait_grid_res: dict,
                       in_boff_panel, icon_counts: dict | None = None,
                       profile: dict | None = None) -> dict:
@@ -379,6 +439,23 @@ def merge_trait_boxes(result: dict, trait_grid_res: dict,
     Without a profile the drawn row is all there is, and the old comparison
     stands.
 
+    **A short section is extended on the grid's own geometry, not replaced.**
+    Keeping the projected row when the grid found fewer boxes throws away a
+    correct position to preserve a correct count, and those are two different
+    things. Measured on `image-9542d3c56fb6c860.png`: the projection put
+    `Space Reputation` at x=470 — on the mastery panel at the far left of the
+    screen, nowhere near the trait block — because the OCR header detector had
+    matched the words `Starship Mastery Unlocks` and `Experimental Traits` in
+    that panel and extrapolated from them. The grid had the section in the
+    right place with four of its five cells, and lost, because four is fewer
+    than five. `Personal Space Traits` lost the same way and came out at 35x45
+    where the real trait icons are 27x37, because the projection sizes its
+    cells from the *equipment* panel.
+
+    So when the grid found a section the grid's geometry wins, and the missing
+    cells are laid out from it: same columns, same step, same cell size,
+    continuing into the next row when the five columns are full.
+
     `result` is modified in place and returned, as the caller expects.
 
     *icon_counts*, when given, is filled with `{slot: icons the grid found}`.
@@ -404,8 +481,15 @@ def merge_trait_boxes(result: dict, trait_grid_res: dict,
         drawn = len(result.get(slot, []))
         have = (profile or {}).get(slot, drawn)
         if len(clean) < have:
-            kept.append(f'{slot} {len(clean)}<{have}')
-            continue
+            grown = _extend_on_grid(clean, have)
+            if grown is None:
+                kept.append(f'{slot} {len(clean)}<{have}')
+                continue
+            _slog.info(
+                f'LayoutDetector: trait_grid found {len(clean)} of the '
+                f'{have} {slot} the profile lists — extending its own grid '
+                f'rather than falling back to the projected row')
+            clean = grown
         # Counted against what was actually drawn, since that is what the
         # number of bboxes changes by. The comparison above is a different
         # question and uses a different yardstick.

@@ -258,3 +258,59 @@ def test_without_a_profile_the_drawn_row_is_the_yardstick():
     merge_trait_boxes(result, {'Starship Traits': [(9, 9, 42, 56)] * 5},
                       lambda b: False)
     assert result['Starship Traits'] == rows
+
+
+# ── A short section is extended on its own grid ───────────────────────────
+#
+# Keeping the projected row when the grid found fewer boxes throws away a
+# correct position to preserve a correct count, and those are different
+# things. Measured on `image-9542d3c56fb6c860.png`: the projection put
+# `Space Reputation` on the mastery panel at the far left of the screen,
+# because the OCR header detector had matched `Starship Mastery Unlocks`
+# there, and it won because it had five boxes to the grid's four.
+
+from warp.recognition.layout_detector import _extend_on_grid  # noqa: E402
+
+
+def test_a_missing_cell_is_laid_on_the_grid_that_was_found():
+    found = [(962, 309, 27, 37), (994, 309, 27, 37), (1026, 309, 27, 37),
+             (1059, 309, 27, 37)]
+    out = _extend_on_grid(found, 5)
+    assert out[:4] == found
+    assert out[4] == (962 + 4 * 32, 309, 27, 37)
+
+
+def test_it_wraps_into_the_next_row_when_the_columns_are_full():
+    found = [(962, 309, 27, 37), (994, 309, 27, 37), (1026, 309, 27, 37),
+             (1059, 309, 27, 37), (1091, 309, 27, 37),
+             (962, 350, 27, 37)]
+    out = _extend_on_grid(found, 7)
+    assert len(out) == 7
+    assert out[6][0] == 994 and out[6][1] == 350
+
+
+def test_a_gap_of_several_cells_is_not_taken_for_one_step():
+    """`image-4391ccd9d2683d4e.png`: the grid found columns 0 and 3 of a row,
+    100 px apart. Reading that as the step laid the row out at 658, 758, 858,
+    958, 1058 — three cells past the right edge of the panel."""
+    out = _extend_on_grid([(658, 352, 28, 31), (758, 352, 28, 31)], 5)
+    assert [b[0] for b in out] == [658, 691, 724, 758, 790]
+
+
+def test_the_boxes_the_detector_found_are_kept_as_measured():
+    """The extrapolated cells are guesses; the found ones are not."""
+    found = [(658, 352, 28, 31), (758, 352, 28, 31)]
+    out = _extend_on_grid(found, 5)
+    for b in found:
+        assert b in out
+
+
+def test_one_cell_gives_no_step_to_extrapolate_from():
+    """Inventing one would put a box at a guessed distance, which is the
+    failure this exists to avoid."""
+    assert _extend_on_grid([(962, 309, 27, 37)], 5) is None
+
+
+def test_a_section_that_is_already_long_enough_is_left_alone():
+    found = [(962, 309, 27, 37), (994, 309, 27, 37)]
+    assert _extend_on_grid(found, 2) == found
