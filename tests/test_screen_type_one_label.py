@@ -148,3 +148,60 @@ def test_a_cache_entry_that_agrees_is_kept(store, tmp_path):
     cache.write_text(json.dumps({sha: 'BOFFS'}))
     reconcile(store._dir, apply=True)
     assert json.loads(cache.read_text()) == {sha: 'BOFFS'}
+
+
+# ── One file per screenshot per type ──────────────────────────────────────
+#
+# The folder holds two generations: `set_screen_type` used to save a 224x224
+# thumbnail and now copies the screenshot whole. The classifier resizes every
+# input with a plain `cv2.resize` to 224x224, so where both survive they are
+# the *same tensor* — measured over all 74 such pairs in the maintainer's
+# store, mean pixel difference 0.00 on every one.
+
+import numpy as np
+import pytest
+
+cv2 = pytest.importorskip('cv2')
+
+
+def _write(path, w, h):
+    rng = np.random.default_rng(seed=w * h)
+    img = rng.integers(0, 255, (h, w, 3), dtype=np.uint8)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    cv2.imwrite(str(path), img)
+    return cv2.imread(str(path))
+
+
+def test_a_thumbnail_of_a_file_already_there_is_swept(store, tmp_path):
+    d = store._dir / 'screen_types' / 'SPACE_EQ'
+    whole = _write(d / 'shot.png', 640, 360)
+    cv2.imwrite(str(d / 'shot_deadbeef.png'),
+                cv2.resize(whole, (224, 224), interpolation=cv2.INTER_AREA))
+    reconcile(store._dir, apply=True)
+    assert _files(store)['SPACE_EQ'] == ['shot.png']
+
+
+def test_a_thumbnail_with_no_twin_is_kept(store, tmp_path):
+    """It is the only copy of that screenshot, and worth exactly what a
+    full-size one would be — the classifier resizes to 224 either way."""
+    d = store._dir / 'screen_types' / 'SPACE_EQ'
+    _write(d / 'lonely_deadbeef.png', 224, 224)
+    reconcile(store._dir, apply=True)
+    assert _files(store)['SPACE_EQ'] == ['lonely_deadbeef.png']
+
+
+def test_a_different_picture_with_a_tag_shaped_name_is_kept(store, tmp_path):
+    """The name is how the pair is found; the pixels decide."""
+    d = store._dir / 'screen_types' / 'SPACE_EQ'
+    _write(d / 'shot.png', 640, 360)
+    _write(d / 'shot_deadbeef.png', 224, 224)      # unrelated content
+    reconcile(store._dir, apply=True)
+    assert _files(store)['SPACE_EQ'] == ['shot.png', 'shot_deadbeef.png']
+
+
+def test_a_full_size_file_is_never_taken_for_a_thumbnail(store, tmp_path):
+    d = store._dir / 'screen_types' / 'SPACE_EQ'
+    _write(d / 'shot.png', 640, 360)
+    _write(d / 'shot_deadbeef.png', 640, 360)
+    reconcile(store._dir, apply=True)
+    assert _files(store)['SPACE_EQ'] == ['shot.png', 'shot_deadbeef.png']

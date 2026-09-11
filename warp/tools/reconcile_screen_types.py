@@ -31,6 +31,18 @@ given, and it only ever deletes a file whose content hash matches a screenshot
 the labels place under a *different* type. Anything it cannot account for is
 reported and left alone.
 
+It sweeps a second kind of duplicate at the same time, for the same reason:
+one file per screenshot per type. The folder holds two generations —
+``set_screen_type`` used to save a 224x224 thumbnail, which is the shape
+``screen_type_trainer`` still documents, and now copies the screenshot whole.
+Where both survive, the thumbnail is not merely similar to its full-size twin.
+The classifier resizes every input with a plain ``cv2.resize`` to 224x224, so
+the two are the *same tensor*: measured over all 74 such pairs in the
+maintainer's store, the mean pixel difference was 0.00 on every one. That is
+one screen counted twice, in training and in the community dataset. A
+thumbnail with no twin is the only copy of its screenshot and is worth exactly
+what a full-size one would be, so it stays — 39 of the 113 on that store.
+
 Usage::
 
     python -m warp.tools.reconcile_screen_types              # report only
@@ -42,6 +54,7 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import re
 import sys
 from collections import Counter, defaultdict
 from pathlib import Path
@@ -70,6 +83,45 @@ def _labels(training_dir: Path) -> dict[str, str]:
         return {}
     return {k: v for k, v in raw.items()
             if isinstance(v, str) and len(k) == 16 and not k.endswith('.png')}
+
+
+def _redundant_thumbnails(root: Path) -> list[Path]:
+    """224x224 copies that a full-size file in the same folder already covers.
+
+    The name is how the pair is found — the thumbnail generation appended an
+    eight-character tag — but the pixels decide. `screen_classifier` resizes
+    every input with a plain `cv2.resize` to 224x224, so a thumbnail made that
+    way *is* what the full screenshot becomes; anything that does not match is
+    a different picture and stays.
+    """
+    import cv2
+    import numpy as np
+
+    out: list[Path] = []
+    for type_dir in sorted(root.iterdir()):
+        if not type_dir.is_dir():
+            continue
+        by_stem = {p.stem: p for p in type_dir.glob('*.png')}
+        for stem, path in sorted(by_stem.items()):
+            m = re.match(r'^(.*)_[0-9a-f]{8}$', stem)
+            if not m:
+                continue
+            twin = by_stem.get(m.group(1))
+            if twin is None:
+                continue
+            small = cv2.imread(str(path))
+            whole = cv2.imread(str(twin))
+            if small is None or whole is None:
+                continue
+            if small.shape[:2] != (224, 224):
+                continue
+            resized = cv2.resize(whole, (224, 224),
+                                 interpolation=cv2.INTER_AREA)
+            if resized.shape != small.shape:
+                continue
+            if float(np.abs(small.astype(int) - resized.astype(int)).mean()) < 1.0:
+                out.append(path)
+    return out
 
 
 def reconcile(training_dir: Path, apply: bool) -> int:
@@ -122,18 +174,43 @@ def reconcile(training_dir: Path, apply: bool) -> int:
         if len(unlabelled) > 10:
             print(f'   … and {len(unlabelled) - 10} more')
 
+    # ── One file per screenshot per type ─────────────────────────────────
+    #
+    # The training folder held two generations. `set_screen_type` used to save
+    # a 224x224 thumbnail — the shape `screen_type_trainer` still documents —
+    # and now copies the screenshot whole. Where both exist, the thumbnail is
+    # not merely similar to its full-size twin: the classifier resizes every
+    # input with a plain `cv2.resize` to 224x224, so the two are the *same
+    # tensor*. Measured 2026-09-11 over all 74 such pairs in the maintainer's
+    # store: mean pixel difference 0.00 on every one.
+    #
+    # So a paired thumbnail is one screen counted twice, in training and in
+    # the community dataset. An unpaired one is the only copy of that
+    # screenshot and is worth exactly as much as a full-size one would be, so
+    # it stays.
+    twins = _redundant_thumbnails(root)
+    if twins:
+        print(f'\n{len(twins)} thumbnail(s) that duplicate a full-size copy '
+              f'of the same screenshot, pixel for pixel once resized:')
+        for p in sorted(twins)[:6]:
+            print(f'   {p.parent.name}/{p.name}')
+        if len(twins) > 6:
+            print(f'   … and {len(twins) - 6} more')
+
     if not apply:
         print('\ndry run — pass --apply to remove the contradicting copies')
         return len(stale)
 
     removed = 0
-    for p in stale:
+    for p in stale + twins:
         try:
             p.unlink()
             removed += 1
         except OSError as e:                          # noqa: PERF203
             print(f'  could not remove {p}: {e}')
-    print(f'\nremoved {removed} of {len(stale)}')
+    print(f'\nremoved {removed} of {len(stale) + len(twins)} '
+          f'({len(stale)} contradicting the label, {len(twins)} duplicate '
+          f'thumbnails)')
 
     # The upload cache remembers `{sha: type}` for what has gone up. Entries
     # naming a type this store no longer holds would keep the screenshot
