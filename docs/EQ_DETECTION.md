@@ -141,6 +141,55 @@ profile decides what to emit, so rows the profile counts as 0 — and
 therefore skips — still leave their measurement behind. That is the input
 to §4.
 
+### When OCR does not deliver the label
+
+`cy_to_slot` is authoritative (EQ-2), but it is only as complete as the read.
+OCR fails on labels in three distinct ways, and each has its own recovery
+because each has a different amount of evidence to work from. The order below
+is the order of preference: a real reading always beats a projection.
+
+| What went wrong | Recovery | Where |
+|---|---|---|
+| The label was read, with a wrong character | Match it to the nearest keyword | `ground_eq_geometry._fuzzy_slot` (ground), `eq_geometry._fuzzy_best` (space) |
+| The label was not read at all, but others were | Project its position from the ones that were | `ground_eq_geometry._fill_missing_labels` |
+| A row has no label and no projected position | Name it from the slots its neighbours bracket | `layout_detector.fill_unanchored_rows` |
+
+**Near-miss matching.** The ground detector compared keywords by exact string
+equality until 2026-09-05, so one wrong character dropped a whole row without
+a trace. On `Screenshot_2025-03-19_122129.png` the reader returned
+`Kil Modules` for a perfectly legible *Kit Modules* — one character in eleven
+— and six cells were lost. The space detector had fuzzed all along; the ground
+one simply never did. Both now use cutoff `LABEL_FUZZY_CUTOFF` 0.65 with a
+length guard: only keywords within two characters of the token are considered,
+which is what stops tolerance becoming invention (`devlces` scores 0.444
+against `kit modules`, `weapors` 0.222).
+
+**Projecting a missing label.** Ground rows are not evenly spaced — `Weapons`
+holds two stacked cells, so what follows sits about one and a half rows lower.
+But the spacing is a fixed *proportion* of the panel's scale. Measured over 17
+ground screenshots with row pitches from 58 to 106 px, each row's offset from
+`Kit Modules` in units of row pitch was constant to a standard deviation of
+0.013–0.024 — about 1.2 px on a typical panel. Those constants are `ROW_RATIO`,
+so any one label positions all the others. The **median** of the candidates is
+taken, not the first, so a single label OCR placed slightly low cannot drag the
+whole panel with it.
+
+**Naming a row from its neighbours.** Where the ship and tier are known, the
+panel's slot sequence is known too, so a run of unnamed rows between two
+anchored ones can be filled from the slots that lie between those anchors.
+`fill_unanchored_rows` does this **only when the count is unambiguous**: a run
+of two unnamed rows is filled only if exactly two expected slots sit between
+its neighbours. When the numbers disagree the rows stay unnamed, deliberately —
+an unnamed row costs the user one manual box, a wrongly named one silently
+writes an item into the wrong slot.
+
+This replaced indexing a flat list by row number, which broke whenever the
+list's order did not match the panel's. On `image-4e7c6849dd28da67.png`, where
+the *Devices* and *Universal Consoles* labels are covered, the list placed
+`Hangars` at position 6 — it is inserted after `Aft Weapons` while the game
+draws it last — so row 6 was left empty, row 7 took `Devices`, every row below
+shifted down one, and `Universal Consoles` was never placed at all.
+
 ### Is there a cell here at all?
 
 `count = profile[slot]` above is the weak point when the profile is a guess.

@@ -209,6 +209,46 @@ measured row, and the case the rule was written for is unaffected — on
 `image-4391ccd9d2683d4e.png` the profile says seven and the grid found two,
 still a shrink and still refused.
 
+### Count and position are different things
+
+Refusing to shrink a section is not the same as accepting the projection
+wholesale, and for a while the merge conflated them. When the grid found a
+section but found *fewer* cells than the profile lists, the whole section fell
+back to the OCR-anchored projection — trading a measured position for a
+better count.
+
+`image-9542d3c56fb6c860.png` shows what that costs. Its left panel carries the
+words *Starship Mastery Unlocks* and *Experimental Traits*; the header
+detector took those for trait headings, anchored `Starship Traits` at x=99 and
+extrapolated `Space Reputation` from it to x=570, across the mastery panel.
+`trait_grid` had all three sections in the right place — but it had found 10
+of 11 personal traits and 4 of 5 reputation entries, so the projection won on
+count and the measurement lost on position. `Starship Traits` was the one
+section where the grid matched the profile, and it alone came out right.
+
+So when the grid found a section, its geometry is now authoritative and the
+missing cells are laid out **on that grid**: same columns, same step, same
+cell size, wrapping into the next row once the five columns are used, which is
+how the game lays a trait block out. `_extend_on_grid` does this. Cells the
+detector actually found are kept as measured; only the added ones are
+extrapolated. A section with a single found cell gives no step to work from
+and falls back to the old behaviour rather than inventing one.
+
+**The step cannot be read off the gap between found cells.** They need not be
+adjacent: on `image-4391ccd9d2683d4e.png` the grid found columns 0 and 3 of a
+row, 100 px apart, and taking that as the step laid the row out at 658, 758,
+858, 958, 1058 — three cells past the right edge of the panel. A gap is a
+whole number of steps and a step is a little wider than a cell, so `_unit`
+recovers the multiple before use. This was caught by measurement, not by
+reasoning about the code.
+
+One reported defect on that screenshot needed no code at all. Once the
+eleventh personal trait was placed on the real grid it landed on the
+`Starship Traits` heading and the existing rule below dropped it. That rule
+had never had anything to catch, because the bad projection put the box
+*below* the heading, already inside the next section — bad geometry was hiding
+a working guard.
+
 Implementation:
 
 - `LayoutDetector.detect` (`layout_detector.py`), the `TRAITS` /
