@@ -1270,13 +1270,25 @@ Seeing it briefly is normal. Uploads go out in the background every few
 minutes rather than the instant you press Enter, so a fresh batch of
 confirmations shows here and then clears on its own.
 
-What matters is whether it falls. If the same number sits there across
-several syncs, the uploads are being refused rather than queued — the
-**System logs** tab records the reason each time, and it is usually a
+The number is recounted when a sync cycle *finishes*, not while one runs —
+the upload is the last thing a cycle does, so any reading taken earlier would
+still be the old one. That is the only moment it is recomputed, which is why
+it can lag a confirmation you have just made: confirming only ever pushes the
+number up, and a reading that is briefly too low costs you nothing.
+
+What matters is whether it falls across completed cycles. If the same number
+survives several of them, the uploads are being refused rather than queued —
+the **System logs** tab records the reason each time, and it is usually a
 screenshot the server considers too large or a screen type it does not
 accept. Nothing is lost while the number stands: anything not accepted is
 retried on the next sync, which is why it is worth reporting rather than
 ignoring.
+
+Until 2026-09-11 that recount was wired only in the standalone WARP CORE
+window. Inside the launcher the counter was worked out once, as the window
+was built, and then never again — so it could sit at the same value for days
+while uploads went out every hour, which read as a refusal and was not one.
+If you are looking at an older build, that is the first thing to rule out.
 
 The count compares this machine against its own record of what it sent, so it
 cannot tell you whether something it believes it sent actually arrived.

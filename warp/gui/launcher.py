@@ -208,6 +208,15 @@ class LauncherWindow(QMainWindow):
         self._coord.busy_changed.connect(self._on_busy_changed)
         self._coord.status.connect(self._on_status)
 
+        # The coordinator already says when a cycle ends. `busy_changed(False)`
+        # is the moment the "not yet shared" count can have changed, and in the
+        # embedded trainer nothing else recomputes it: `_refresh_upload_backlog`
+        # runs from `WarpCoreWindow.__init__` and from `_on_sync_timer`, and
+        # that timer is only connected when the window runs standalone. So the
+        # launcher's count was computed once, at window build, and then stood
+        # still for the rest of the session however much went up.
+        self._coord.busy_changed.connect(self._on_sync_busy_for_backlog)
+
         # Kick off the initial cycle on the next event loop tick so the
         # window is visible before sync prints to the status bar. When
         # the cold-start splash already drove every phase to completion
@@ -316,6 +325,20 @@ class LauncherWindow(QMainWindow):
 
     def _on_busy_changed(self, busy: bool):
         self._refresh_btn.setEnabled(not busy)
+
+    def _on_sync_busy_for_backlog(self, busy: bool):
+        """Recount "not yet shared" once the sync cycle that changed it ends.
+
+        The upload is the last step of a cycle, so the count is stale from the
+        moment one starts until it finishes. Recounting on the rising edge
+        would only re-read the figure the label already shows.
+        """
+        if busy:
+            return
+        try:
+            self._core_win._refresh_upload_backlog()
+        except Exception as e:                        # noqa: BLE001
+            log.debug(f'Launcher: backlog refresh skipped ({e})')
 
     def _on_status(self, text: str):
         self.statusBar().showMessage(text)

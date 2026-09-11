@@ -3411,9 +3411,18 @@ class WarpCoreWindow(QMainWindow):
     def _refresh_upload_backlog(self) -> None:
         """Show, or hide, how much this machine has confirmed but not shared.
 
-        Called after a sync cycle and after the review panel is repopulated,
-        which between them cover both directions the number moves in: work
-        arriving (a confirmation) and work leaving (an upload).
+        Called after a sync cycle, which is the direction that matters: work
+        leaving. Standalone, that is this window's own five-minute timer;
+        under the launcher it is `busy_changed(False)` from the coordinator,
+        because the trainer's timer is deliberately not armed there and this
+        was the only thing that refreshed the number. Without that second
+        wiring the count was taken once as the window was built and never
+        again — it read 129 for days while uploads ran every hour, which
+        looked exactly like uploads being refused.
+
+        The other direction, a confirmation arriving, is not wired: the number
+        only grows there, and a stale-low reading costs nothing. This docstring
+        claimed both for a while, which is how the missing one stayed missing.
 
         Never raises — a status label must not be the thing that breaks the
         trainer.
