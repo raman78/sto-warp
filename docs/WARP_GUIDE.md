@@ -887,6 +887,13 @@ If WARP missed a slot entirely (no box drawn over an item):
 3. Drag over the item icon to draw a box.
 4. The box is recognised immediately. Correct the name if needed, then Accept.
 
+The crosshair follows the Alt key itself, not the moment you pressed it: if you
+switch to another window while holding Alt and let it go there, the canvas
+notices on its own and the cursor is back to normal when you return. Switching
+away in the middle of a drag abandons that box — the drag has no end to it once
+another window has the mouse — so hold Alt and drag again. WARP CORE says so in
+its log rather than letting the box quietly vanish.
+
 ### Annotating empty and inactive Bridge Officer slots
 
 Bridge officer seats sometimes contain slots that are visually empty (nothing assigned yet) or inactive (locked/unavailable at this rank).

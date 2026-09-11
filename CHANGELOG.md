@@ -8,6 +8,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [Unreleased]
+
+### Fixed
+
+- **The drawing crosshair no longer behaves as though Alt were still
+  held.** In WARP CORE, letting Alt go while another window had the
+  focus — after Alt+Tab, or after dragging a window by its Alt
+  shortcut — left the canvas stuck in draw mode: the crosshair stayed,
+  clicks drew boxes instead of selecting them, and the only way out
+  was to press and release Alt over the canvas again. The canvas now
+  reads the keys that are actually held rather than trusting that it
+  was told about every press and release, so a release it never saw
+  costs nothing: moving the mouse, pressing a key or coming back to
+  the window puts the cursor right. The crosshair also goes the moment
+  Alt does — it used to hang on until you next moved the mouse, and
+  longer than that if the pointer was resting over a box.
+
 ## [1.0.38] — 2026-09-11
 
 ### Fixed

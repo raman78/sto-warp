@@ -492,8 +492,21 @@ class AnnotationWidget(QWidget):
             self.update()
             return
 
-        from PySide6.QtWidgets import QApplication as _QApp
-        mods = _QApp.queryKeyboardModifiers()
+        mods = self._live_modifiers()
+
+        # An override cursor left over from a modifier that is no longer held
+        # is cleared here, which makes every lost release self-correcting: the
+        # first mouse move over the canvas puts the cursor back. Without it a
+        # single missed KeyRelease latches the crosshair on for good, since
+        # setCursor below cannot be seen past an active override.
+        # The widget's own cursor goes back with it: the tail of this method
+        # only reaches `unsetCursor` when the pointer is over nothing, so over
+        # a bbox the crosshair would outlive the key it belonged to.
+        if self._mod_cursor_active and not (mods & (Qt.KeyboardModifier.AltModifier
+                                                    | Qt.KeyboardModifier.ControlModifier
+                                                    | Qt.KeyboardModifier.ShiftModifier)):
+            self._clear_mod_cursor()
+            self.unsetCursor()
 
         # 1. Modifiers have highest priority for cursor shape (e.g. forced draw/zoom mode)
         if mods & Qt.KeyboardModifier.AltModifier:
@@ -877,15 +890,10 @@ class AnnotationWidget(QWidget):
         focused = QApplication.focusWidget()
         if not isinstance(focused, (QLineEdit, QTextEdit, QAbstractSpinBox)):
             self.setFocus()
-        mods = QApplication.keyboardModifiers()
-        if mods & Qt.KeyboardModifier.AltModifier:
-            self._set_mod_cursor(self._make_draw_cursor())
-        elif mods & Qt.KeyboardModifier.ControlModifier:
-            self._set_mod_cursor(self._make_zoom_cursor())
-        elif mods & Qt.KeyboardModifier.ShiftModifier:
-            self._set_mod_cursor(self._make_edit_cursor())
-        else:
-            self._clear_mod_cursor()  # clean up if modifier was released while mouse was outside
+        # Asked of the keyboard, not of the last event: re-entering the canvas
+        # straight after letting Alt go is exactly when the cached state is
+        # still claiming Alt is down. See `_live_modifiers`.
+        self._refresh_mod_cursor()
 
     def leaveEvent(self, event):
         """Mouse left canvas area — clear mod cursor if no active drag."""
@@ -908,8 +916,27 @@ class AnnotationWidget(QWidget):
         # it, leaving the crosshair stuck system-wide until the user comes
         # back to the canvas and presses Alt again.
         if etype == QEvent.Type.WindowDeactivate:
-            if self._mod_cursor_active and not self._drawing:
-                self._clear_mod_cursor()
+            # A drag interrupted by the switch never gets its mouse release,
+            # so `_drawing` would stay set and block every later attempt to
+            # clear the cursor. End it here and say so: the half-drawn box is
+            # dropped, and a box that vanishes without a word reads as a bug.
+            if self._drawing:
+                from warp.debug import log
+                log.info('AnnotationWidget: window left while a bbox was being '
+                         'drawn — the unfinished box is discarded; hold Alt and '
+                         'drag again to redraw it')
+                self._drawing = False
+                self._draw_start = None
+                self._draw_current = None
+                self._alt_draw = False
+                self.update()
+            self._clear_mod_cursor()
+            return False
+        # Coming back may find a different keyboard from the one we left: the
+        # modifier that switched windows was released while another window had
+        # the focus, so its release was never ours to see.
+        if etype == QEvent.Type.WindowActivate:
+            self._refresh_mod_cursor()
             return False
         if etype in (QEvent.Type.MouseMove, QEvent.Type.KeyPress, QEvent.Type.KeyRelease):
             # Only react when WARP CORE window is active
@@ -947,29 +974,68 @@ class AnnotationWidget(QWidget):
             if etype == QEvent.Type.MouseMove:
                 return False
 
-            key = event.key()
-            if key == Qt.Key.Key_Alt and not event.isAutoRepeat():
-                if etype == QEvent.Type.KeyPress:
-                    if not self._locked:
-                        self._set_mod_cursor(self._make_draw_cursor())
-                else:
-                    if not self._drawing:
-                        self._clear_mod_cursor()
-            elif key == Qt.Key.Key_Control and not event.isAutoRepeat():
-                if etype == QEvent.Type.KeyPress:
-                    self._set_mod_cursor(self._make_zoom_cursor())
-                else:
-                    self._clear_mod_cursor()
-            elif key == Qt.Key.Key_Shift and not event.isAutoRepeat():
-                if etype == QEvent.Type.KeyPress:
-                    self._hide_hover_card()
-                    if not self._locked:
-                        handle, _row = self._handle_hit_test_all_reviews(lpos)
-                        self._set_mod_cursor(self._cursor_for_handle(handle) if handle else self._make_edit_cursor())
-                else:
-                    if not self._drawing:
-                        self._clear_mod_cursor()
+            # A modifier key changed — read what is held and draw that. The
+            # event says only which key moved, and it is the one event of the
+            # pair that can go missing, so it is not asked what the state is.
+            if event.key() in (Qt.Key.Key_Alt, Qt.Key.Key_Control, Qt.Key.Key_Shift):
+                self._refresh_mod_cursor()
         return False
+
+    def _live_modifiers(self):
+        """The modifier keys held *right now*, asked of the window system.
+
+        Deliberately not `QApplication.keyboardModifiers()`, which reports the
+        state carried by the last event the application received — and a
+        KeyRelease carries the state from *before* the key was let go, so that
+        cached value says "Alt" from the moment Alt is released until some
+        other event replaces it (measured with `dev/probe_live_modifiers.py`
+        under both platform plugins — xcb on a throwaway X display, and
+        wayland in a live session, which behave identically here). A release
+        the window manager keeps for
+        itself — Alt+Tab, Alt+drag to move a window, a desktop-wide shortcut —
+        never arrives at all, and then nothing replaces it.
+        """
+        from PySide6.QtWidgets import QApplication
+        return QApplication.queryKeyboardModifiers()
+
+    def _refresh_mod_cursor(self):
+        """Set the modifier cursor from the keys that are held, not from the
+        press/release pair that was supposed to track them.
+
+        Driving the cursor off the events themselves only works while every
+        one of them is delivered: a single lost release latched the override
+        cursor on, with `_mod_cursor_active` claiming a modifier was still
+        down, and nothing left that could clear it — the canvas behaved as if
+        Alt were held forever. Derived from the state instead, a lost event
+        costs one stale frame and is corrected by the next mouse move, key
+        press or return to the canvas.
+
+        Alt beats Ctrl beats Shift, the order `mouseMoveEvent` already uses.
+
+        There are two cursors to put back, not one. The override cursor is the
+        application's, set here; but moving the mouse with a modifier down
+        also gives the canvas a cursor of its own (`mouseMoveEvent` calls
+        `setCursor`), and lifting the override merely uncovers it. Clearing
+        only the override left the crosshair on screen after Alt was released
+        — until the next mouse move happened to reach `unsetCursor` — which is
+        the same bug one layer down.
+        """
+        if self._drawing or self._drag_review_row >= 0:
+            return                      # a drag owns the cursor until it ends
+        mods = self._live_modifiers()
+        if (mods & Qt.KeyboardModifier.AltModifier) and not self._locked:
+            self._set_mod_cursor(self._make_draw_cursor())
+        elif mods & Qt.KeyboardModifier.ControlModifier:
+            self._set_mod_cursor(self._make_zoom_cursor())
+        elif (mods & Qt.KeyboardModifier.ShiftModifier) and not self._locked:
+            self._hide_hover_card()
+            from PySide6.QtGui import QCursor
+            handle, _row = self._handle_hit_test_all_reviews(self.mapFromGlobal(QCursor.pos()))
+            self._set_mod_cursor(self._cursor_for_handle(handle) if handle
+                                 else self._make_edit_cursor())
+        else:
+            self._clear_mod_cursor()
+            self.unsetCursor()
 
     def _set_mod_cursor(self, cursor):
         from PySide6.QtWidgets import QApplication
