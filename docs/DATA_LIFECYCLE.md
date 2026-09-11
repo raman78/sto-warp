@@ -267,6 +267,16 @@ classes have been found and closed:
 | A crop barred by the review ledger | the tally skips rejected shas, so nothing promoted them and nothing drained them; the rejection was re-litigated on every run | `_surviving_rows` drops the row and the sweep drops the PNG |
 | A screen typed outside the whitelist | `democratic_merge_screens` skips a type it cannot merge, so it never promotes | swept by `_sweep_unpromotable`; `UNKNOWN` is the live case, the client's not-yet-classified sentinel |
 | A contribution naming a virtual class | `admin_merge` refuses `__*` unconditionally, so its pHash is never promoted | drained as refused rather than left pending |
+| The same screenshot uploaded under two screen types | the client filed it under both: `set_screen_type` copied into the new type's folder and left the old copy, and the uploader walks folders. The upload cache is keyed on the content hash alone, so the two copies overwrote each other's entry and were re-sent every cycle for ever — measured 2026-09-11, 233 an hour with the trainer's count frozen at 129 | `set_screen_type` moves instead of copying, so a screenshot has one folder as well as one label; `warp.tools.reconcile_screen_types` repairs a store that already has both |
+
+**One screenshot, one screen type — on disk as well as in the label.** The
+backend counts one vote per (install, sha) and takes whichever copy its file
+walk reaches first, so an install filing a screenshot under two types casts an
+arbitrary vote between them. When one of those is the classifier's own guess
+and the other is the user's correction of it — which is exactly how the pair
+arises, since auto-classification writes a copy before anybody looks at it —
+the correction is thrown away half the time. That is a silent rejection of the
+one thing the pipeline exists to collect.
 
 Both crop and screen mergers had the same trap: they return early when there
 are no votes, which is **exactly the state these entries leave staging in**.

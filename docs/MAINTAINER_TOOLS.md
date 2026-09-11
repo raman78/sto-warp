@@ -127,6 +127,37 @@ python -m warp.tools.scrub_training_data
 Local only. Removes crops whose label the local evidence contradicts, before
 they are ever uploaded.
 
+### Make the screen-type folders agree with the labels
+
+```
+python -m warp.tools.reconcile_screen_types            # report
+python -m warp.tools.reconcile_screen_types --apply    # remove the stale copies
+```
+
+Local only, and a one-off: `set_screen_type` now moves rather than copies, so
+the state this repairs cannot be created again.
+
+A screenshot has exactly one screen type. `screen_types.json` says so and is
+right; the `screen_types/<TYPE>/` folders beside it were only ever written to,
+so every type a screenshot had ever been given kept a file — including the
+classifier's own guess, which is written before anybody looks at it. Measured
+on the maintainer's store 2026-09-11: 534 files against 287 labels, 110
+screenshots filed under two or three mutually exclusive types at once.
+
+That froze the trainer's "not yet shared" count, because the uploader walks
+those folders and the upload cache is keyed on the content hash alone: two
+copies overwrote each other's entry and were re-sent every cycle for ever.
+Worse, the backend counts one vote per (install, sha) and takes whichever copy
+its file walk reaches first, so the vote this install cast was an arbitrary
+pick between the user's correction and the guess they had corrected.
+
+It removes only a file whose content hash matches a screenshot the labels
+place under a different type, and clears the upload-cache entries that name a
+type the labels contradict so each one goes up again once, correctly. A file
+with no hash-keyed label is reported and left alone — deleting on a guess is
+how training data disappears. Those need their type set once in WARP CORE,
+which now moves the file.
+
 ### Refresh the offline cargo snapshot
 
 ```

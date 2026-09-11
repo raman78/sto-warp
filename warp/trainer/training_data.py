@@ -948,10 +948,31 @@ class TrainingDataManager:
     def set_screen_type(self, image_path: Path, screen_type: str, user_confirmed: bool = False) -> Path:
         """
         Records the screen type for a screenshot (persisted to screen_types.json)
-        and copies it into the classifier training folder.
+        and **moves** it into the classifier training folder.
 
         Persistent label: warp/training_data/screen_types.json  {filename: stype}
         Training copy:    warp/training_data/screen_types/<stype>/<filename>
+
+        A screenshot has exactly one screen type, and the folder has to say the
+        same thing as the label. It used to only copy, so every type the
+        screenshot had ever been given kept a file, and the first of those is
+        usually not the user's answer but the classifier's guess — this is
+        called from the auto-classification path too. Measured on the
+        maintainer's store 2026-09-11: 534 files against 287 labels, 110
+        screenshots filed under two or three mutually exclusive types at once,
+        20 of them as both `BOFFS` and `SPACE_BOFFS`.
+
+        What that cost is not only disk. The uploader walks these directories,
+        so both labels were sent; the upload cache is keyed on the content hash
+        alone and cannot hold two, so the copies overwrote each other's entry
+        and were re-sent every cycle for ever — 233 an hour, with the trainer's
+        "not yet shared" count frozen at 129. And the backend counts one vote
+        per (install, sha), taking whichever copy its file walk reaches first,
+        so the vote this install cast was an arbitrary pick between the user's
+        correction and the guess they had corrected.
+
+        Only a file with the same bytes is removed. A different screenshot that
+        happens to share a filename is left alone.
 
         Returns the destination path of the training copy.
         """
@@ -964,8 +985,43 @@ class TrainingDataManager:
         dest_dir.mkdir(parents=True, exist_ok=True)
         dest = dest_dir / image_path.name
         shutil.copy2(image_path, dest)
+        for stale in self._stale_screen_type_copies(image_path, screen_type):
+            try:
+                stale.unlink()
+                logger.info(f'Screen type set: {image_path.name} was also '
+                            f'filed as {stale.parent.name!r} — removed, a '
+                            f'screenshot has one type')
+            except OSError as e:
+                logger.warning(f'Screen type set: could not remove the stale '
+                               f'{stale.parent.name!r} copy of '
+                               f'{image_path.name}: {e}')
         logger.info(f'Screen type set: {image_path.name} -> {screen_type}')
         return dest
+
+    def _stale_screen_type_copies(self, image_path: Path,
+                                  keep_type: str) -> list[Path]:
+        """Copies of this screenshot filed under any other screen type.
+
+        Identity is the file's content, not its name: two unrelated
+        screenshots can share a filename, and deleting one because the other
+        was relabelled would lose training data outright. The name is still
+        how the copies are found — that is how they are written — but the
+        content hash decides whether one is removed. `_image_id` is the same
+        hash the labels are keyed on, and it caches, so asking costs nothing
+        the store has not already paid.
+        """
+        root = self._dir / 'screen_types'
+        if not root.is_dir():
+            return []
+        want = self._image_id(image_path)
+        out: list[Path] = []
+        for type_dir in sorted(root.iterdir()):
+            if not type_dir.is_dir() or type_dir.name == keep_type:
+                continue
+            other = type_dir / image_path.name
+            if other.is_file() and self._image_id(other) == want:
+                out.append(other)
+        return out
 
     def get_screen_type(self, image_path: Path) -> str:
         """Returns the persisted screen type for a screenshot, or empty string if not set.
