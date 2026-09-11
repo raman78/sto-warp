@@ -78,6 +78,24 @@ _EMBEDDER_FILES = [
 _REQUIRED_FULL     = ('icon_classifier.pt', 'label_map.json')
 _REQUIRED_EMBEDDER = ('icon_embedder.pt', 'embedder_label_map.json', 'embedding_index.npz')
 
+# Weights that mean nothing without their label map, and must never be
+# installed without it.
+#
+# The head is built over `sorted(set(labels))` across the classes that met the
+# backend's minimum sample count, so both its size and the meaning of every
+# index move from run to run. A `.pt` installed over a previous run's label
+# file is not "slightly stale" — it is a model whose outputs are read through
+# the wrong names. `ScreenTypeClassifier` refuses to load when the two
+# disagree on *count*, but two runs can produce the same count over a
+# different set of classes, and that case has nothing to catch it.
+#
+# So the pair is installed together or not at all. The partner is not in
+# `_REQUIRED_FULL`, because a missing screen classifier must not abort the
+# icon model's download — it is optional as a *pair*, not file by file.
+_PAIRED_FILES = {
+    'screen_classifier.pt': 'screen_classifier_labels.json',
+}
+
 
 class ModelUpdater:
     """
@@ -360,7 +378,9 @@ class ModelUpdater:
                 if local_name in required:
                     log.warning(f'ModelUpdater: required file {hf_path} unavailable: {e}')
                     return False
-                log.debug(f'ModelUpdater: optional file {hf_path} unavailable: {e}')
+                log.warning(f'ModelUpdater: optional file {hf_path} unavailable: {e}')
+
+        tmp_files = self._drop_unpaired(tmp_files)
 
         if on_progress:
             on_progress(f'Installing ML model ({n_classes} classes)…', total - 1, total)
@@ -375,12 +395,46 @@ class ModelUpdater:
 
         return True
 
+    @staticmethod
+    def _drop_unpaired(
+        tmp_files: list[tuple[Path, Path]],
+    ) -> list[tuple[Path, Path]]:
+        """Withhold any download whose `_PAIRED_FILES` partner did not arrive.
+
+        Installing weights over a previous run's label map is worse than not
+        updating at all: the model answers, and every answer is read through
+        the wrong names. Keeping both sides of the pair as they were leaves a
+        set that agrees with itself, and the next check retries.
+        """
+        got = {dst.name for _src, dst in tmp_files}
+        withheld = {name for name, partner in _PAIRED_FILES.items()
+                    if name in got and partner not in got}
+        if not withheld:
+            return tmp_files
+        for name in sorted(withheld):
+            log.warning(
+                f'ModelUpdater: {name} downloaded but {_PAIRED_FILES[name]} '
+                f'did not — not installing it, because weights read through '
+                f'the wrong label map name every class wrongly. Keeping the '
+                f'current pair; the next check retries.')
+        return [(src, dst) for src, dst in tmp_files if dst.name not in withheld]
+
     def _ensure_screen_classifier(self, models_dir: Path) -> None:
-        """Download screen_classifier.pt from HF if it's missing (one-time, silent)."""
-        pt_path = models_dir / 'screen_classifier.pt'
-        if pt_path.exists():
+        """Download the screen classifier from HF if it is missing.
+
+        Both files are checked, not just the weights. The guard used to be
+        `screen_classifier.pt` alone, so a run where the weights downloaded
+        and the label map did not left the pair permanently broken: the `.pt`
+        existed, this returned early on every later tick, and the classifier
+        had no names for the model's outputs.
+        """
+        missing = [(hf, local) for hf, local in _SCREEN_CLASSIFIER_FILES
+                   if not (models_dir / local).exists()]
+        if not missing:
             return
-        log.info('ModelUpdater: screen_classifier.pt missing — downloading from HF...')
+        log.info('ModelUpdater: screen classifier incomplete '
+                 f'({", ".join(local for _hf, local in missing)}) — '
+                 f'downloading from HF...')
         try:
             from huggingface_hub import hf_hub_download
         except ImportError:
@@ -388,17 +442,27 @@ class ModelUpdater:
         import shutil
         hf_repo = 'sets-sto/warp-knowledge'
         models_dir.mkdir(parents=True, exist_ok=True)
+        fetched: list[tuple[Path, Path]] = []
         for hf_path, local_name in _SCREEN_CLASSIFIER_FILES:
+            final_path = models_dir / local_name
+            if final_path.exists():
+                fetched.append((final_path, final_path))   # already in place
+                continue
             try:
                 downloaded = hf_hub_download(
                     repo_id=hf_repo,
                     filename=hf_path,
                     repo_type='dataset',
                 )
-                shutil.copy2(downloaded, models_dir / local_name)
-                log.info(f'ModelUpdater: downloaded {local_name}')
+                fetched.append((Path(downloaded), final_path))
             except Exception as e:
                 log.warning(f'ModelUpdater: could not download {hf_path}: {e}')
+
+        for src, dst in self._drop_unpaired(fetched):
+            if src == dst:
+                continue
+            shutil.copy2(src, dst)
+            log.info(f'ModelUpdater: downloaded {dst.name}')
 
     # ── rate-limiting (check at most once per 24 h) ───────────────────────────
 

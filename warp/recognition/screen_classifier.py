@@ -241,7 +241,25 @@ class ScreenTypeClassifier:
                     raw = json.load(f)
                 self._label_map = {int(k): v for k, v in raw.items()}
             else:
-                self._label_map = {i: s for i, s in enumerate(SCREEN_TYPES)}
+                # No positional fallback. The head is ordered alphabetically
+                # over the classes present in that run's training data, while
+                # SCREEN_TYPES is in declaration order — so reading index n
+                # through it does not give a slightly-off name, it gives a
+                # different class. Against the shipped 7-class model, index 0
+                # would report SPACE_EQ and mean BOFFS.
+                #
+                # A wrong screen type sends the whole screenshot down the
+                # wrong recognition path and looks exactly like a right one.
+                # Returning "unknown" instead leaves the k-NN session path and
+                # the user's own choice in WARP CORE, both of which are
+                # honest about not knowing.
+                _slog.warning(
+                    f'ScreenClassifier: {LABELS_FILENAME} is missing beside '
+                    f'the weights, so the model\'s classes cannot be named — '
+                    f'the model is not used. It is republished with every '
+                    f'trained model; the next update check restores it.')
+                self._ml_disabled = True
+                return
 
             # A model that can answer with a class nobody can name is worse
             # than no model: the index would resolve to nothing downstream.
@@ -279,7 +297,11 @@ class ScreenTypeClassifier:
             probs  = _softmax(logits.numpy())
             idx    = int(np.argmax(probs))
             conf   = float(probs[idx])
-            name   = self._label_map.get(idx, SCREEN_TYPES[idx] if idx < len(SCREEN_TYPES) else '')
+            # No positional fallback here either. `_load` guarantees the label
+            # map covers every class the head can answer with, or refuses the
+            # model, so a miss means something is wrong and '' is the honest
+            # answer — see the labels branch in `_load`.
+            name   = self._label_map.get(idx, '')
             # _slog.debug(f'ScreenClassifier: probs={[f"{p:.2f}" for p in probs]} → {name} ({conf:.2f})')
             return name, conf
         except Exception as e:

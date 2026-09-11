@@ -114,10 +114,26 @@ def test_no_model_file_is_not_an_error(tmp_path):
     assert not c._ml_disabled          # OCR fallback, not a failure
 
 
-def test_no_labels_file_falls_back_to_the_built_in_names(tmp_path):
-    """SCREEN_TYPES has 9 entries, so a 9-class model matches it."""
+def test_no_labels_file_refuses_the_model_rather_than_guessing(tmp_path):
+    """The dangerous case, and the reason the built-in list is not a fallback.
+
+    A head sized exactly like `SCREEN_TYPES` passes the count check, so
+    nothing downstream would notice — but the head is ordered alphabetically
+    over that run's classes while `SCREEN_TYPES` is in declaration order, so
+    every name would be wrong. The backend admits 11 screen types and the
+    shipped model has 7, meaning the count climbs through 9 as classes reach
+    the minimum sample threshold. This is reachable, not theoretical.
+    """
     from warp.recognition.screen_classifier import SCREEN_TYPES
     d = _write_model(tmp_path / 'models', len(SCREEN_TYPES), None)
     c = ScreenTypeClassifier(d)
+    assert c._ml_disabled
+    assert c._session is None
+
+
+def test_a_named_model_still_loads(tmp_path):
+    """The refusal is about missing names, not about being strict in general."""
+    d = _write_model(tmp_path / 'models', 8, LABELS_8)
+    c = ScreenTypeClassifier(d)
+    assert not c._ml_disabled
     assert c._session is not None
-    assert list(c._label_map.values()) == SCREEN_TYPES

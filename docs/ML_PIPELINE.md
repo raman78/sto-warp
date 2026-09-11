@@ -286,12 +286,32 @@ in current model is torch.Size([7, 1024])
 
 Every screenshot then took the non-ML path, and nothing in the UI said so.
 
-Names come from `screen_classifier_labels.json`, published beside the weights.
-The client's own `SCREEN_TYPES` list is used only when that file is absent, and
-it is **not** a safe substitute — it is in declaration order, not alphabetical,
-so index 0 would read `SPACE_EQ` where the model means `BOFFS`. The classifier
-logs a warning when the label count and the head size disagree. See
-[Open question 1](#open-questions).
+Names come from `screen_classifier_labels.json`, published beside the weights
+in the same `create_commit`, so the two are never separable on HuggingFace.
+
+**The label map is part of the weights, and both sides now enforce that.**
+
+| Rule | Where | What it prevents |
+|---|---|---|
+| Weights are not installed unless their label map arrived in the same download | `ModelUpdater._drop_unpaired`, driven by `_PAIRED_FILES` | New weights read through the previous run's names |
+| The "download if missing" check tests both files, not just the `.pt` | `ModelUpdater._ensure_screen_classifier` | A partial download becoming permanent, since the old guard saw the `.pt` and returned |
+| No label map means the model is refused, not guessed | `ScreenTypeClassifier._load` | Confidently wrong screen types |
+| A label count that disagrees with the head size refuses the model | `ScreenTypeClassifier._load` | An answer the client cannot name |
+
+The client's `SCREEN_TYPES` list is **not** a fallback for the label map and is
+not used as one. It is in declaration order while the head is alphabetical, so
+reading index *n* through it does not give an approximate name, it gives a
+different class — against the shipped 7-class model, index 0 would report
+`SPACE_EQ` and mean `BOFFS`. Worse, the list has 9 entries, and the count
+climbs through 9 as classes reach the minimum sample threshold, so the count
+check would not have caught it. The list survives only as the vocabulary
+`add_session_example` validates against.
+
+When the model is refused, `classify` returns `('', 0.0)`, the k-NN session
+path still applies, and the user can set the type in WARP CORE. Refusing is
+therefore strictly better than guessing: a wrong screen type sends the whole
+screenshot down the wrong recognition path and is indistinguishable from a
+right one in the UI.
 
 `SKILLS` covers the captain skill tree (space/ground tabs). `SPACE_SKILLS` and
 `GROUND_SKILLS` are post-hoc environment refinements of it — they are not
@@ -742,25 +762,15 @@ The upload is a one-time admin action; users do not run this themselves.
 
 ## 10. Open questions
 
-1. **The client's `SCREEN_TYPES` fallback cannot be trusted by position.**
-   `ScreenTypeClassifier` falls back to `{i: s for i, s in
-   enumerate(SCREEN_TYPES)}` when `screen_classifier_labels.json` is absent.
-   But the head is ordered alphabetically over the classes present in the
-   training data, while `SCREEN_TYPES` is in declaration order — two different
-   ordering principles, so the mapping is wrong at almost every index, not
-   merely truncated. Against the committed 7-class model, index 0 would be
-   reported as `SPACE_EQ` when the model means `BOFFS`.
+1. **`add_session_example` silently drops the screen types it does not know.**
+   Its guard is `stype not in SCREEN_TYPES`, and that list omits `SPACE_BOFFS`
+   and `GROUND_BOFFS`, which the backend admits as trainable classes and which
+   the user can pick in WARP CORE. Setting one of those types therefore
+   contributes no session example, with nothing said in the UI or the log.
 
-   That makes the fallback worse than no classifier: it yields *confidently
-   wrong* screen types, and a wrong screen type sends the whole screenshot
-   down the wrong recognition path. Nothing in the UI distinguishes it from a
-   correct answer.
-
-   Needs a decision from whoever owns the backend training job. Either make
-   the label map a hard requirement and have the client refuse to classify
-   without it, or have the run publish its label order and drop the
-   client-side list. Blocking nothing today — the labels file does ship — so
-   this is about what happens the first time it does not.
-
-   Related: the count itself is read from the weights, not assumed. See
-   [Central training process (screen classifier)](#central-training-process-screen-classifier).
+   Not the same defect as the label map — the session k-NN is a per-run
+   convenience, so the cost is a weaker within-session assist, not a wrong
+   answer. But it is a silent rejection, and the list it gates on is now kept
+   for this purpose alone, which makes it the only thing still asserting a
+   fixed vocabulary on the client. Decide whether that vocabulary should come
+   from the published label map instead.
