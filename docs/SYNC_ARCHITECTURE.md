@@ -100,9 +100,29 @@ intitle:"icon"`) on every run rather than working from a list, applies the
 same cargo test, and publishes what is left to `scraped/icons/` under
 `quote_plus('<item> (23c)').png`. 34 files as of 2026-08-22.
 
-There's an eighth pseudo-phase, `upload`, run only by `SyncCoordinator`
-(not by the splash) — it pushes pending confirmed crops back up to HF
-when the user has been correcting in WARP CORE.
+There's an eighth pseudo-phase, `upload` — it pushes pending confirmed crops
+back up to HF when the user has been correcting in WARP CORE. The splash never
+runs it. **Two** dispatchers do, and which one applies depends on how WARP CORE
+was opened:
+
+| How it was started | What uploads | Cadence |
+|---|---|---|
+| Launcher (WARP + WARP CORE tabs) | `SyncCoordinator`, as the first step of its cycle | on launch, then hourly |
+| `sto-warp warp-core` (standalone) | `WarpCoreWindow._upload_now`, from its own timer | 20 s after open, then every 5 min |
+
+Standalone used to upload nothing at all. Its timer refreshed the community
+knowledge, checked for a newer model and recounted the pending figure, but
+`_auto_sync` was literally `pass` — both it and the timer carried the comment
+"crop upload is handled by SyncManager (started at app launch in
+`warp_button.py`)". That file is the SETS bridge and stayed in `sets-warp` when
+this repository was split out, so the justification had outlived its subject.
+Anyone who opened the trainer directly piled up confirmations with nowhere to
+go, and the "not yet shared" counter reported the same number for ever with no
+`HF Sync` line in any log generation to explain it.
+
+`_upload_now` builds its `SyncManager` once and reuses it — the manager owns a
+`QThread`, so one per tick would accumulate them. Sending happens before
+counting, so the figure shown is what is left after the attempt, not before it.
 
 ### TTL semantics
 

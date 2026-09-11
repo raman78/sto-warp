@@ -241,6 +241,25 @@ the other asserts an identity. See
 [`client_user_view_filter.md`](client_user_view_filter.md) for the full map of
 where these labels are stopped.
 
+## A different question this document does not answer
+
+Everything above assumes the crop **is** a slot, and asks what is in it. That
+assumption is separate, it is often wrong, and nothing here tests it. Measured
+2026-09-06 over 1596 grid positions that hold no slot at all, the fixed rule
+called 60% of them `empty` and 35% `inactive` — 95% of the places where
+nothing exists came back as something.
+
+That is not a defect in the rule or in the models; it is a question neither
+was asked. `LayoutDetector._cell_exists` asks it, and the importer now reports
+a virtual label at 0.30 confidence rather than 1.00 where the panel shows no
+cell — below the auto-accept bar, so the row reaches a human instead of
+entering the training data. See
+[`EQ_DETECTION.md` § Is there a cell here at all?](EQ_DETECTION.md#is-there-a-cell-here-at-all),
+which owns that measurement and the reasoning behind both tests.
+
+The distinction matters when reading the accuracy figures below: they are
+accuracy on cells, not on positions.
+
 ## What is left
 
 **Does the fixed rule still need to answer first?** On this corpus the models
