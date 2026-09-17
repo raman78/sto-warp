@@ -5,8 +5,11 @@ of `sets-sto/sto-icon-dataset`, packs `data/crops/*.png` +
 `data/annotations.jsonl` into a single `crops.tar`, computes sha256,
 writes a manifest, and uploads both back to the dataset repo.
 
-Idempotent: if the dataset hasn't moved since the existing manifest's
-`dataset_sha_at_build`, exits 0 without rebuilding.
+Idempotent by content: the tarball is built deterministically, so when it
+comes out byte-identical to the published one the job exits 0 without
+uploading. It cannot skip the checkout itself — nothing the Hub exposes
+cheaply answers "did `data/` move?" — so an unchanged week still costs the
+clone, just not a commit.
 
 Required env: HF_TOKEN (write scope on the dataset repo).
 """
@@ -94,22 +97,31 @@ def main() -> int:
     current_sha = api.dataset_info(REPO).sha
     print(f'dataset SHA: {current_sha}')
 
-    # Skip rebuild when the existing tarball already matches the dataset.
+    # Fetch what the last build published, so the new tarball can be held
+    # against it once it exists.
+    #
+    # This used to ask a different question — "has the dataset moved since
+    # the manifest was written?" — which can never be answered no. The
+    # manifest records the head read *before* its own upload, and that
+    # upload advances the head (measured 2026-09-16: manifest 68962ac6,
+    # head 1f79096b, which was its own commit). So the skip never fired,
+    # while the thing worth skipping — republishing crops that did not
+    # change while screens and anchors merged around them — went unnoticed.
+    #
     # Explicit token=token everywhere — implicit env pickup in
     # huggingface_hub is inconsistent across call sites; without it the
     # parallel downloads run anonymous and trip the HF rate-limit at
     # ~2000 files (job times out after the 60-minute stall).
+    published_tar_sha = ''
     try:
         existing_path = hf_hub_download(
             repo_id=REPO, repo_type=REPO_TYPE, filename=MANIFEST_FILE,
             token=token,
         )
         existing = json.loads(Path(existing_path).read_text())
-        if existing.get('dataset_sha_at_build') == current_sha:
-            print(f'tarball already current at {current_sha[:8]} — nothing to do')
-            return 0
-        print(f'existing manifest at {existing.get("dataset_sha_at_build", "?")[:8]} — '
-              f'rebuilding')
+        published_tar_sha = str(existing.get('tarball_sha256', '')).lower()
+        print(f'published tarball sha256={published_tar_sha[:12] or "?"}…, '
+              f'built at {str(existing.get("dataset_sha_at_build", "?"))[:8]}')
     except Exception as e:
         print(f'no existing manifest (or unreadable): {e}')
 
@@ -186,6 +198,14 @@ def main() -> int:
         ann_lines = sum(1 for _ in open(ann_file)) if ann_file.exists() else 0
         print(f'tarball: {tar_bytes/1e6:.1f} MB, {crop_count} crops, '
               f'sha256={tar_sha[:12]}…')
+
+        # Byte-identical to what is already published: the dataset moved,
+        # the crops did not. Uploading would commit the same bytes under a
+        # new revision and tell every reader the tarball had changed.
+        if tar_sha == published_tar_sha:
+            print(f'crops unchanged since the published tarball — '
+                  f'nothing to upload')
+            return 0
 
         manifest = {
             'tarball_file':         TARBALL_FILE,

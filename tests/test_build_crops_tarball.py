@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import importlib.util
 from pathlib import Path
+from types import SimpleNamespace
 from urllib.error import HTTPError
 
 import pytest
@@ -116,6 +117,53 @@ def test_an_unreadable_probe_never_blocks_the_build(monkeypatch):
     with pytest.raises(_Stop):
         mod.main()
     assert calls == ['whoami', 'write_probe', 'dataset_info']
+
+
+def test_an_unchanged_tarball_is_not_published_again(tmp_path, monkeypatch):
+    """The second build of identical crops must not commit the same bytes.
+
+    The published manifest handed to the second run is the one the first run
+    produced, so nothing here recomputes what the script computes.
+    """
+    mod = _load()
+    monkeypatch.setenv('HF_TOKEN', 'hf_write')
+
+    uploads: list[str] = []
+    built_manifest: dict[str, str] = {}
+
+    class _Api:
+        def __init__(self, token=None):
+            pass
+
+        def whoami(self):
+            return {'name': 'someone'}
+
+        def dataset_info(self, *a, **kw):
+            return SimpleNamespace(sha='c0ffee' * 7)
+
+        def upload_file(self, *, path_or_fileobj, path_in_repo, **kw):
+            uploads.append(path_in_repo)
+            if path_in_repo == mod.MANIFEST_FILE:
+                built_manifest['json'] = Path(path_or_fileobj).read_text()
+
+    def _no_manifest(**kw):
+        raise FileNotFoundError('404')
+
+    monkeypatch.setattr(mod, 'HfApi', _Api)
+    monkeypatch.setattr(mod, 'urlopen', lambda *a, **kw: object())
+    monkeypatch.setattr(mod.subprocess, 'run', lambda *a, **kw: None)
+    monkeypatch.setattr(mod, 'hf_hub_download', _no_manifest)
+
+    assert mod.main() == 0
+    assert uploads == [mod.TARBALL_FILE, mod.MANIFEST_FILE]
+
+    published = tmp_path / 'crops_manifest.json'
+    published.write_text(built_manifest['json'])
+    monkeypatch.setattr(mod, 'hf_hub_download', lambda **kw: str(published))
+    uploads.clear()
+
+    assert mod.main() == 0
+    assert uploads == []
 
 
 def test_absent_token_never_reaches_the_hub(monkeypatch):
