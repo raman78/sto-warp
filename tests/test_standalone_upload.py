@@ -12,7 +12,13 @@ repository — it stayed in sets-warp when this one was split out. Only the
 launcher's `SyncCoordinator` still started an upload, so opening the trainer
 directly meant confirmations accumulated with nowhere to go.
 
-Offscreen Qt; the sync manager is replaced, so nothing touches the network.
+Offscreen Qt. Replacing the sync manager is not enough to keep the tick off
+the network: `_on_sync_timer` also refreshes community knowledge and asks
+whether a newer model exists, and both of those go out over HTTPS. Measured
+2026-09-17 with a socket tripwire in `conftest` — `test_the_manager_is_built
+_once_and_reused` opened a connection to 54.246.238.99:443 and still passed,
+because `refresh_knowledge` logs its failure and returns. `_offline` below
+closes both paths.
 """
 from __future__ import annotations
 
@@ -23,6 +29,17 @@ pytest.importorskip("PySide6")
 from PySide6.QtWidgets import QApplication
 
 from warp.trainer import trainer_window as tw
+
+
+@pytest.fixture(autouse=True)
+def _offline(monkeypatch):
+    """Close the two network paths a timer tick takes besides the upload."""
+    monkeypatch.setattr(
+        'warp.knowledge.sync_client.WARPSyncClient.refresh_knowledge',
+        lambda self: None)
+    monkeypatch.setattr(
+        'warp.trainer.model_updater.ModelUpdater.check_and_update',
+        lambda self, *a, **kw: None)
 
 
 @pytest.fixture
