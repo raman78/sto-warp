@@ -21,6 +21,8 @@ import tarfile
 import tempfile
 import time
 from pathlib import Path
+from urllib.error import HTTPError
+from urllib.request import Request, urlopen
 
 from huggingface_hub import HfApi, hf_hub_download
 
@@ -29,6 +31,36 @@ REPO_TYPE     = 'dataset'
 HF_CLONE_URL  = f'https://huggingface.co/datasets/{REPO}'
 TARBALL_FILE  = 'crops.tar'
 MANIFEST_FILE = 'crops_manifest.json'
+XET_WRITE_URL = (f'https://huggingface.co/api/datasets/{REPO}'
+                 f'/xet-write-token/main')
+
+
+def _write_refused(token: str) -> bool:
+    """Ask the Hub up front for the upload credential this job will need.
+
+    `whoami` only proves the token is live. A read-only token passes it and
+    then fails four minutes later, at the end of the checkout, because
+    `upload_file` asks for the Xet write credential and the Hub answers 403
+    (measured 2026-09-16, two runs). Asking for that credential first costs
+    one request and is the earliest honest answer available.
+
+    Advisory by design: only a plain 403 — the Hub saying this token cannot
+    write — refuses the build. Any other outcome, including an unexpected
+    status or a moved endpoint, lets the job run, so an internal API changing
+    shape can never block a rebuild on its own.
+    """
+    req = Request(XET_WRITE_URL, headers={'Authorization': f'Bearer {token}'})
+    try:
+        urlopen(req, timeout=15)
+    except HTTPError as e:
+        if e.code == 403:
+            return True
+        print(f'note: write pre-check inconclusive (HTTP {e.code}) — continuing',
+              file=sys.stderr)
+    except Exception as e:
+        print(f'note: write pre-check inconclusive ({e}) — continuing',
+              file=sys.stderr)
+    return False
 
 
 def main() -> int:
@@ -38,6 +70,27 @@ def main() -> int:
         return 2
 
     api = HfApi(token=token)
+
+    # Prove the token is live before spending ten minutes on the checkout.
+    # Every read below works anonymously — the dataset is public — so a dead
+    # token stays invisible until `upload_file` 401s at the very end. That
+    # happened twice (2026-09-07, 2026-09-14) after the shared token was
+    # rotated for the backend and this copy was left behind.
+    try:
+        api.whoami()
+    except Exception as e:
+        print(f'error: the Hub rejected HF_TOKEN ({e}) — it is expired or '
+              f'revoked', file=sys.stderr)
+        return 2
+
+    # A live token still need not be able to write: on 2026-09-16 a read-only
+    # one got this far twice and died at the upload.
+    if _write_refused(token):
+        print(f'error: HF_TOKEN is valid but the Hub refuses it write on '
+              f'{REPO} — grant that token write on this repo (a 403 here is '
+              f'the Hub saying it has read only)', file=sys.stderr)
+        return 2
+
     current_sha = api.dataset_info(REPO).sha
     print(f'dataset SHA: {current_sha}')
 
@@ -73,13 +126,16 @@ def main() -> int:
         subprocess.run(['git', 'lfs', 'install'], check=True)
 
         def _git(*args: str, **kw) -> None:
-            """Run a git command; mask the token in any error output."""
-            try:
-                subprocess.run(['git', *args], check=True, **kw)
-            except subprocess.CalledProcessError as exc:
-                if token and exc.stderr:
-                    exc.stderr = exc.stderr.replace(token, '***')
-                raise
+            """Run a git command.
+
+            Deliberately no token masking: git redacts credentials out of the
+            URLs in its own messages (verified on git 2.55 — a clone of
+            `https://user:SENTINEL@…` reports the bare host), and in CI GitHub
+            masks the secret on top of that. The masking this used to carry
+            read `CalledProcessError.stderr`, which is None unless the output
+            is captured, so it never ran.
+            """
+            subprocess.run(['git', *args], check=True, **kw)
 
         _git('clone', '--no-checkout', '--depth', '1', clone_url, str(repo_dir))
         print(f'clone (metadata only) in {time.monotonic() - t0:.0f}s', flush=True)
