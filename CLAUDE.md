@@ -97,7 +97,14 @@ corresponding test in `tests/`. Follow these conventions:
 - **Framework:** pytest (not unittest). Use fixtures, `monkeypatch`, `tmp_path`.
 - **Isolation:** never touch the user's real XDG dirs or network — use
   `monkeypatch.setenv` to redirect `WARP_CACHE_DIR`, `XDG_CONFIG_HOME`, etc.
-  to `tmp_path`.
+  to `tmp_path`. The network half is enforced, not merely asked for: the
+  `_no_network` autouse fixture in `tests/conftest.py` fails any test that
+  connects to a non-loopback address, and names the test and the address.
+  Stub whatever reaches out — a trainer timer tick, for instance, calls
+  `WARPSyncClient.refresh_knowledge` and `ModelUpdater.check_and_update`,
+  and both go out over HTTPS while catching their own failures, so the test
+  passes either way. The fixture watches Python's socket layer, so a native
+  extension with its own sockets (`hf_xet`) slips past it.
 - **GUI tests:** `conftest.py` sets `QT_QPA_PLATFORM=offscreen` globally.
   Create `QApplication` via `QApplication.instance() or QApplication([])`.
   Use `addCleanup(widget.close)` for widget teardown.
