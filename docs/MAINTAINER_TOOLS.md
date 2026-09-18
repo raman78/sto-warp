@@ -73,6 +73,15 @@ inbox is the normal way to learn about this one. It reports a breach when
 staging holds files no run can settle, or when crops are waiting and nothing
 has promoted them.
 
+What it times is **the work, not the calendar**: the oldest upload the last
+promotion did not cover. The age of the last promotion is a different
+question and answering that one cried wolf on 2026-09-18 — nothing had been
+uploaded for six days, so nothing had been promoted for six days, and a batch
+that arrived that morning was reported as a stalled pipeline four hours
+before the next run landed all of it. Where staging holds crops but no upload
+is newer than the last promotion, the promotion ran over them and left them,
+and its own age is then the right clock.
+
 ### Is staging accumulating, or is `data/` poisoned?
 
 ```
