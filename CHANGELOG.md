@@ -12,6 +12,24 @@ details live in the git history.
 
 ### Fixed
 
+- **An empty slot with the yellow NEW banner on it is now read as
+  empty.** The game paints that banner across the top of a slot when
+  you have picked something up recently, and it paints it on slots
+  that hold nothing too. WARP took the bright yellow for an item and
+  went looking for a name to give it, so an empty device slot came
+  back with some equipment in it and had to be corrected by hand. The
+  banner is now recognised for what it is — part of the interface, not
+  part of the slot — and ignored when deciding whether a slot is
+  filled. Slots that do hold something are unaffected: across 142
+  screenshots the only cells that changed their answer were empty
+  device slots wearing the banner.
+- **Slots you had correctly marked empty are no longer ignored when
+  WARP learns from the shared collection.** Those same banners made
+  the check that protects the collection from wrongly labelled
+  pictures reject them, so a correction you made was quietly dropped
+  every time the program started. Fifteen such pictures were being
+  skipped; fourteen of them were right all along.
+
 - **The drawing crosshair no longer behaves as though Alt were still
   held.** In WARP CORE, letting Alt go while another window had the
   focus — after Alt+Tab, or after dragging a window by its Alt

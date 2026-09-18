@@ -236,6 +236,14 @@ def _virtual_crop_looks_real(crop_bgr) -> bool:
     and the offline scrub agree."""
     try:
         import cv2
+        from warp.recognition.layout_detector import LayoutDetector
+        # The game's yellow 'NEW' ribbon is chrome painted over the top of a
+        # slot, including an empty one. It is bright and saturated, so it
+        # alone carried an empty cell past both ratios and the crop the user
+        # correctly labelled `__empty__` was refused as poison every seed.
+        badge = LayoutDetector._new_badge_rows(crop_bgr)
+        if badge and crop_bgr.shape[0] - badge >= 8:
+            crop_bgr = crop_bgr[badge:]
         hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
         s = hsv[:, :, 1]
         v = hsv[:, :, 2]

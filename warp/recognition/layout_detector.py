@@ -2692,6 +2692,17 @@ class LayoutDetector:
     # the six it gains are all phantoms removed — no row loses a cell.
     _CELL_BAND_DIFF_MIN = 8.0
 
+    # The 'NEW' ribbon: how far down to look for it, how much of the width a
+    # row must be amber to count as ribbon, and how tall the band may be.
+    # The ribbon measured 32-34% of the cell on every crop carrying one, so
+    # the window is generous on both sides of that and still nowhere near an
+    # icon, which is amber all the way down. See `_new_badge_rows`.
+    _NEW_BADGE_SEARCH_FRAC = 0.60
+    _NEW_BADGE_WIDTH_FRAC  = 0.20
+    _NEW_BADGE_MIN_FRAC    = 0.15
+    _NEW_BADGE_MAX_FRAC    = 0.45
+    _NEW_BADGE_SOLID_FRAC  = 0.80
+
     @staticmethod
     def _cell_exists(img, x: int, y: int, w: int, h: int, dx: float) -> bool:
         """Whether the game drew a slot here, filled or not.
@@ -2737,6 +2748,71 @@ class LayoutDetector:
         return diff >= LayoutDetector._CELL_BAND_DIFF_MIN
 
     @staticmethod
+    def _new_badge_rows(crop_bgr) -> int:
+        """Height in pixels of the game's yellow 'NEW' ribbon, 0 if absent.
+
+        The ribbon is UI chrome the game paints over the top of a slot to
+        mark recently acquired gear. It is opaque, amber, and anchored to
+        the cell's top edge — nothing about it says what the slot holds,
+        and on an *empty* slot it is the only thing painted there.
+
+        Measured over the 14 ribboned empty Devices cells in the community
+        mirror (2026-09-18): amber at hue 22-23, from row 0-3 down, ending
+        at 32-34% of the cell's height in every one. Per row it covers 30%
+        to 97% of the width — the word NEW is black on the yellow, so the
+        rows through the text are the thin ones, and a test asking for a
+        solid full-width run finds only the strip above the lettering.
+
+        What separates the ribbon from an amber *icon* is that the ribbon
+        **stops**: the row under it is not amber at all. `Serenity` and
+        `Vicious` are amber over their whole height, so the run never
+        terminates inside the top band and they are left alone. That is the
+        safe direction — an icon keeps being treated as an icon.
+
+        Returns the row index just past the ribbon, so callers can slice it
+        off with `crop[rows:]`.
+        """
+        import cv2
+        import numpy as _np
+        if crop_bgr is None or crop_bgr.size == 0:
+            return 0
+        ih, iw = crop_bgr.shape[:2]
+        if ih < 8 or iw < 8:
+            return 0
+        search = max(1, int(ih * LayoutDetector._NEW_BADGE_SEARCH_FRAC))
+        hsv = cv2.cvtColor(crop_bgr[:search], cv2.COLOR_BGR2HSV)
+        h, s, v = hsv[:, :, 0], hsv[:, :, 1], hsv[:, :, 2]
+        amber = ((h >= 15) & (h <= 32) & (s > 100) & (v > 150))
+        coverage = amber.mean(axis=1)
+        band = coverage >= LayoutDetector._NEW_BADGE_WIDTH_FRAC
+        if not band.any():
+            return 0
+        # Anchored to the top edge, give or take the cell border.
+        first = int(_np.argmax(band))
+        if first > max(2, int(ih * 0.10)):
+            return 0
+        last = first
+        while last + 1 < len(band) and band[last + 1]:
+            last += 1
+        if last + 1 >= len(band):
+            return 0            # still amber where we stopped looking — an icon
+        # A band, not a stripe. The ribbon carries a solid amber strip above
+        # the lettering — 89-97% of the width on every crop measured — while
+        # the rows through the black letters are the thin ones. Without this
+        # the vertical edge of an amber icon in a cell whose box sits a
+        # little left passes as chrome: `image-9542d3c56fb6c860.png` had a
+        # sliver of a trait icon down its right-hand quarter read as a
+        # ribbon, and cutting it turned a real trait into an inactive cell.
+        if coverage[first:last + 1].max() < LayoutDetector._NEW_BADGE_SOLID_FRAC:
+            return 0
+        span = last - first + 1
+        if not (LayoutDetector._NEW_BADGE_MIN_FRAC * ih
+                <= span
+                <= LayoutDetector._NEW_BADGE_MAX_FRAC * ih):
+            return 0
+        return last + 1
+
+    @staticmethod
     def _classify_cell(crop_bgr) -> str:
         """
         Classify a single slot cell crop as 'active', 'empty', or 'inactive'.
@@ -2762,6 +2838,13 @@ class LayoutDetector:
         import cv2
         if crop_bgr is None or crop_bgr.size == 0:
             return 'active'  # unknown → treat as active (safe fallback)
+        # Strip the 'NEW' ribbon first. It is chrome, not content: on an
+        # empty slot it is the only bright thing in the cell, and it lifted
+        # mean_v over the `active` gate, so the cell went to the matcher and
+        # came back with an item name for a slot holding nothing.
+        _badge = LayoutDetector._new_badge_rows(crop_bgr)
+        if _badge and crop_bgr.shape[0] - _badge >= 8:
+            crop_bgr = crop_bgr[_badge:]
         ih, iw = crop_bgr.shape[:2]
         mx = max(1, int(iw * 0.20))
         my = max(1, int(ih * 0.20))

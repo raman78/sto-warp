@@ -82,6 +82,12 @@ python admin_audit_virtual_poison.py    # mislabelled virtual crops
 
 Both run monthly. `admin_audit_virtual_poison` looks for the damaging
 direction specifically: a real icon filed as `__empty__` or `__inactive__`.
+It asks sto-warp's own `_virtual_crop_looks_real` rather than a copy, so it
+flags exactly what the client refuses to seed — including the rule that the
+game's yellow NEW ribbon is chrome and not icon content. Where sto-warp
+cannot be imported it falls back to a local bright/rich copy that does not
+know the ribbon, and prints a `Heuristic:` line saying so; read that line
+before believing a breach.
 
 ### What is SETS refusing to import?
 

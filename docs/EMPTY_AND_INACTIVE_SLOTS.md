@@ -58,6 +58,37 @@ word or padlock, adds variance. So the rule splits twice on brightness
 variance — once inside the blue-saturated navy window, once outside it — and
 the hue and saturation tests only decide which of the two splits applies.
 
+### One thing is taken off the cell first: the 'NEW' ribbon
+
+The game paints a yellow **NEW** banner across the top of a slot holding
+recently acquired gear, and it paints it on an *empty* slot too. It is
+chrome: it says something about the player's inventory, nothing about what
+the slot holds. But it is bright and strongly coloured, and on an otherwise
+black cell it is the only thing there — so every test that asks "how much
+bright, colourful content is in this cell" answered *a lot* and the cell
+read as occupied. The matcher was then asked to name an item in a slot that
+held none, and it always answers something.
+
+So `LayoutDetector._new_badge_rows` finds the ribbon and hands back its
+height, and the rule judges the cell below it. The ribbon is recognised by
+its shape rather than by where it is: a run of rows, welded to the cell's
+top edge, amber (hue 15-32, saturated and bright), which **ends** — the row
+underneath carries no amber at all — and whose tallest row covers most of
+the cell's width.
+
+Each of those clauses is load-bearing, and each was put there by a case that
+broke without it:
+
+| The test | What it refuses |
+|---|---|
+| ends before 45% of the height | an amber *icon* — `Serenity`, `Vicious` are amber to the bottom, so the run never terminates |
+| one row at least 80% wide | an amber stripe down one edge, which is what a cell box sitting slightly off catches from the icon next door |
+| 20% of the width is enough for the other rows | nothing — it is what lets the band survive the black lettering of the word NEW, which thins the middle rows to a quarter |
+
+Measured on every crop in the community mirror carrying a ribbon (2026-09-18):
+the ribbon runs from row 0-3 down to 32-34% of the cell's height, amber at
+hue 22-23, each row between 30% and 97% of the width.
+
 When it says blank, the cell is settled and no matching runs — which is also
 why a screenshot resolves in seconds rather than minutes.
 
@@ -203,6 +234,37 @@ ledger and montage as before — and they were rejected on 2026-09-03.
 embedder now names every one of the 732 blank cells correctly, including the
 15 the fixed rule misses, and calls no real icon blank. That is the whole of
 the change — the model was never the limitation.
+
+### The mirror defect: a correct label refused as poison
+
+The guard in the other direction had the same shape of fault. A crop labelled
+`__empty__` whose pixels look colourful is treated as poison and never seeded
+— that is `_virtual_crop_looks_real`, and it logs `CommunitySeed: POISON skip`
+for each one. The NEW ribbon made a genuinely empty slot look colourful, so
+fifteen crops were refused every seed, fourteen of which were labelled
+perfectly correctly by the people who confirmed them. The same ribbon is what
+put them in the dataset to begin with: the cell read as occupied, the matcher
+named an item, and the user corrected it to `__empty__`.
+
+Both ends now take the ribbon off first, through the one function that finds
+it. The effect, measured over the 13 279 crops in the community mirror and
+the 6 629 cells the detector places on the 142-screenshot corpus:
+
+| | before | after |
+|---|---|---|
+| ribboned empty cells refused as poison | 14 of 14 | 0 |
+| the one genuinely mislabelled crop still caught | yes | yes |
+| crops under a real item's name changing verdict | — | 0 of 12 172 |
+| corpus cells changing verdict | — | 20, every one a `Devices` cell going to `empty` |
+| slot boxes the detector produces | — | identical on all 142 |
+
+The backend's review tool no longer keeps its own copy of the rule: it calls
+`_virtual_crop_looks_real` and `_real_crop_looks_blank` from sto-warp, so it
+flags exactly what the client refuses to seed. A local bright/rich copy
+remains for CI, which installs the client with `--no-deps` rather than its
+full stack, and the scan header names which of the two answered — the
+fallback does not know the ribbon, and a count produced by it would read as
+new poison.
 
 ## What this means for collecting more
 

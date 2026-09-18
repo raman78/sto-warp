@@ -74,7 +74,17 @@ def _looks_real_for_virtual_label(crop_bgr: np.ndarray,
     meaningful fraction of bright pixels (V > 150) AND saturated
     highlights (S > 100 & V > 100) — that pattern can only come from a
     real, colourful icon mis-labeled as empty/inactive.
+
+    The game's 'NEW' ribbon is the one bright thing that can sit on a
+    genuinely empty slot, so it is removed first — same rule, same
+    function, as the seed-time guard in `icon_matcher`.
     """
+    from warp.recognition.layout_detector import LayoutDetector
+    badge = LayoutDetector._new_badge_rows(crop_bgr)
+    ribbon = ''
+    if badge and crop_bgr.shape[0] - badge >= 8:
+        crop_bgr = crop_bgr[badge:]
+        ribbon = f' (NEW ribbon: top {badge}px ignored)'
     hsv = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2HSV)
     s = hsv[:, :, 1]
     v = hsv[:, :, 2]
@@ -82,7 +92,7 @@ def _looks_real_for_virtual_label(crop_bgr: np.ndarray,
     rich_ratio   = float(((s > 100) & (v > 100)).mean())
     is_suspect = (bright_ratio > bright_ratio_min
                   and rich_ratio > rich_ratio_min)
-    reason = f'bright={bright_ratio:.1%} rich={rich_ratio:.1%}'
+    reason = f'bright={bright_ratio:.1%} rich={rich_ratio:.1%}{ribbon}'
     return is_suspect, reason
 
 
