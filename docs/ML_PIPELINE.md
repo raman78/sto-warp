@@ -555,8 +555,9 @@ covers the *data* story underneath it.
 When WARP matches an icon, the following priority applies:
 
 ```
-1. Community pHash knowledge override   (warp/knowledge/knowledge_cache.json)
-   — exact perceptual hash match, highest confidence, instant
+1. Community pHash knowledge override   (~/.cache/warp/knowledge_cache.json)
+   — exact perceptual hash match, used only if the crop also resembles
+     the gallery's pictures of the named item (see below)
 2. Template matching + HSV histogram    (community crop library + cargo icons)
 3. ArcFace embedder k-NN                (icon_embedder.pt + embedding_index.npz)
 4. Softmax classifier                   (icon_classifier.pt)
@@ -569,6 +570,44 @@ The classifier and embedder are the *same* files for every install —
 `warp/models/icon_classifier.pt`, `warp/models/icon_embedder.pt`. There is
 no per-user variant on disk. ModelUpdater replaces them only when the
 remote `trained_at` is strictly later than the local one (§4).
+
+### A hash hit is a claim about a picture (2026-09-25)
+
+The community table maps a 64-bit perceptual hash (`_compute_phash`) to the
+name the community voted for. What a hit establishes is narrower than it
+looks: *some* picture with this hash was voted to be X. The hash is built
+from greyscale and keeps little: across the 3891 entries a median of 12 of
+its 64 bits is set, so different pictures do share hashes. A hit used to
+be taken as the answer at 1.00, and on the screenshot that exposed this an
+Omni-Directional Pahvan beam array was read as a `Phaser Turret`.
+
+So a hit is now checked against pictures of X before it is used.
+`SETSIconMatcher._knowledge_picture_sim` takes the crop's best similarity to
+gallery rows labelled X, which are the crops the community confirmed as X
+plus X's wiki art. It costs no extra model run: the cross-check that already
+asks the embedder "is this slot empty?" on every hit leaves the crop's
+similarity to every gallery row behind, and the check reads it from there. At or above
+`KNOWLEDGE_PICTURE_MIN_SIM` (0.40) the hit stands as the community's
+verdict at 1.00. Below it the hit is treated as a collision: it is logged
+with the hash and both names, and the slot is matched as if there had been
+no hit. When no embedder is loaded nothing can be compared, so the name is
+still offered, but at `KNOWLEDGE_UNVERIFIED_CONF` (0.74). That is below
+WARP CORE's default auto-accept threshold, so a person looks at it first.
+
+Measured over 7301 user-confirmed crops, 4427 of which hit the table
+(`dev/phash_verify_measure.py`, and the shipped `match()` reproduced its
+prediction exactly in `dev/phash_verify_shipped.py`):
+
+| | hits | kept after the check |
+|---|---|---|
+| hit names the confirmed item | 4070 | 4064 |
+| hit names another item | 357 | 38 |
+
+The six correct hits lost are a floor, not an estimate: many of these crops
+are in the gallery themselves and match themselves. The 38 wrong hits that
+survive are mostly items drawn with the same icon: `Auxiliary Battery` and
+`Auxiliary Battery - Large`, `Advanced` and `Sensor-Linked Phaser Beam
+Array`. No picture can separate those.
 
 ### A session example must have structure (2026-08-31)
 

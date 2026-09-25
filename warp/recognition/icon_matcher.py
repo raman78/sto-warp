@@ -97,6 +97,20 @@ VIRTUAL_LABELS              = frozenset({'__empty__', '__inactive__'})
 # but its absolute conf is below VIRTUAL_OVERRIDE_CONF (e.g. partially clipped
 # edge bbox at y=-1).
 EMBED_REAL_VS_VIRTUAL_MARGIN = 0.05
+# A community pHash hit says "the community voted this picture to be X". The
+# hash is weak (a median 12 of 64 bits set), so two different pictures can
+# share it; the hit is only used when the crop also resembles the gallery's
+# pictures of X — the community-confirmed crops and wiki art of that item.
+# Measured 2026-09-25 over 7301 user-confirmed crops (4427 hits, 357 naming
+# the wrong item): a floor of 0.40 rejects 319 of the 357 and 6 of the 4070
+# correct hits. What survives it is mostly items drawn with the same icon,
+# which no picture can tell apart. See docs/ML_PIPELINE.md §6, "A hash hit
+# is a claim about a picture".
+KNOWLEDGE_PICTURE_MIN_SIM = 0.40
+# Without an embedder there is nothing to compare the picture with, so a hit
+# is reported just under WARP CORE's default auto-accept threshold (0.75): the
+# community's name is still offered, but a person looks at it first.
+KNOWLEDGE_UNVERIFIED_CONF = 0.74
 # Template matching cutoff (TM_CCOEFF_NORMED below this is silently dropped).
 # The unrestricted floor (TEMPLATE_THRESHOLD * 0.7 = 0.385) is correct when
 # the matcher must discriminate across all 4070+ wiki PNGs. When the caller
@@ -317,6 +331,7 @@ class SETSIconMatcher:
         # confirmed crop. Drives ART_SIM_OFFSET and the 'art' match source.
         self._gallery_is_art = None    # np.ndarray (N,) bool
         self._last_embed_was_art = False
+        self._last_embed_raw_sims = None
         # Diagnostic: source of the most recent match() decision.
         # Values: 'ml' (embedder/classifier), 'template' (wiki PNG histogram),
         # 'session' (confirmed training crop), 'knowledge' (pHash override),
@@ -401,6 +416,9 @@ class SETSIconMatcher:
         # when candidate_names is provided. Used by suppress_virtual logic below.
         self._last_embed_sim_real    = 0.0
         self._last_embed_sim_virtual = 0.0
+        # Raw cosine similarity of this crop to every gallery row, kept by
+        # _classify_ml_embed; None until an embedder has run on this crop.
+        self._last_embed_raw_sims = None
 
         crop64 = cv2.resize(crop_bgr, (MATCH_SIZE, MATCH_SIZE),
                             interpolation=cv2.INTER_AREA)
@@ -459,10 +477,31 @@ class SETSIconMatcher:
                                 )
                                 suppress = True
                     if not suppress:
+                        sim = (self._knowledge_picture_sim(name)
+                               if ml_computed else None)
+                        if sim is None:
+                            conf = KNOWLEDGE_UNVERIFIED_CONF
+                            log.info(
+                                f'WARPSync: knowledge override {name!r} not '
+                                f'verified — no embedder to compare the '
+                                f'picture with; reported at {conf:.2f}')
+                        elif sim >= KNOWLEDGE_PICTURE_MIN_SIM:
+                            conf = 1.0
+                        else:
+                            conf = 0.0
+                            suppress = True
+                            log.warning(
+                                f'WARPSync: knowledge override {name!r} '
+                                f'(phash={phash}) rejected — the hash '
+                                f'matched, but the crop '
+                                f'does not resemble the pictures of {name!r} '
+                                f'(sim={sim:.2f} < {KNOWLEDGE_PICTURE_MIN_SIM:.2f}); '
+                                f'treated as a hash collision, matching normally')
+                    if not suppress:
                         log.debug(f'WARPSync: knowledge override → {name!r}')
                         self._last_match_src = 'knowledge'
-                        self._last_stage_scores['knowledge'] = 1.0
-                        return name, 1.0, self._bgr_to_qimage(crop_bgr), False
+                        self._last_stage_scores['knowledge'] = conf
+                        return name, conf, self._bgr_to_qimage(crop_bgr), False
             except Exception as e:
                 log.debug(f'WARPSync: override lookup failed: {e}')
 
@@ -902,6 +941,26 @@ class SETSIconMatcher:
 
     # ── ML helpers ──────────────────────────────────────────────────────────────
 
+    def _knowledge_picture_sim(self, name: str) -> float | None:
+        """How closely the current crop resembles the gallery's pictures of `name`.
+
+        The best raw cosine similarity to any gallery row labelled `name`,
+        0.0 when the gallery has none. None when there is nothing to compare
+        with — no embedder, or it failed on this crop — so the caller can tell
+        "does not resemble" from "could not compare".
+
+        Reads the similarities `_classify_ml_embed` kept from its last call
+        instead of embedding the crop again: `match` calls this straight after
+        the knowledge cross-check embedded the same crop, and a second forward
+        pass would cost ~45 ms on every hash hit.
+        """
+        sims = self._last_embed_raw_sims
+        if sims is None or self._gallery_lbl is None:
+            return None
+        ids = [i for i, n in self._label_map.items() if n == name]
+        rows = np.isin(self._gallery_lbl, ids)
+        return float(sims[rows].max()) if rows.any() else 0.0
+
     def _classify_ml(
         self,
         crop64: np.ndarray,
@@ -1130,6 +1189,7 @@ class SETSIconMatcher:
         with src=none even when a valid weapon was the runner-up.
         """
         import cv2
+        self._last_embed_raw_sims = None
         if self._gallery_emb is None or self._gallery_lbl is None:
             return '', 0.0
         rgb = cv2.cvtColor(cv2.resize(crop64, (224, 224)), cv2.COLOR_BGR2RGB)
@@ -1144,6 +1204,7 @@ class SETSIconMatcher:
             with torch.no_grad():
                 emb = self._ml_session(t).numpy()[0]    # (D,) already L2-normed
             raw_sims = self._gallery_emb @ emb         # (N,) cosine similarity
+            self._last_embed_raw_sims = raw_sims
             # The offset compensates the domain gap so art entries can win the
             # *contest* against confirmed crops — see ART_SIM_OFFSET. It must
             # not travel into the reported confidence: clamped to [0, 1], an

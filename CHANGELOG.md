@@ -32,6 +32,13 @@ details live in the git history.
   right, but the names came from a crop that was partly the next row. A
   Pahvan beam array in an aft slot could come out as a Phaser Turret.
   Each slot is now read exactly where its box is drawn.
+- **A community match no longer overrides a different-looking icon.**
+  The community's shared list recognises icons by a short fingerprint,
+  and two different icons can share one. WARP took any match as certain,
+  so a blue beam array could be named as an orange Phaser Turret at
+  100%. A match is now used only when the icon also looks like the
+  pictures of the item the community named. Otherwise the slot is
+  recognised as usual.
 - **Only what you confirm is shared with the community.** With
   Auto-accept on, re-matching a slot (after moving its box or changing its
   slot) could send the program's own answer to the community as if you
