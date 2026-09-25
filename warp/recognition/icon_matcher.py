@@ -445,58 +445,69 @@ class SETSIconMatcher:
                 phash     = _compute_phash(crop64)
                 overrides = self._sync_client.get_knowledge()
                 if phash in overrides:
-                    name = overrides[phash]
-                    # Defense-in-depth: never let knowledge.json hard-override a
-                    # crop to a virtual class (__empty__ / __inactive__) or a
-                    # leftover dev-test entry. Such entries pollute Stage 0 and
-                    # used to silently turn real icons into empty slots at
-                    # conf=1.0. Skip the override — fall through to ML/template.
-                    suppress = False
-                    if name.startswith('__') or name == 'Test Item Name':
-                        log.debug(f'WARPSync: pHash override {name!r} suppressed (virtual/test)')
-                        suppress = True
-                    elif candidate_names is not None and name not in candidate_names:
-                        log.debug(f'WARPSync: pHash override {name!r} rejected — not valid for slot')
-                        suppress = True
-                    else:
+                    # One hash can stand for several pictures, so the
+                    # community tally may name several items for it; each
+                    # is a claim the picture check below has to confirm.
+                    voted = self._knowledge_names(phash, overrides)
+                    names = []
+                    for name in voted:
+                        # Defense-in-depth: never let knowledge.json hard-
+                        # override a crop to a virtual class (__empty__ /
+                        # __inactive__) or a leftover dev-test entry. Such
+                        # entries used to silently turn real icons into empty
+                        # slots at conf=1.0.
+                        if name.startswith('__') or name == 'Test Item Name':
+                            log.debug(f'WARPSync: pHash override {name!r} suppressed (virtual/test)')
+                        elif candidate_names is not None and name not in candidate_names:
+                            log.debug(f'WARPSync: pHash override {name!r} rejected — not valid for slot')
+                        else:
+                            names.append(name)
+                    suppress = not names
+                    if names and not self._ml_disabled:
                         # Embedder cross-check: stale community entries from
                         # the pre-bootstrap era mapped blank-icon pHashes to
                         # real ability names (e.g. blanks → "Charged Particle
                         # Burst"). The bootstrapped embedder now correctly
                         # identifies blanks as virtual — if it says virtual
                         # with decent confidence, refuse the override.
-                        if not self._ml_disabled:
-                            ml_name, ml_conf = self._classify_ml(crop64, candidate_names)
-                            ml_computed = True
-                            if (ml_name.startswith('__')
-                                    and ml_conf >= VIRTUAL_OVERRIDE_CONF):
-                                log.debug(
-                                    f'WARPSync: pHash override {name!r} rejected '
-                                    f'— embedder says {ml_name!r} '
-                                    f'(conf={ml_conf:.2f}); likely poisoned entry'
-                                )
-                                suppress = True
+                        ml_name, ml_conf = self._classify_ml(crop64, candidate_names)
+                        ml_computed = True
+                        if (ml_name.startswith('__')
+                                and ml_conf >= VIRTUAL_OVERRIDE_CONF):
+                            log.debug(
+                                f'WARPSync: pHash override {names!r} rejected '
+                                f'— embedder says {ml_name!r} '
+                                f'(conf={ml_conf:.2f}); likely poisoned entry'
+                            )
+                            suppress = True
                     if not suppress:
-                        sim = (self._knowledge_picture_sim(name)
-                               if ml_computed else None)
-                        if sim is None:
+                        sims = ({n: self._knowledge_picture_sim(n) for n in names}
+                                if ml_computed else {})
+                        if not sims or None in sims.values():
+                            name = max(names, key=lambda n: voted[n])
                             conf = KNOWLEDGE_UNVERIFIED_CONF
                             log.info(
                                 f'WARPSync: knowledge override {name!r} not '
                                 f'verified — no embedder to compare the '
                                 f'picture with; reported at {conf:.2f}')
-                        elif sim >= KNOWLEDGE_PICTURE_MIN_SIM:
-                            conf = 1.0
                         else:
-                            conf = 0.0
-                            suppress = True
-                            log.warning(
-                                f'WARPSync: knowledge override {name!r} '
-                                f'(phash={phash}) rejected — the hash '
-                                f'matched, but the crop '
-                                f'does not resemble the pictures of {name!r} '
-                                f'(sim={sim:.2f} < {KNOWLEDGE_PICTURE_MIN_SIM:.2f}); '
-                                f'treated as a hash collision, matching normally')
+                            fits = [n for n in names
+                                    if sims[n] >= KNOWLEDGE_PICTURE_MIN_SIM]
+                            if fits:
+                                name = max(fits, key=lambda n: (sims[n], voted[n]))
+                                conf = 1.0
+                            else:
+                                suppress = True
+                                scored = ', '.join(
+                                    f'{n!r} sim={sims[n]:.2f} votes={voted[n]}'
+                                    for n in names)
+                                log.warning(
+                                    f'WARPSync: knowledge override (phash={phash}) '
+                                    f'rejected — the hash matched, but the crop '
+                                    f'resembles none of the pictures voted for '
+                                    f'it ({scored}; floor '
+                                    f'{KNOWLEDGE_PICTURE_MIN_SIM:.2f}); treated as '
+                                    f'a hash collision, matching normally')
                     if not suppress:
                         log.debug(f'WARPSync: knowledge override → {name!r}')
                         self._last_match_src = 'knowledge'
@@ -940,6 +951,17 @@ class SETSIconMatcher:
         return hist
 
     # ── ML helpers ──────────────────────────────────────────────────────────────
+
+    def _knowledge_names(self, phash: str, overrides: dict[str, str]) -> dict[str, int]:
+        """Every name the community voted for this hash, with its votes.
+
+        A server that predates the tally sends only the leading name, which
+        then stands alone at one vote. The leading name is always included.
+        """
+        getter = getattr(self._sync_client, 'get_knowledge_votes', None)
+        voted = dict(getter(phash)) if getter is not None else {}
+        voted.setdefault(overrides[phash], 1)
+        return voted
 
     def _knowledge_picture_sim(self, name: str) -> float | None:
         """How closely the current crop resembles the gallery's pictures of `name`.

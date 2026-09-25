@@ -609,6 +609,18 @@ survive are mostly items drawn with the same icon: `Auxiliary Battery` and
 `Auxiliary Battery - Large`, `Advanced` and `Sensor-Linked Phaser Beam
 Array`. No picture can separate those.
 
+One hash can also carry votes for several items. Measured on the live
+repository on 2026-09-25, one hash had been voted a console, a trait, a
+beam bank and two more. The backend used to keep only the leader and forget
+the rest, so the check would have rejected every picture but the leader's
+as a collision. `knowledge.json` now carries the full tally, `votes`, phash
+→ {name: votes}. `WARPSyncClient.get_knowledge_votes` returns it, and
+`_knowledge_names` gives the check every name. The chosen name is the one
+whose pictures the crop resembles most, provided it clears the floor.
+Without an embedder the most-voted name is offered at
+`KNOWLEDGE_UNVERIFIED_CONF`. A backend that predates the tally sends only
+`knowledge`, and its leader stands alone.
+
 ### A session example must have structure (2026-08-31)
 
 Both template stages score with `cv2.matchTemplate(..., TM_CCOEFF_NORMED)`,
@@ -667,7 +679,7 @@ rejected upstream. What changes is that they can no longer answer a query.
 | `sets-sto/sto-icon-dataset` | `staging/<install_id>/screen_types/<TYPE>/` | Screen type PNGs |
 | `sets-sto/warp-knowledge` | `models/` | Trained .pt files, label_map.json, model_version.json |
 | `sets-sto/warp-knowledge` | `models/ship_type_corrections.json` | OCR correction map: `{raw_ocr: corrected_name}` |
-| `sets-sto/warp-knowledge` | `knowledge.json` | pHash → item_name community overrides |
+| `sets-sto/warp-knowledge` | `knowledge.json` | pHash → item_name community overrides, and `votes`: every name each hash was voted for |
 | `sets-sto/warp-knowledge` | `models/training_manifest.json` | SHA set from last training run |
 
 ---

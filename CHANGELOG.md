@@ -37,8 +37,9 @@ details live in the git history.
   and two different icons can share one. WARP took any match as certain,
   so a blue beam array could be named as an orange Phaser Turret at
   100%. A match is now used only when the icon also looks like the
-  pictures of the item the community named. Otherwise the slot is
-  recognised as usual.
+  pictures of the item the community named. When several items share
+  a fingerprint, WARP picks the one the icon actually looks like.
+  Otherwise the slot is recognised as usual.
 - **Only what you confirm is shared with the community.** With
   Auto-accept on, re-matching a slot (after moving its box or changing its
   slot) could send the program's own answer to the community as if you

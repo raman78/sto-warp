@@ -141,3 +141,89 @@ def test_checking_the_picture_costs_no_extra_forward_pass():
     m.match(CROP, candidate_names=SLOT)
 
     assert len(calls) == 1
+
+
+# ── One hash, several names ────────────────────────────────────────────────
+
+class _Tally(_Knowledge):
+    """The table leads with `lead`; the tally also names the others."""
+
+    def __init__(self, lead, votes):
+        super().__init__(lead)
+        self._votes = votes
+
+    def get_knowledge_votes(self, phash):
+        return dict(self._votes) if phash in self._table else {}
+
+
+def _tally_matcher(query, votes, lead):
+    m = _matcher(query, {'Phaser Turret': TURRET,
+                         'Omni-Directional Pahvan Proton Beam Array': PAHVAN})
+    m._sync_client = _Tally(lead, votes)
+    return m
+
+
+def test_the_name_whose_pictures_match_is_chosen_not_the_leader():
+    """Measured: one live hash carried votes for five different items. The
+    table's leader is right only for its own picture."""
+    m = _tally_matcher(PAHVAN, lead='Phaser Turret',
+                       votes={'Phaser Turret': 30,
+                              'Omni-Directional Pahvan Proton Beam Array': 2})
+    name, conf, _, _ = m.match(CROP, candidate_names=SLOT)
+
+    assert (name, conf) == ('Omni-Directional Pahvan Proton Beam Array', 1.0)
+    assert m._last_match_src == 'knowledge'
+
+
+def test_without_an_embedder_the_most_voted_name_is_offered():
+    m = _tally_matcher(PAHVAN, lead='Phaser Turret',
+                       votes={'Phaser Turret': 1,
+                              'Omni-Directional Pahvan Proton Beam Array': 5})
+    m._ml_disabled = True
+    name, conf, _, _ = m.match(CROP, candidate_names=SLOT)
+
+    assert name == 'Omni-Directional Pahvan Proton Beam Array'
+    assert conf < 0.75
+
+
+def test_a_server_without_a_tally_still_works():
+    """Older backends send only `knowledge`; the leader stands alone."""
+    m = _matcher(query=TURRET, gallery={'Phaser Turret': TURRET})
+    name, _, _, _ = m.match(CROP, candidate_names=SLOT)
+
+    assert name == 'Phaser Turret'
+
+
+# ── The sync client keeps the tally ────────────────────────────────────────
+
+def test_the_sync_client_keeps_the_tally_and_caches_it(monkeypatch, tmp_path):
+    import io
+    import json
+    import urllib.request
+    from warp import userdata
+    from warp.knowledge.sync_client import WARPSyncClient
+
+    payload = {'knowledge': {'aa': 'Phaser Turret'},
+               'votes': {'aa': {'Phaser Turret': 3, 'Precision': 2}}}
+
+    class _Resp(io.BytesIO):
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            return False
+
+    monkeypatch.setattr(urllib.request, 'urlopen',
+                        lambda *a, **k: _Resp(json.dumps(payload).encode()))
+    import threading
+    # The constructor starts download threads; set the fields by hand, as
+    # test_sets_gaps_push does.
+    client = WARPSyncClient.__new__(WARPSyncClient)
+    client._knowledge, client._knowledge_votes = {}, {}
+    client._knowledge_lock = threading.Lock()
+    client._url = 'http://127.0.0.1'
+    client._download_knowledge_bg(force=True)
+
+    assert client.get_knowledge_votes('aa') == {'Phaser Turret': 3, 'Precision': 2}
+    cached = json.loads(userdata.knowledge_cache_file().read_text())
+    assert cached['votes'] == payload['votes']

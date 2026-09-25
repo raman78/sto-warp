@@ -44,7 +44,7 @@ table is the one input the client does not control. Three guards sit there:
 |---|---|
 | virtual / test-entry suppression | an override naming `__*` or `Test Item Name` is skipped, and matching falls through to the ML and template stages |
 | embedder cross-check | when the override claims a real item but the embedder answers `__*` at conf ≥ `VIRTUAL_OVERRIDE_CONF`, the override is suppressed |
-| picture check | the override is used only when the crop resembles the gallery's pictures of the named item (`KNOWLEDGE_PICTURE_MIN_SIM`); below it the hit is a hash collision, logged as `knowledge override … rejected` with the hash, and matching continues normally. Without an embedder the override is reported at `KNOWLEDGE_UNVERIFIED_CONF`, below auto-accept. See [`ML_PIPELINE.md` §6](ML_PIPELINE.md) |
+| picture check | the override is used only when the crop resembles the gallery's pictures of an item voted for that hash (`KNOWLEDGE_PICTURE_MIN_SIM`), and the best-matching such item wins; below it the hit is a hash collision, logged as `knowledge override … rejected` with the hash, and matching continues normally. Without an embedder the override is reported at `KNOWLEDGE_UNVERIFIED_CONF`, below auto-accept. See [`ML_PIPELINE.md` §6](ML_PIPELINE.md) |
 
 This is defense-in-depth at the model level, independent of what the backend
 accepts. It exists because a poisoned entry used to turn a real icon into an

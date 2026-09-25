@@ -54,8 +54,6 @@ admin scripts, HF-token handling) see the backend's
 │   staging/<iid_*>/screen_types/…        │                                │
 │   staging/<iid_*>/anchors_grid_*.json   ┘                                │
 │                                                                          │
-│   contributions/<date>/<uuid>.{png,json}  ← phash knowledge overrides    │
-│                                                                          │
 │   sets_gaps/<iid>.json   ← NOT staging: no vote, nothing to merge.       │
 │                            One snapshot per install, replaced on each    │
 │                            upload, read only by the maintainer's report. │
@@ -109,6 +107,10 @@ admin scripts, HF-token handling) see the backend's
 │   models/label_map.json            models/embedder_label_map.json        │
 │   models/model_version.json        models/ship_type_corrections.json     │
 │   knowledge.json                   models/community_anchors.json         │
+│                                                                          │
+│   contributions/<date>/<uuid>.{png,json}  ← raw pHash votes (not         │
+│                        delivered; admin_merge folds them into            │
+│                        knowledge.json: the map plus its vote tally)      │
 └─────────────┼────────────────────────────────────────────────────────────┘
               │
               │   ModelUpdater (15 min check cadence, only install if
@@ -132,8 +134,8 @@ admin scripts, HF-token handling) see the backend's
 
 | Repo | Role | What lives here |
 |---|---|---|
-| `sets-sto/sto-icon-dataset` | **Raw + curated data** | `staging/<iid>/…` (per-install raw votes), `contributions/…` (raw pHash candidates), and `data/…` (promoted, de-duplicated, voted-in artefacts the training pipeline consumes). |
-| `sets-sto/warp-knowledge` | **Delivery** | `models/*.pt`, label maps, `knowledge.json` (phash → name overrides), `community_anchors.json`, `ship_type_corrections.json`. Everything `ModelUpdater` downloads. |
+| `sets-sto/sto-icon-dataset` | **Raw + curated data** | `staging/<iid>/…` (per-install raw votes) and `data/…` (promoted, de-duplicated, voted-in artefacts the training pipeline consumes). |
+| `sets-sto/warp-knowledge` | **Delivery** | `models/*.pt`, label maps, `knowledge.json` (phash → name overrides, plus `votes`: every name each hash was voted for), `community_anchors.json`, `ship_type_corrections.json`. Everything `ModelUpdater` downloads. It also holds `contributions/…`, the raw pHash votes, which `main.py` writes to `HF_REPO_ID` and nothing downloads. Until 2026-09-25 this page placed them in `sto-icon-dataset`. |
 
 Splitting raw votes from delivered artefacts keeps the model repo small and
 its history clean — a clone of `warp-knowledge` is the entire delivery

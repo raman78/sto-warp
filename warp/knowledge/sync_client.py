@@ -380,6 +380,10 @@ class WARPSyncClient:
                            or DEFAULT_BACKEND_URL).rstrip('/')
         self._install_id = self._get_or_create_install_id()
         self._knowledge: dict[str, str] = {}   # phash_hex → item_name
+        # phash_hex → {item_name: votes}: every name the community voted for
+        # a hash, since one hash can stand for several pictures. Empty when
+        # the backend predates the tally.
+        self._knowledge_votes: dict[str, dict[str, int]] = {}
         self._knowledge_lock = threading.Lock()
 
         # Icon equivalence classes (admin-curated). Each entry is a
@@ -428,6 +432,19 @@ class WARPSyncClient:
         ).start()
 
     # ── Public API ─────────────────────────────────────────────────────────────
+
+    def get_knowledge_votes(self, phash: str) -> dict[str, int]:
+        """Every name the community voted for `phash`, with its votes.
+        Empty when the hash has no tally (or the backend sends none)."""
+        with self._knowledge_lock:
+            return dict(self._knowledge_votes.get(phash, {}))
+
+    def _set_knowledge(self, data: dict) -> None:
+        """Publish a /knowledge payload or cache file: the map and its tally."""
+        votes = data.get('votes', {})
+        with self._knowledge_lock:
+            self._knowledge = data.get('knowledge', {})
+            self._knowledge_votes = votes if isinstance(votes, dict) else {}
 
     def get_knowledge(self) -> dict[str, str]:
         """
@@ -651,8 +668,7 @@ class WARPSyncClient:
                 age_h = (time.time() - mtime) / 3600
                 if age_h < KNOWLEDGE_MAX_AGE_HOURS:
                     data = json.loads(cache_path.read_text(encoding='utf-8'))
-                    with self._knowledge_lock:
-                        self._knowledge = data.get('knowledge', {})
+                    self._set_knowledge(data)
                     log.info(
                         f'WARPSync: knowledge fresh ({age_h:.1f}h old, '
                         f'TTL {KNOWLEDGE_MAX_AGE_HOURS}h) — '
@@ -671,14 +687,14 @@ class WARPSyncClient:
                 data = json.loads(resp.read().decode('utf-8'))
 
             knowledge = data.get('knowledge', {})
-
-            with self._knowledge_lock:
-                self._knowledge = knowledge
+            self._set_knowledge(data)
 
             # Save to cache
             cache_path.parent.mkdir(parents=True, exist_ok=True)
             cache_path.write_text(
-                json.dumps({'knowledge': knowledge, 'fetched_at': time.time()},
+                json.dumps({'knowledge': knowledge,
+                            'votes': data.get('votes', {}),
+                            'fetched_at': time.time()},
                            ensure_ascii=False, indent=2),
                 encoding='utf-8'
             )
@@ -690,8 +706,7 @@ class WARPSyncClient:
             if cache_path.exists():
                 try:
                     data = json.loads(cache_path.read_text(encoding='utf-8'))
-                    with self._knowledge_lock:
-                        self._knowledge = data.get('knowledge', {})
+                    self._set_knowledge(data)
                     log.debug('WARPSync: using stale cache as fallback')
                 except Exception:
                     pass
