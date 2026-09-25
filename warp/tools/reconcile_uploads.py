@@ -105,16 +105,29 @@ def local_crops(store: Path) -> dict[str, str]:
     except Exception:
         return out
 
-    by_id: dict[str, str] = {}
-    for rec in data.values():
+    # Keyed by (screenshot, ann_id): ann_id alone is shared by the same box on
+    # different screenshots. Crop names carry `{image_key}-{ann_id}`.
+    by_id: dict[tuple[str, str], str] = {}
+    for image_key, rec in data.items():
         if not isinstance(rec, dict):
             continue
         for a in rec.get('annotations') or []:
             if isinstance(a, dict) and a.get('ann_id') and a.get('name'):
-                by_id[str(a['ann_id'])] = f"{a.get('slot', '')}|{a['name']}"
+                by_id[(image_key, str(a['ann_id']))] = f"{a.get('slot', '')}|{a['name']}"
+
+    # A store not yet migrated still has `{ann_id}`-only names; those resolve
+    # only where one annotation in the whole store has that id.
+    by_bare: dict[str, list[str]] = {}
+    for (_k, aid), lab in by_id.items():
+        by_bare.setdefault(aid, []).append(lab)
 
     for png in crops.rglob('*.png'):
-        label = by_id.get(png.stem.rsplit('__', 1)[-1])
+        key, _, ann_id = png.stem.rsplit('__', 1)[-1].rpartition('-')
+        if key:
+            label = by_id.get((key, ann_id))
+        else:
+            labels = by_bare.get(ann_id, [])
+            label = labels[0] if len(labels) == 1 else None
         if label:
             try:
                 out[_sha(png)] = label

@@ -175,6 +175,13 @@ class TrainingDataManager:
         self._dirty = False
 
         self._load()
+        # Crops named before the screenshot key was part of the name are
+        # re-cut from their screenshots. Must run before the repair below,
+        # which would otherwise index new names that have no file yet.
+        try:
+            self.migrate_crop_names()
+        except Exception as e:
+            logger.warning(f'TrainingDataManager: migrate_crop_names failed: {e}')
         # Auto-repair crop_index on startup (fixes entries from pre-fix versions)
         try:
             repaired = self.repair_crop_index()
@@ -238,6 +245,42 @@ class TrainingDataManager:
             'image_sha256': self._full_hash_cache.get(key, ''),
         }
         return key
+
+    # ---------------------------------------------------------------- crop naming
+    #
+    # A crop belongs to one annotation on one screenshot. `ann_id` is derived
+    # from bbox + slot alone, so the same slot box on two screenshots — common,
+    # the game UI does not move — shares it. Crops used to be named and looked
+    # up by `ann_id` alone, and the startup sweep renamed one screenshot's crop
+    # to the other's label: measured 2026-09-25, 98 of 7314 confirmed crops
+    # showed a picture other than their box, and a Fragment of AI Tech icon
+    # reached the community as Unconventional Systems. The filename therefore
+    # carries the screenshot's key too: `{slot}__{name}__{image_key}-{ann_id}.png`.
+
+    @staticmethod
+    def _crop_token(image_key: str, ann_id: str) -> str:
+        return f'{image_key}-{ann_id}'
+
+    @classmethod
+    def _crop_fname(cls, image_key: str, slot: str, name: str, ann_id: str) -> str:
+        safe_slot = slot.replace(' ', '_').lower()
+        safe_name = (name or 'unknown').replace(' ', '_').lower()[:40]
+        return f'{safe_slot}__{safe_name}__{cls._crop_token(image_key, ann_id)}.png'
+
+    @staticmethod
+    def _parse_crop_fname(fname: str) -> tuple[str, str] | None:
+        """(image_key, ann_id) from a crop filename; image_key is '' for the
+        legacy `{slot}__{name}__{ann_id}.png` form. None for anything else."""
+        parts = fname.rsplit('.', 1)[0].split('__')
+        if len(parts) < 3 or not parts[-1]:
+            return None
+        key, sep, ann_id = parts[-1].rpartition('-')
+        return (key, ann_id) if sep else ('', parts[-1])
+
+    def _crop_for(self, image_key: str, ann_id: str) -> str | None:
+        """The indexed crop filename of this annotation on this screenshot."""
+        return next((f for f in self._crop_index
+                     if self._parse_crop_fname(f) == (image_key, ann_id)), None)
 
     # ---------------------------------------------------------------- annotation CRUD
 
@@ -348,7 +391,7 @@ class TrainingDataManager:
                 self._annotations[key][best_iou_i] = asdict(ann)
                 self._dirty = True
                 if old_ann_id and old_ann_id != ann.ann_id:
-                    self._cleanup_crops_for_ann_id(old_ann_id)
+                    self._cleanup_crops_for_ann(key, old_ann_id)
                 try:
                     self._export_crop(image_path, ann)
                     self._sync_crop_index(image_path, ann)
@@ -427,7 +470,7 @@ class TrainingDataManager:
                 # bbox change → ann_id changes → old crop file/index entry are
                 # now stale. Remove them and re-export under the new ann_id.
                 if old_ann_id != ann.ann_id:
-                    self._cleanup_crops_for_ann_id(old_ann_id)
+                    self._cleanup_crops_for_ann(key, old_ann_id)
                     try:
                         self._export_crop(image_path, ann)
                     except Exception as e:
@@ -436,17 +479,19 @@ class TrainingDataManager:
                 self._sync_crop_index(image_path, ann)
                 return
 
-    def _cleanup_crops_for_ann_id(self, ann_id: str) -> int:
-        """Remove crop_index entries + crop PNG files whose filename contains
-        the given ann_id. Returns number of files removed.
+    def _cleanup_crops_for_ann(self, image_key: str, ann_id: str) -> int:
+        """Remove the crop_index entries + crop PNG files of one annotation on
+        one screenshot. Returns number of files removed.
 
         Used when an annotation's ann_id changes (slot or bbox edit) — the
         crop file is named with the OLD ann_id and would otherwise leak into
-        the dataset under stale slot/name forever.
+        the dataset under stale slot/name forever. Scoped to `image_key`
+        because another screenshot can hold an annotation with the same id.
         """
         if not ann_id:
             return 0
-        to_remove = [f for f in self._crop_index if ann_id in f]
+        to_remove = [f for f in self._crop_index
+                     if self._parse_crop_fname(f) == (image_key, ann_id)]
         for fname in to_remove:
             del self._crop_index[fname]
             crop_path = self._dir / self.CROPS_DIR / fname
@@ -462,7 +507,7 @@ class TrainingDataManager:
         dicts = self._annotations.get(key, [])
         self._annotations[key] = [d for d in dicts if d.get("ann_id") != ann.ann_id]
         self._dirty = True
-        self._cleanup_crops_for_ann_id(ann.ann_id)
+        self._cleanup_crops_for_ann(key, ann.ann_id)
 
     # ---------------------------------------------------------------- persistence
 
@@ -614,14 +659,16 @@ class TrainingDataManager:
         - TEXT_LEARNING_SLOTS get a crop PNG + crop_index entry that includes ml_name
           so SyncWorker can upload them for OCR correction training.
         """
-        safe_slot = ann.slot.replace(" ", "_").lower()
-        safe_name = (ann.name or "unknown").replace(" ", "_").lower()[:40]
-        fname     = f"{safe_slot}__{safe_name}__{ann.ann_id}.png"
+        key       = self._image_id(image_path)
+        if key.startswith('missing__'):
+            logger.warning(f'_sync_crop_index: {image_path.name} is not on disk — '
+                           f'crop for {ann.slot}={ann.name!r} left as it was')
+            return
+        fname     = self._crop_fname(key, ann.slot, ann.name, ann.ann_id)
         out_path  = self._dir / self.CROPS_DIR / fname
 
-        # Also look for any existing crop with this ann_id (name/slot may have changed)
-        old_fname = next(
-            (f for f, m in self._crop_index.items() if ann.ann_id in f), None)
+        # This annotation's existing crop, if its name or slot changed since.
+        old_fname = self._crop_for(key, ann.ann_id)
         if old_fname and old_fname != fname:
             # Rename crop file to reflect new name/slot
             old_path = self._dir / self.CROPS_DIR / old_fname
@@ -688,7 +735,7 @@ class TrainingDataManager:
                 return True
         return False
 
-    def _export_crop(self, image_path: Path, ann: Annotation):
+    def _export_crop(self, image_path: Path, ann: Annotation, img=None):
         """
         Crops the icon region from the original screenshot and saves it as PNG.
         Filename is derived from item name + slot (for easy dataset browsing).
@@ -708,7 +755,8 @@ class TrainingDataManager:
                 f'Draw a box around the tier badge to contribute it.')
             ann.crop_name = ''
             return
-        img = cv2.imread(str(image_path))
+        if img is None:
+            img = cv2.imread(str(image_path))
         if img is None:
             return
 
@@ -722,10 +770,8 @@ class TrainingDataManager:
         if crop.size == 0:
             return
 
-        # Build filename: slot_name + ann_id
-        safe_slot = ann.slot.replace(" ", "_").lower()
-        safe_name = (ann.name or "unknown").replace(" ", "_").lower()[:40]
-        fname     = f"{safe_slot}__{safe_name}__{ann.ann_id}.png"
+        key       = self._image_id(image_path)
+        fname     = self._crop_fname(key, ann.slot, ann.name, ann.ann_id)
         out_path  = self._dir / self.CROPS_DIR / fname
 
         cv2.imwrite(str(out_path), crop)
@@ -772,15 +818,12 @@ class TrainingDataManager:
                 ann = self._dict_to_ann(d)
                 if not ann.name:
                     continue
-                safe_slot = ann.slot.replace(' ', '_').lower()
-                safe_name = (ann.name or 'unknown').replace(' ', '_').lower()[:40]
-                fname = f'{safe_slot}__{safe_name}__{ann.ann_id}.png'
+                fname = self._crop_fname(image_key, ann.slot, ann.name, ann.ann_id)
                 # Update crop_index entry to CONFIRMED
                 entry = self._crop_index.get(fname)
                 if entry is None or entry.get('state') != AnnotationState.CONFIRMED:
-                    # Try to find any existing crop with this ann_id
-                    existing = next(
-                        (f for f in self._crop_index if ann.ann_id in f), None)
+                    # This annotation's crop under an older name, if any
+                    existing = self._crop_for(image_key, ann.ann_id)
                     if existing and existing != fname:
                         old_path = self._dir / self.CROPS_DIR / existing
                         new_path = self._dir / self.CROPS_DIR / fname
@@ -818,6 +861,83 @@ class TrainingDataManager:
                 logger.info(f'repair_crop_index: fixed {repaired} entries')
         return repaired
 
+    def migrate_crop_names(self) -> tuple[int, int, int]:
+        """Re-cut every crop still under a legacy `{slot}__{name}__{ann_id}.png`
+        name into `{slot}__{name}__{image_key}-{ann_id}.png`.
+
+        Returns (recut, renamed, unrecoverable).
+
+        A legacy file cannot be trusted to show its own box: the name did not
+        say which screenshot it came from, and the startup sweep moved files
+        between screenshots that shared an ann_id. So every annotation is cut
+        again from its screenshot, found by content hash under
+        `screen_types/`. Where the screenshot is not there, a legacy file is
+        kept only if no other annotation in the store has that ann_id — then
+        it can only be this one's. Anything else is left without a crop and
+        counted, and the old file is swept as an orphan: an unknown picture
+        is worse than none. No-op once no legacy name is indexed.
+        """
+        legacy = {}
+        for f in self._crop_index:
+            parsed = self._parse_crop_fname(f)
+            if parsed and not parsed[0]:
+                legacy.setdefault(parsed[1], []).append(f)
+        if not legacy:
+            return 0, 0, 0
+        import cv2
+        screens: dict[str, Path] = {}
+        st_dir = self._dir / 'screen_types'
+        if st_dir.is_dir():
+            for png in sorted(st_dir.glob('*/*.png')):
+                screens.setdefault(self._image_id(png), png)
+        id_count: dict[str, int] = {}
+        for ann_list in self._annotations.values():
+            for d in ann_list:
+                if d.get('ann_id'):
+                    id_count[d['ann_id']] = id_count.get(d['ann_id'], 0) + 1
+
+        recut = renamed = 0
+        lost: list[str] = []
+        crops_dir = self._dir / self.CROPS_DIR
+        for image_key, ann_list in self._annotations.items():
+            shot = screens.get(image_key)
+            img = cv2.imread(str(shot)) if shot is not None else None
+            for d in ann_list:
+                aid = d.get('ann_id', '')
+                if aid not in legacy:
+                    continue
+                ann = self._dict_to_ann(d)
+                new = self._crop_fname(image_key, ann.slot, ann.name, aid)
+                if (crops_dir / new).exists():
+                    continue
+                if img is not None:
+                    self._export_crop(shot, ann, img=img)
+                    if (crops_dir / new).exists():
+                        self._crop_index[new]['state'] = (
+                            AnnotationState.PENDING if ann.auto_confirmed else ann.state)
+                        recut += 1
+                    continue
+                old = next((f for f in legacy[aid] if (crops_dir / f).exists()), None)
+                if old and id_count.get(aid) == 1:
+                    (crops_dir / old).rename(crops_dir / new)
+                    self._crop_index[new] = dict(self._crop_index[old])
+                    d['crop_name'] = f'crops/{new}'
+                    renamed += 1
+                else:
+                    lost.append(f"{self._image_meta.get(image_key, {}).get('filename', image_key)}"
+                                f" {ann.slot}={ann.name!r}")
+                    d['crop_name'] = ''
+        self._dirty = True
+        self.save()
+        from warp.debug import log as _slog
+        _slog.info(f'migrate_crop_names: {recut} crops re-cut from their screenshots, '
+                    f'{renamed} kept (screenshot absent, id unique), '
+                    f'{len(lost)} left without a crop (screenshot absent, id shared '
+                    f'with another screenshot — the old file may show either)')
+        for entry in lost[:20]:
+            _slog.info(f'migrate_crop_names:   no crop: {entry}')
+        return recut, renamed, len(lost)
+
     def cleanup_orphaned_crops(self) -> tuple[int, int, int]:
         """Sweep stale data left by the pre-fix correction bugs.
 
@@ -835,16 +955,19 @@ class TrainingDataManager:
           3. PNG files on disk inside crops/ that are not referenced by any
              crop_index entry. Removed to reclaim space.
         """
-        # Build {ann_id: (image_key, dict)} for fast lookup. Include the legacy
-        # bucket — its crops are still valid training data and would otherwise
-        # look "orphaned" to the sweep and get deleted on first startup.
-        ann_by_id: dict[str, tuple[str, dict]] = {}
-        for pool in (self._annotations, self._legacy_annotations):
-            for image_key, ann_list in pool.items():
-                for d in ann_list:
-                    aid = d.get('ann_id')
-                    if aid:
-                        ann_by_id[aid] = (image_key, d)
+        # {(image_key, ann_id): dict}. The key has to include the screenshot:
+        # ann_id alone is shared by the same box on different screenshots, and
+        # a map keyed on it renamed one screenshot's crop to the other's label
+        # on every start. The legacy bucket (filename-keyed, pre-migration) is
+        # matched by ann_id on legacy-form names only — its crops are still
+        # valid training data and would otherwise be deleted as orphans.
+        ann_by_crop: dict[tuple[str, str], dict] = {}
+        for image_key, ann_list in self._annotations.items():
+            for d in ann_list:
+                if d.get('ann_id'):
+                    ann_by_crop[(image_key, d['ann_id'])] = d
+        legacy_ids = {d.get('ann_id') for ann_list in self._legacy_annotations.values()
+                      for d in ann_list if d.get('ann_id')}
 
         orphaned = 0
         resynced = 0
@@ -853,13 +976,18 @@ class TrainingDataManager:
         # Pass 1+2: walk crop_index, fix or drop entries.
         for fname in list(self._crop_index.keys()):
             entry = self._crop_index.get(fname, {})
-            # Filename schema: '{slot}__{name}__{ann_id}.png'
-            stem = fname.rsplit('.', 1)[0]
-            parts = stem.split('__')
-            if len(parts) < 3:
+            parsed = self._parse_crop_fname(fname)
+            if parsed is None:
                 continue  # unknown shape, leave alone
-            ann_id = parts[-1]
-            match = ann_by_id.get(ann_id)
+            image_key, ann_id = parsed
+            if not image_key:
+                # Legacy name: kept only for the legacy bucket. For the active
+                # store `migrate_crop_names` has already re-cut it.
+                if ann_id in legacy_ids:
+                    continue
+                match = None
+            else:
+                match = ann_by_crop.get((image_key, ann_id))
             if match is None:
                 # Orphaned — annotation gone or ann_id changed without cleanup.
                 del self._crop_index[fname]
@@ -869,16 +997,14 @@ class TrainingDataManager:
                 orphaned += 1
                 self._dirty = True
                 continue
-            _img_name, ann_d = match
+            ann_d = match
             cur_slot = ann_d.get('slot', '')
             cur_name = ann_d.get('name', '')
             idx_slot = entry.get('slot', '')
             idx_name = entry.get('name', '')
             if cur_slot != idx_slot or cur_name != idx_name:
                 # Rename file to match current label.
-                safe_slot = cur_slot.replace(' ', '_').lower()
-                safe_name = (cur_name or 'unknown').replace(' ', '_').lower()[:40]
-                new_fname = f'{safe_slot}__{safe_name}__{ann_id}.png'
+                new_fname = self._crop_fname(image_key, cur_slot, cur_name, ann_id)
                 old_path = crops_dir / fname
                 new_path = crops_dir / new_fname
                 if old_path.exists() and not new_path.exists():

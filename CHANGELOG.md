@@ -40,6 +40,12 @@ details live in the git history.
   pictures of the item the community named. When several items share
   a fingerprint, WARP picks the one the icon actually looks like.
   Otherwise the slot is recognised as usual.
+- **Each confirmed icon is saved as its own picture.** When two
+  screenshots had an item in the same place, WARP CORE could save one
+  screenshot's icon under the other's name and share it that way. About
+  100 icons went to the community under the wrong item's name. On first
+  start your saved icons are cut again from their screenshots, and the
+  corrected names are shared at the next sync.
 - **Only what you confirm is shared with the community.** With
   Auto-accept on, re-matching a slot (after moving its box or changing its
   slot) could send the program's own answer to the community as if you

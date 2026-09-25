@@ -63,9 +63,10 @@ The user accepts a bounding box in WARP CORE (Enter, autocomplete pick,
 
 ```
 ~/.local/share/warp/training_data/
-├── annotations.json          ← confirmed bbox + label records
+├── annotations.json          ← bbox + label records, keyed by screenshot hash
 ├── crops/
-│   ├── <sha256>.png          ← 64×64 px icon crop per confirmed item
+│   ├── crop_index.json       ← crop file → slot, name, state, source
+│   ├── <slot>__<name>__<image_key>-<ann_id>.png   ← the box, cut at its own size
 │   └── ...
 └── screen_types/
     ├── SPACE_EQ/
@@ -76,10 +77,35 @@ The user accepts a bounding box in WARP CORE (Enter, autocomplete pick,
 ```
 
 Every confirmation:
-1. Crops the bounding box from the screenshot.
-2. Saves the crop as `crops/<sha256>.png`.
-3. Appends a record to `annotations.json` (`slot`, `name`, `bbox`,
-   `crop_sha256`, `confirmed_at`).
+1. Records the annotation in `annotations.json` under the screenshot's key,
+   the first 16 hex digits of its SHA-256 (`bbox`, `slot`, `name`, `state`,
+   `ann_id`, `ml_name`, `ml_conf`, `auto_confirmed`, `crop_name`, …).
+2. Cuts the box from the screenshot and saves it under `crops/`
+   (`TrainingDataManager._export_crop`), indexed in `crop_index.json`.
+   That index is what the uploader sends (`get_confirmed_crops`).
+
+**A crop's name carries its screenshot.** `ann_id` is a hash of bbox and slot
+alone, so the same slot box on two screenshots has the same `ann_id`. The
+game UI does not move, so this is common: 125 ids were shared on the
+maintainer's store. Crops used to be named `<slot>__<name>__<ann_id>.png`
+and found by `ann_id`, and the startup sweep (`cleanup_orphaned_crops`)
+renamed one screenshot's crop to the other's label on every start. Measured
+2026-09-25: 98 of 7314 confirmed crops showed a picture other than their
+box, and about 100 had reached the community under another item's name. One
+of them was a Fragment of AI Tech icon filed as Unconventional Systems.
+Names now include `<image_key>-`, and every lookup, rename and delete is
+scoped to the screenshot (`_crop_for`, `_cleanup_crops_for_ann`).
+
+`migrate_crop_names` runs first at startup and converts a store that still
+has old names. It re-cuts each crop from its screenshot, found by hash
+under `screen_types/`. Where the screenshot is absent it keeps the old file
+only if no other annotation shares its `ann_id`, and otherwise leaves the
+annotation without a crop and logs it, because the old file could show
+either picture. On the maintainer's store: 7440 re-cut, 704 kept, 16 left
+without a crop, and afterwards all 7440 checked crops matched their boxes.
+Re-cut crops with unchanged pixels keep their bytes and are not re-sent.
+Those whose label was wrong are re-sent under the right one, which the crop
+merge applies as a correction.
 
 Screen type labels are saved separately when you tick / change the screen
 type for a file (stored in `screen_types/<TYPE>/<filename>.png`). The

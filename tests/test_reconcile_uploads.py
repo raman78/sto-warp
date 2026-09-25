@@ -121,3 +121,33 @@ def test_a_missing_cache_leaves_everything_unproven(tmp_path):
     """No cache means no claim about what was sent, so a difference falls back
     to the fault reading rather than being excused."""
     assert rec.sent_labels(tmp_path, 'crops') == {}
+
+
+def test_a_crop_name_carrying_the_screenshot_takes_that_screenshots_label(tmp_path):
+    """The same box on two screenshots shares an ann_id; the label must come
+    from the screenshot the crop was cut from."""
+    (tmp_path / 'crops').mkdir()
+    (tmp_path / 'crops' / 'trait__x__bbbb-abc123def456.png').write_bytes(
+        b'\x89PNG' + b'\x00' * 50)
+    (tmp_path / 'annotations.json').write_text(json.dumps({
+        'aaaa': {'filename': 'a.png', 'annotations': [
+            {'ann_id': 'abc123def456', 'slot': 'Traits', 'name': 'Fragment of AI Tech'}]},
+        'bbbb': {'filename': 'b.png', 'annotations': [
+            {'ann_id': 'abc123def456', 'slot': 'Traits', 'name': 'Unconventional Systems'}]},
+    }), encoding='utf-8')
+
+    assert list(rec.local_crops(tmp_path).values()) == ['Traits|Unconventional Systems']
+
+
+def test_a_legacy_name_with_a_shared_id_is_not_guessed(tmp_path):
+    (tmp_path / 'crops').mkdir()
+    (tmp_path / 'crops' / 'trait__x__abc123def456.png').write_bytes(
+        b'\x89PNG' + b'\x00' * 50)
+    (tmp_path / 'annotations.json').write_text(json.dumps({
+        'aaaa': {'filename': 'a.png', 'annotations': [
+            {'ann_id': 'abc123def456', 'slot': 'Traits', 'name': 'Fragment of AI Tech'}]},
+        'bbbb': {'filename': 'b.png', 'annotations': [
+            {'ann_id': 'abc123def456', 'slot': 'Traits', 'name': 'Unconventional Systems'}]},
+    }), encoding='utf-8')
+
+    assert rec.local_crops(tmp_path) == {}
