@@ -280,6 +280,29 @@ def detect_boxes(rgb: np.ndarray, env: str,
     return boxes
 
 
+def on_counts(env: str, boxes: list) -> list[int]:
+    """ON nodes per group in :func:`detect_boxes` output.
+
+    Space → ``[eng, sci, tac]``; ground → one count per tree (TL, TR, BL, BR).
+    Pair with :func:`group_sizes` for the totals.
+    """
+    counts, i = [], 0
+    for n in group_sizes(env):
+        counts.append(sum(1 for b in boxes[i:i + n] if b[4]))
+        i += n
+    return counts
+
+
+def group_sizes(env: str) -> list[int]:
+    """Node count per group, in :func:`detect_boxes` order."""
+    if env == 'space':
+        return [len(_TEMPLATE['space']['positions'][c])
+                for c in ('eng', 'sci', 'tac')]
+    if env == 'ground':
+        return [len(t) for t in _TEMPLATE['ground']['positions']]
+    raise ValueError(f'skill_grid.group_sizes: unknown env {env!r}')
+
+
 def env_of(rgb: np.ndarray) -> str | None:
     """Guess 'space' / 'ground' from the node-grid aspect, or None.
 

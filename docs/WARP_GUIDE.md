@@ -43,7 +43,7 @@ Open your ship/character loadout in-game and take full-screen screenshots of:
 | Ground Traits | Personal ground traits, reputation traits |
 | Bridge Officers | Boff seats and abilities (space or ground) |
 | Specializations | Primary and secondary specialization trees |
-| Skills | Captain skill tree (Engineering / Science / Tactical columns, Lieutenant through Admiral ranks). WARP classifies these screens but does not yet recognise individual skills — this may be added in a future release. |
+| Skills | Captain skill tree, space or ground. WARP reads which skills are trained and adds them to the SETS export. The whole tree has to be on screen. |
 
 > **Screenshot tip:** Use the default STO screenshot key (default: **Print Screen**) to save full-resolution screenshots. Cropped or resized images may reduce recognition accuracy.
 
@@ -613,6 +613,13 @@ When you have finished annotating all items on a screenshot, click **✓ Mark Do
 
 If you need to make changes, click **↩ Back to Edit** (same button) or press **Alt+D** again to unlock it.
 
+Skill-tree screens are marked Done for you as soon as you confirm their type,
+either from the type menu or by ticking the checkbox. The skills themselves are
+shown but cannot be edited (see [Skill-tree screens](#skill-tree-screens)
+below), so the type is the only thing left to check. A type the program only
+guessed is not marked Done: it stays open until you have looked at it, because
+that confirmed type is what teaches the program to recognise skill screens.
+
 ### Center panel — Canvas
 
 Displays the current screenshot with coloured bounding boxes drawn over each detected item slot:
@@ -724,6 +731,21 @@ The **Item** input adapts to the slot:
 - **Ship Tier** — the field becomes a dropdown limited to the canonical tier values (*T1, T2, … T6-X, T6-X2*). Picking one accepts the bbox in one click.
 - **Ship Type** — the field becomes a searchable dropdown of every ship class in the in-game roster. Type any fragment of the name (case-insensitive, matches anywhere in the string — e.g. *"intel"* finds every Intelligence ship) and pick from the popup, or finish typing and press Enter to accept. Useful when the exact ship class is hard to recall.
 - **All other slots** — plain text input with item-name autocomplete scoped to the slot type.
+
+#### Skill-tree screens
+
+A Space or Ground skill tree is shown with a box on every skill: **green** for
+trained, **red** for not trained or locked. The line above the review list
+gives the totals, for example `Space skills ON — Eng 10/30 · Sci 9/30 ·
+Tac 27/30`, or for ground the count in each of the four trees. For a screen
+marked just *Skills*, the line also says whether it was read as the space or
+the ground tree.
+
+This is the same reading WARP puts into its SETS export, shown here so you can
+check it. It cannot be edited. Skills are read by a fixed rule, not by a model
+that learns, so a correction here would have nowhere to go. If the boxes miss
+the tree entirely, the line says so: set the type to *Space Skills* or
+*Ground Skills*, or pick the right type if it is not a skill screen at all.
 
 ### Right panel — Recognition Review
 

@@ -10,6 +10,20 @@ details live in the git history.
 
 ## [Unreleased]
 
+### Added
+
+- **WARP CORE now shows the skill tree it reads.** Open a Space or Ground
+  skill screenshot and every skill gets a box, green if trained and red
+  if not, with the totals above the review list. Until now WARP CORE said
+  only that skill screens were not supported, even though WARP was
+  already reading them for the SETS export. The display is for checking
+  only: skills are read by a fixed rule, not a model, so there is nothing
+  to correct.
+- **Skill screens are marked Done once you confirm their type.** The type
+  is the only thing on them left to review. A type the program only
+  guessed still waits for you, because your confirmation is what teaches
+  it to recognise skill screens.
+
 ### Fixed
 
 - **An empty slot with the yellow NEW banner on it is now read as

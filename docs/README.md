@@ -13,6 +13,7 @@ written for people who read or change the code.
 | [`BOFF_DETECTION.md`](BOFF_DETECTION.md) | BOFF panel — profession markers, seat layout |
 | [`TRAIT_DETECTION.md`](TRAIT_DETECTION.md) | Trait panels — grid localisation, section assignment |
 | [`SHIP_INFO_DETECTION.md`](SHIP_INFO_DETECTION.md) | Ship name / class / tier from the top band, and their bboxes |
+| [`SKILL_DETECTION.md`](SKILL_DETECTION.md) | Space / ground skill trees — fixed template, ON/OFF reading, export, read-only display in WARP CORE |
 | [`EMPTY_AND_INACTIVE_SLOTS.md`](EMPTY_AND_INACTIVE_SLOTS.md) | Recognising that a slot holds nothing: the fixed rule, the models, and what the labels are for |
 | [`sto_slots_rules.md`](sto_slots_rules.md) | Which slots exist per screen, and the game rules behind them |
 

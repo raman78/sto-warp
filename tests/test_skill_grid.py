@@ -177,3 +177,42 @@ def test_to_skill_tree_overlays_recognised_envs():
     assert tree['ground_skills'] is ground
     # untouched env keeps empty defaults (None unlocks -> SETS fills them)
     assert tree['skill_unlocks']['eng'] == [None] * 5
+
+
+def _paint_space(on):
+    """Space grid at a fixed extent; node i (eng→sci→tac) ON when on(i)."""
+    x0, y0, x1, y1 = 20, 20, 280, 380
+    img = _blank(400, 300)
+    pos = [p for c in ('eng', 'sci', 'tac')
+           for p in sg._TEMPLATE['space']['positions'][c]]
+    for i, (nx, ny) in enumerate(pos):
+        cx = int(round(x0 + nx * (x1 - x0)))
+        cy = int(round(y0 + ny * (y1 - y0)))
+        _paint(img, cx, cy, (250, 20, 20) if on(i) else (100, 100, 100))
+    return img, (x0, y0, x1, y1)
+
+
+def test_on_counts_splits_space_boxes_by_career():
+    # eng: all 30 ON, sci: none, tac: first 5 — a split at the wrong
+    # boundary would move counts between careers.
+    img, ext = _paint_space(lambda i: i < 30 or 60 <= i < 65)
+    boxes = sg.detect_boxes(img, 'space', extent=ext)
+    assert sg.on_counts('space', boxes) == [30, 0, 5]
+
+
+def test_on_counts_agrees_with_detect_space():
+    img, ext = _paint_space(lambda i: i % 4 == 0)
+    boxes = sg.detect_boxes(img, 'space', extent=ext)
+    states = sg.detect_space(img, extent=ext)
+    assert sg.on_counts('space', boxes) == [
+        sum(states[c]) for c in ('eng', 'sci', 'tac')]
+
+
+def test_group_sizes_match_the_sets_contract():
+    assert sg.group_sizes('space') == [30, 30, 30]
+    assert sg.group_sizes('ground') == [6, 6, 4, 4]
+
+
+def test_group_sizes_rejects_unknown_env():
+    with pytest.raises(ValueError):
+        sg.group_sizes('orbit')

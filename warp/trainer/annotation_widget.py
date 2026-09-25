@@ -113,6 +113,9 @@ class AnnotationWidget(QWidget):
 
         # EQ panel geometry overlay (set after auto-detect; cleared on image change)
         self._eq_geom = None
+        # Skill-tree overlay: [(x, y, w, h, on), ...] in image coords, drawn
+        # green (ON) / red (OFF) for skill screens (cleared on image change).
+        self._skill_boxes: list = []
 
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.setMouseTracking(True)
@@ -138,6 +141,7 @@ class AnnotationWidget(QWidget):
         self._zoom_oy = 0.0
         self._user_scale  = None   # reset to fit-to-window on every image load
         self._eq_geom     = None   # invalidate geom overlay until next auto-detect
+        self._skill_boxes = []     # the new screenshot sets its own, if any
         self._refresh_pin()        # selection was just cleared — drop the card
         self._compute_transform()
         self.adjustSize()
@@ -182,6 +186,11 @@ class AnnotationWidget(QWidget):
                         f'Δ=({dx_off:+},{dy_off:+}) Δsize=({bw-int(round(dx_f)):+},{bh-ph:+})')
             except Exception as _e:
                 pass
+        self.update()
+
+    def set_skill_boxes(self, boxes: list) -> None:
+        """Set the skill-tree overlay ([(x, y, w, h, on)]) and repaint."""
+        self._skill_boxes = list(boxes)
         self.update()
 
     def refresh_annotations(self, path: Path):
@@ -297,6 +306,12 @@ class AnnotationWidget(QWidget):
         #         for j in range(6):
         #             bx = int(round(geom.panel_right - (j + 1) * dx_f)) + 1
         #             painter.drawRect(self._img_to_screen_rect((bx, y_top, cell_w, ph)))
+
+        # Skill-tree overlay — green (ON) / red (OFF), same as WARP's canvas.
+        for (sx, sy, sw, sh, on) in self._skill_boxes:
+            painter.setPen(QPen(QColor(0, 220, 0) if on else QColor(220, 40, 40), DRAW_PEN_WIDTH))
+            painter.setBrush(Qt.BrushStyle.NoBrush)
+            painter.drawRect(self._img_to_screen_rect((sx, sy, sw, sh)))
 
         # Z-ORDER DRAWING:
         # 1. Background (unselected) items

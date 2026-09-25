@@ -60,6 +60,10 @@ from warp.warp_importer              import SLOT_ORDER as _SLOT_ORDER
 
 log = logging.getLogger(__name__)
 
+# Skill-tree screens: node states are read by `skill_grid` and shown
+# read-only — there are no items to review, only the screen type.
+_SKILL_STYPES = ('SKILLS', 'SPACE_SKILLS', 'GROUND_SKILLS')
+
 
 # ── Confirmed-on-disk beats fresh detection ───────────────────────────
 #
@@ -1321,6 +1325,8 @@ class WarpCoreWindow(QMainWindow):
                     ScreenTypeClassifier.add_session_example(img, stype)
             except Exception:
                 pass
+            if stype in _SKILL_STYPES:
+                self._auto_mark_done_skill(row, path)
         else:
             # User un-confirms — clear both confirmed states, remove type label
             self._screen_types_manual.discard(path.name)
@@ -1390,9 +1396,9 @@ class WarpCoreWindow(QMainWindow):
             self._populate_review_panel([], stype)
             if not self._recognition_items:
                 if stype == 'DISCARD': self._review_summary.setText('Discarded — not a build screenshot')
-                elif stype in ('SKILLS', 'SPACE_SKILLS', 'GROUND_SKILLS'): self._review_summary.setText('Skills screen — recognition not yet supported')
                 elif stype == 'UNKNOWN': self._review_summary.setText('Detecting screen type...')
                 else: self._review_summary.setText('Click Auto-Detect to recognise items on this screenshot.')
+        self._show_skill_recognition(path, stype)
         self._update_add_bbox_btn()
 
     def _show_screen_type_menu(self, item):
@@ -1441,6 +1447,85 @@ class WarpCoreWindow(QMainWindow):
             QApplication.clipboard().setText(path.name)
         elif chosen is act_copy_path:
             QApplication.clipboard().setText(str(path))
+
+    def _show_skill_recognition(self, path: Path, stype: str) -> None:
+        """Skill screens: draw the node grid (green ON / red OFF) and put the
+        recognised counts in the review summary. Any other screen: clear the
+        overlay and leave the summary alone.
+
+        Display only. Node states come from a fixed threshold, not a model,
+        so there is nothing to confirm or correct here — the result is the
+        same one WARP folds into its SETS export. A generic SKILLS screen is
+        resolved to space/ground by grid aspect, as WARP does."""
+        if stype not in _SKILL_STYPES:
+            self._ann_widget.set_skill_boxes([])
+            return
+        from warp.debug import log as _wlog
+        try:
+            import numpy as np
+            from PIL import Image
+            from warp.recognition import skill_grid
+            rgb = np.asarray(Image.open(path).convert('RGB'))
+            env = ('space' if stype == 'SPACE_SKILLS' else
+                   'ground' if stype == 'GROUND_SKILLS' else
+                   skill_grid.env_of(rgb))
+            boxes = skill_grid.detect_boxes(rgb, env) if env else []
+        except Exception as e:  # noqa: BLE001
+            _wlog.warning(f'WarpCore: skill recognition failed for {path.name}: {e}')
+            self._ann_widget.set_skill_boxes([])
+            self._review_summary.setText(f'Skill recognition failed: {e}')
+            return
+        self._ann_widget.set_skill_boxes(boxes)
+        if not boxes:
+            _wlog.warning(f'WarpCore: no skill node grid found on {path.name} '
+                        f'(type {stype}, env {env})')
+            self._review_summary.setText(
+                'Skills screen — no skill node grid found on this screenshot. '
+                'If it is a skill tree, set the type to Space Skills or '
+                'Ground Skills; otherwise re-type it.')
+            return
+        counts = skill_grid.on_counts(env, boxes)
+        sizes = skill_grid.group_sizes(env)
+        if env == 'space':
+            parts = [f'{name} {c}/{n}' for name, c, n
+                     in zip(('Eng', 'Sci', 'Tac'), counts, sizes)]
+            text = 'Space skills ON — ' + ' · '.join(parts)
+        else:
+            parts = [f'{c}/{n}' for c, n in zip(counts, sizes)]
+            text = 'Ground skills ON per tree — ' + ' · '.join(parts)
+        if stype == 'SKILLS':
+            text += f'  (read as {env} from the grid shape)'
+        self._review_summary.setText(text)
+
+    def _auto_mark_done_skill(self, row: int, path: Path) -> None:
+        """Mark a skill screen Done once the user has confirmed its type.
+
+        A skill screen has nothing to confirm besides its type — node states
+        are display-only — so a confirmed type *is* the finished review.
+        Only called on user confirmation, never on an ML guess: the type is
+        the one thing here that trains a model, so a guess must stay open
+        for a human to look at. Back to Edit reopens it as usual."""
+        if path.name in self._screenshots_done:
+            return
+        self._screenshots_done.add(path.name)
+        self._save_done()
+        if row == self._current_idx:
+            self._btn_done.blockSignals(True)
+            self._btn_done.setChecked(True)
+            self._btn_done.setText('↩ Back to Edit')
+            self._btn_done.blockSignals(False)
+            self._ann_widget.set_locked(True)
+            self._update_screen_type_ui(self._screen_types.get(path.name, 'UNKNOWN'))
+            self._update_add_bbox_btn()
+            self._refresh_mark_done_btn()
+        # setForeground emits itemChanged, which would re-enter
+        # _on_file_item_changed and record the type confirmation twice.
+        self._file_list.blockSignals(True)
+        self._update_file_list_color(row)
+        self._file_list.blockSignals(False)
+        from warp.debug import log as _wlog
+        _wlog.info(f'WarpCore: skill screen auto-marked Done for {path.name} '
+                   f'(type confirmed by user)')
 
     def _update_screen_type_ui(self, stype: str):
         icon = SCREEN_TYPE_ICONS.get(stype, '?')
@@ -1535,6 +1620,7 @@ class WarpCoreWindow(QMainWindow):
             item.setIcon(_get_user_icon())
             self._file_list.blockSignals(False)
         self._update_screen_type_ui(stype)
+        self._show_skill_recognition(path, stype)
         self._update_progress()
         log.info(f'Manual screen type override: {path.name} → {stype}')
         # DISCARD screenshots have no items to review — auto-Mark Done
@@ -1551,6 +1637,8 @@ class WarpCoreWindow(QMainWindow):
             self._ann_widget.set_locked(True)
             self._update_file_list_color(self._current_idx)
             log.info(f'DISCARD: auto-marked Done for {path.name}')
+        elif stype in _SKILL_STYPES:
+            self._auto_mark_done_skill(self._current_idx, path)
 
     # _save_screen_type_example removed — logic consolidated into
     # _on_type_override_changed (dropdown) and _on_file_item_changed (checkbox).
@@ -1756,6 +1844,7 @@ class WarpCoreWindow(QMainWindow):
             # Overlay the EQ geometry grid captured during detection (cleared on next image load)
             geom = getattr(self._recog_worker, 'eq_geom', None) if self._recog_worker else None
             self._ann_widget.set_eq_geom(geom)
+            self._show_skill_recognition(self._screenshots[self._current_idx], stype)
             # Run auto-accept after panel is populated
             self._run_auto_accept()
 
