@@ -205,9 +205,6 @@ def _bbox_iou(a, b) -> float:
 # CORE rather than losing the grid position. Set False to restore the old
 # "drop low-conf entirely" behavior.
 KEEP_LOW_CONF_GRID_BBOXES = True
-# ── P5: Anchoring constants ──────────────────────────────────────────────────
-# Slots used as reference points for layout recalibration
-ANCHOR_SLOTS = frozenset({'Deflector', 'Engines', 'Warp Core', 'Shield'})
 
 
 # ── Canonical slot order ────────────────────────────────────────────────────────
@@ -2567,11 +2564,6 @@ class WarpImporter:
         _match_base = _base_pct + int(0.45 * _span)
         _emit_stage(0.45, 'Matching icons…')
 
-        # P5: Dynamic anchoring state
-        current_dy = 0
-        found_anchor = False
-        _gear_type = build_type in ('SPACE', 'SPACE_MIXED')
-
         # Recognition stats counters — split session-origin buckets so the
         # report distinguishes live-seed (user), community-seed, trainer
         # bulk seed, and untagged session matches from pure autodetect.
@@ -2678,7 +2670,7 @@ class WarpImporter:
                         if len(_vb) == 5 and _vb[4] in ('empty', 'inactive'):
                             continue
                         _vx, _vy, _vw, _vh = _vb[:4]
-                        _vcrop = self._crop(img, (_vx, _vy + current_dy, _vw, _vh))
+                        _vcrop = self._crop(img, (_vx, _vy, _vw, _vh))
                         if _vcrop is None or _vcrop.size == 0:
                             continue
                         if _layout_obj._classify_cell(_vcrop) != 'active':
@@ -2760,10 +2752,11 @@ class WarpImporter:
                     _skip_hits += 1
                     continue
 
-                # Apply current dynamic Y-offset (P5)
-                bx, by, bw, bh = bbox
-                crop = self._crop(img, (bx, by + current_dy, bw, bh))
-                
+                # The crop is exactly the cell the grid reports — the bbox the
+                # trainer draws. Never offset it: what the user sees must be
+                # what the matcher saw.
+                crop = self._crop(img, bbox[:4])
+
                 if crop is None or crop.size == 0:
                     _slog.warning(f'  [{slot_name}][{idx}] bbox={bbox} — empty crop, skipped')
                     continue
@@ -2853,34 +2846,13 @@ class WarpImporter:
                     'stages': dict(getattr(matcher, '_last_stage_scores', {}) or {}),
                 })
 
-                # ── P5: Icon-to-Layout Feedback Loop ──────────────────────────
-                # If we haven't anchored yet on this image, check if this is a good anchor
-                if (not confirmed_layout and _gear_type and 
-                    slot_name in ANCHOR_SLOTS and not found_anchor):
-                    
-                    if conf < config.IMPORTER_RECALIBRATION_MIN_CONF:
-                        # Initial match poor? Scan vertically for a better anchor!
-                        dy_off, dy_conf, dy_name = self._find_anchor_recalibration(
-                            img, slot_name, bbox, candidates)
-                        if dy_conf > config.IMPORTER_RECALIBRATION_MIN_CONF:
-                            current_dy = dy_off
-                            found_anchor = True
-                            name, conf, thumb, used_session = dy_name, dy_conf, None, False
-                            _slog.info(f"  [P5] Recalibrated layout Y-offset: {current_dy:+}px "
-                                       f"(via {slot_name!r} conf={conf:.2f})")
-                    elif conf > 0.92:
-                        # Already a solid match at current_dy=0, lock it as anchor!
-                        found_anchor = True
-                
                 _origin = getattr(matcher, '_last_match_origin', '') or ''
                 # Four session-origin tags so logs don't lump everything as
                 # `[WARP CORE]`. The legacy tag meant "session example won";
                 # after adding community-seed and live-seed, session can mean
                 # any of four very different things. Honest tagging — same
                 # principle as not labeling auto-accept matches as 'user'.
-                if found_anchor and current_dy != 0:
-                    _tag = '[P5 Anchored]'
-                elif used_session and _origin == 'user':
+                if used_session and _origin == 'user':
                     _tag = '[USER]'        # live-seed from this process's Accept
                 elif used_session and _origin == 'community':
                     _tag = '[COMMUNITY]'   # HF-mirrored approved truth
@@ -2891,7 +2863,7 @@ class WarpImporter:
                 else:
                     _tag = '[Autodetect]'
                 _src = getattr(matcher, '_last_match_src', '') or '-'
-                _slog.debug(f'  {_tag} [{slot_name}][{idx}] dy={current_dy:+} bbox={bbox} crop={crop.shape[1]}x{crop.shape[0]} → {name!r} conf={conf:.2f} src={_src}')
+                _slog.debug(f'  {_tag} [{slot_name}][{idx}] bbox={bbox} crop={crop.shape[1]}x{crop.shape[0]} → {name!r} conf={conf:.2f} src={_src}')
                 
                 # Low-confidence / no-name results: by default keep the bbox in
                 # the review list with an empty name so the user can type the
@@ -4030,40 +4002,3 @@ class WarpImporter:
             from warp.data.cargo import _cache_dir
             self._shipdb = ShipDB(_cache_dir())
         return self._shipdb
-
-    def _find_anchor_recalibration(
-        self,
-        img: np.ndarray,
-        slot_name: str,
-        bbox: tuple[int, int, int, int],
-        candidates: set[str] | None
-    ) -> tuple[int, float, str]:
-        """
-        P5 Helper: Scan vertically around the predicted bbox to find the best 
-        structural anchor match. Returns (dy, confidence, item_name).
-        """
-        best_dy = 0
-        best_conf = 0.0
-        best_name = ''
-        bx, by, bw, bh = bbox
-        matcher = self._get_matcher()
-        h, w = img.shape[:2]
-
-        # Scan +/- 40px in 4px steps
-        # This covers most UI shifts/scales in STO logs
-        for dy in range(-40, 41, 4):
-            # Safe crop region
-            y1 = max(0, by + dy)
-            y2 = min(h, y1 + bh)
-            if y2 <= y1:
-                continue
-            crop = img[y1:y2, bx:bx+bw]
-            name, conf, _, _ = matcher.match(crop, candidate_names=candidates)
-            if conf > best_conf:
-                best_conf = conf
-                best_dy = dy
-                best_name = name
-                if conf > 0.96: # Early exit for near-perfect match
-                    break
-        
-        return best_dy, best_conf, best_name

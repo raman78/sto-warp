@@ -28,7 +28,6 @@ MODEL_RETRY_DELAYS_MIN  = (1, 5, 15, 60)  # backoff schedule on network failure
 IMPORTER_TEMPLATE_CONF_THRESHOLD     = 0.72
 IMPORTER_CONFIDENT_VIRTUAL_THRESHOLD = 0.70
 IMPORTER_MIN_ACCEPT_CONF             = 0.35
-IMPORTER_RECALIBRATION_MIN_CONF      = 0.85
 
 # warp/recognition/layout_detector.py
 OCR_CONF_THRESHOLD = 0.40

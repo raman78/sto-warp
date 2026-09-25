@@ -26,6 +26,12 @@ details live in the git history.
 
 ### Fixed
 
+- **Items are read from the boxes you see.** On some space screenshots,
+  when the Deflector was hard to read, WARP read every slot below it a
+  few pixels higher or lower than the box it drew. The boxes looked
+  right, but the names came from a crop that was partly the next row. A
+  Pahvan beam array in an aft slot could come out as a Phaser Turret.
+  Each slot is now read exactly where its box is drawn.
 - **An empty slot with the yellow NEW banner on it is now read as
   empty.** The game paints that banner across the top of a slot when
   you have picked something up recently, and it paints it on slots

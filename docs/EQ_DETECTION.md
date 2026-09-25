@@ -57,6 +57,8 @@ substituting for the other.
   the left of its icons, on the same line**, where the ground and trait
   panels put a heading above the block. A label level with its own row is
   therefore normal here and never a section boundary.
+- **EQ-6** — The crop the matcher reads is exactly the bbox that is
+  reported and drawn. Nothing moves it after the grid is built; see §5.
 
 ## 1. Panel geometry — `eq_geometry.detect_eq_geometry`
 
@@ -368,6 +370,45 @@ plain `T6` for an upgraded ship). The one difference is
 `RecognisedItem.src == 'inferred'`, which the trainer renders as an
 `Inferred` row status — see the user manual,
 [WARP guide § Right panel](WARP_GUIDE.md).
+
+## 5. From bbox to crop
+
+`WarpImporter._process_image` cuts each slot's crop straight from the bbox
+the layout emitted, and that same bbox is what the trainer draws over the
+screenshot. The drawn box is therefore an exact record of what was
+recognised. If a box sits a few pixels off an icon, the matcher saw it
+the same few pixels off. This holds for every panel, because the slot loop
+is shared.
+
+Until 2026-09-25 that was not true. A stage called P5 ("icon-to-layout
+feedback", from the time when slot positions were predicted rather than
+measured) worked like this. If `Deflector`, `Engines`, `Warp Core` or
+`Shield` matched below 0.85, it scanned crops up to 40 px above and below.
+The first one to score above 0.96 set a Y offset, and that offset was added
+to **every later crop** on the screen, traits, BOFFs and reputation
+included. The reported bbox stayed where it was, so the overlay looked
+right while the reading came from somewhere else.
+
+It was removed on measurement (`dev/p5_measure.py`, shipped importer,
+134 SPACE_EQ / SPACE_MIXED screens):
+
+| | screens |
+|---|---|
+| P5 scanned | 9 |
+| P5 moved the grid | 3 distinct (+16, +12, −4 px) |
+| move caused by a community pHash hit on the shifted crop | 3 of 3 |
+| unshifted crop hit the same table | 0 of 3 |
+
+A pHash hit is a hard override at 1.00, so it cleared the threshold on a
+crop that was mostly the wrong cell. On one screen it named the wrong
+deflector as well. With P5 off, mean confidence on the moved screens rose
+from 0.67 to 0.88, from 0.76 to 0.93 and from 0.81 to 0.88. Against ground
+truth one screen went from 47 to 52 of 62. The only slot that got worse
+(a warp core correct only through the shift) came from two similar icons
+being confused, not from misalignment: the grid box sits on the icon.
+
+Rows that differ between ship types need no offset. They are handled by
+the profile, which adds or drops whole rows (§2, §3).
 
 ## Failure modes
 

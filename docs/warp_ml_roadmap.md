@@ -115,13 +115,19 @@ When user draws a bbox and selects `Ship Name`, `Ship Tier`, or `Ship Type`:
 
 ---
 
-### 🟢 P5 — Icon to Layout Feedback Loop (COMPLETED)
+### ⛔ P5 — Icon to Layout Feedback Loop (REMOVED 2026-09-25)
 
-**Mechanism:** Layout recalibration based on high-confidence icon matches.
-- When an anchor item (Deflector, Engines, Core) is matched with confidence > 0.85, the delta between predicted and actual icon position is calculated.
-- The entire layout grid is shifted on-the-fly for the current image — resistant to small UI shifts or scaling differences.
+**Was:** when an anchor slot (Deflector, Engines, Warp Core, Shield) matched
+below 0.85, scan crops ±40 px vertically and add the first offset that scored
+above 0.96 to every later crop on the image. The reported bbox was not moved,
+so the trainer drew one place while the matcher read another.
 
-**Files:** `warp_importer.py` (`_process_image`, `_find_anchor_recalibration`).
+**Why removed:** it was written for predicted layouts. Once the grid was
+measured from pixels it had nothing to correct. On 134 SPACE screens it moved
+the grid on 3, each time because a community pHash hit on the *shifted* crop
+returned 1.00, and every moved screen recognised better without it. The
+measurement and the rule that replaced it ("the crop is the drawn box") are in
+[`EQ_DETECTION.md` §5](EQ_DETECTION.md).
 
 ---
 
@@ -216,7 +222,7 @@ When user draws a bbox and selects `Ship Name`, `Ship Tier`, or `Ship Type`:
 - Strategy 2 (pixel analysis)
 - Strategy 3 (OCR labels)
 - Strategy 4 (static fallback anchors)
-- P5 (anchor recalibration on high-conf icon matches) — still useful
+- P5 (anchor recalibration) — kept at the time; removed 2026-09-25, see P5 above
 
 **Verification (Claude-side):**
 1. `grep -r "_detect_via_cnn\|layout_regressor\|LayoutDatasetBuilder\|LocalTrainWorker\|layout_trainer" warp/` → 0 results
@@ -354,7 +360,7 @@ layout_detector.py Strategy 1 (updated)
 ✅ P1 (slot from position)      — DONE
 ✅ P3 (layout multi-config)     — DONE
 ✅ P4 (CNN layout regression)   — DONE
-✅ P5 (dynamic anchoring)       — DONE
+⛔ P5 (dynamic anchoring)       — REMOVED 2026-09-25
 ✅ P6 (progress indicator)      — DONE
 ✅ P2 (cross-validation)        — DONE
 ✅ P7 (data augmentation)       — DONE
@@ -382,7 +388,7 @@ Each point specifies who tests and how:
 - Session examples / seed from `annotations.json` — effective fallback
 - pHash community knowledge — works when populated
 - `learn_layout()` / `anchors.json` Strategy 1 — correct, stays as primary layout mechanism
-- P5 anchor recalibration on high-conf icon matches — still useful
+- ~~P5 anchor recalibration~~ — removed 2026-09-25, it moved crops off the drawn grid
 - `SLOT_VALID_TYPES` enforcement — already in place in `warp_importer.py`
 
 ---
