@@ -550,6 +550,11 @@ class TextExtractor:
         self._ocr = None
         self._scan_cache_key = None
         self._scan_cache_tokens: list[dict] = []
+        # Why the last `scan_image` read no text at all, '' when it read.
+        # An exception there used to become an empty token list and nothing
+        # else, so a screenshot came back without equipment and no one was
+        # told why; the importer turns this into a result error.
+        self.last_read_error = ''
 
     @staticmethod
     def _poly_to_xywh(poly) -> tuple[int, int, int, int]:
@@ -1567,11 +1572,13 @@ class TextExtractor:
         reader = self._get_ocr()
         raw_tokens: list[dict] = []
 
+        self.last_read_error = ''
         try:
             rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
             raw = reader.readtext(rgb, detail=1, paragraph=False)
         except Exception as e:
             _slog.warning(f'TextExtractor: scan_image read failed: {e}')
+            self.last_read_error = (str(e).strip().splitlines() or [type(e).__name__])[0]
             raw = []
         for box, text, conf in raw:
             text = text.strip()

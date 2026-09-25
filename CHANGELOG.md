@@ -40,6 +40,13 @@ details live in the git history.
   pictures of the item the community named. When several items share
   a fingerprint, WARP picks the one the icon actually looks like.
   Otherwise the slot is recognised as usual.
+- **WARP CORE tells you when a screenshot's text could not be read.** An
+  amber line under the review list names the failure, instead of the
+  screenshot quietly coming back without equipment.
+- **Detecting again no longer shows "Recognition cancelled" for the new
+  run.** Starting Auto-Detect while one is running used to report the old
+  run's cancellation as if it were the new one's, and stop the progress
+  bar while the new run went on out of sight.
 - **Detection no longer fails while a game is using the graphics card.**
   With a GPU build of PyTorch installed and a game holding most of the
   card's memory, text recognition read nothing. Detection then hung for

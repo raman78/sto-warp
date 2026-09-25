@@ -527,6 +527,14 @@ class WarpCoreWindow(QMainWindow):
         self._review_summary.setStyleSheet(f'color:{MFG};font-size:10px;')
         self._review_summary.setWordWrap(True)
         pl.addWidget(self._review_summary)
+        # What the last recognition could not do (e.g. no text could be
+        # read), kept apart from the summary line, which many paths rewrite.
+        # Cleared when a screenshot is loaded or recognition starts again.
+        self._recog_warning = QLabel('')
+        self._recog_warning.setStyleSheet(f'color:{C_WARNING};font-size:10px;')
+        self._recog_warning.setWordWrap(True)
+        self._recog_warning.setVisible(False)
+        pl.addWidget(self._recog_warning)
         sep2 = QFrame()
         sep2.setFrameShape(QFrame.Shape.HLine)
         sep2.setStyleSheet(f'color:{BC};')
@@ -1360,6 +1368,7 @@ class WarpCoreWindow(QMainWindow):
 
     def _load_screenshot(self, row: int):
         if row < 0 or row >= len(self._screenshots): return
+        self._show_recognition_warnings([])
         # Save layout for the screenshot we're leaving (if not marked Done)
         prev_idx = self._current_idx
         if 0 <= prev_idx < len(self._screenshots) and prev_idx != row:
@@ -1733,6 +1742,7 @@ class WarpCoreWindow(QMainWindow):
         # Keep the existing list visible while detection runs — _populate_review_panel
         # rebuilds it once results arrive (merged list = preserve_existing + new).
         self._review_summary.setText('Running recognition...')
+        self._show_recognition_warnings([])
         self._set_review_buttons_enabled(False)
         # Determinate bar driven by importer's per-stage progress callback
         # (same signal WARP listens to). `_recog_dlg` is a sentinel so
@@ -1764,14 +1774,24 @@ class WarpCoreWindow(QMainWindow):
                      if not _is_legacy(ri)]
         skip_bboxes = [ri.get('bbox') for ri in _preserve
                        if ri.get('bbox')]
-        self._recog_worker = RecognitionWorker(path, stype, self._sets, parent=self,
-                                                skip_bboxes=skip_bboxes)
-        self._recog_worker.progress.connect(self._on_recognition_progress)
-        self._recog_worker.finished.connect(
-            lambda items: self._on_recognition_done(path.name, stype, items,
-                                                    preserve_existing=_preserve))
-        self._recog_worker.error.connect(self._on_recognition_error)
-        self._recog_worker.start()
+        worker = RecognitionWorker(path, stype, self._sets, parent=self,
+                                   skip_bboxes=skip_bboxes)
+        self._recog_worker = worker
+        # A run replaced by a newer one still emits: the interrupted worker
+        # reports 'Cancelled' after the new run has started, and used to be
+        # taken for it — the summary said "Recognition cancelled" and the
+        # progress bar stopped while the new run went on out of sight. Only
+        # the current worker's signals reach the window.
+        def _current() -> bool:
+            return worker is self._recog_worker
+        worker.progress.connect(
+            lambda pct, label: _current() and self._on_recognition_progress(pct, label))
+        worker.finished.connect(
+            lambda items: _current() and self._on_recognition_done(
+                path.name, stype, items, preserve_existing=_preserve))
+        worker.error.connect(
+            lambda msg: _current() and self._on_recognition_error(msg))
+        worker.start()
 
     def _on_recognition_progress(self, pct: int, label: str):
         if not self._recog_dlg:
@@ -1841,6 +1861,8 @@ class WarpCoreWindow(QMainWindow):
         self._recognition_cache[filename] = merged
         if self._current_idx >= 0 and self._screenshots[self._current_idx].name == filename:
             self._populate_review_panel(merged, stype)
+            self._show_recognition_warnings(
+                getattr(self._recog_worker, 'errors', []) if self._recog_worker else [])
             # Overlay the EQ geometry grid captured during detection (cleared on next image load)
             geom = getattr(self._recog_worker, 'eq_geom', None) if self._recog_worker else None
             self._ann_widget.set_eq_geom(geom)
@@ -1893,6 +1915,12 @@ class WarpCoreWindow(QMainWindow):
         except Exception as _e:
             from warp.debug import log as _sl
             _sl.debug(f'_ocr_empty_non_icon_items: {_e}')
+
+    def _show_recognition_warnings(self, errors: list[str]) -> None:
+        """Show what the last recognition could not do, or hide the line."""
+        text = '\n'.join(f'⚠ {e}' for e in errors)
+        self._recog_warning.setText(text)
+        self._recog_warning.setVisible(bool(text))
 
     def _on_recognition_error(self, msg: str):
         if self._recog_dlg:

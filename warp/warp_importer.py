@@ -2121,6 +2121,17 @@ class WarpImporter:
             screen_type  = _ml_stype or '',
         )
 
+        # A failed text read leaves the layout without its labels, ship and
+        # tier, and the screenshot comes back short of items. Say so where
+        # the user looks instead of only in the log.
+        _read_error = getattr(self._get_text(), 'last_read_error', '')
+        if _read_error:
+            result.errors.append(
+                f'Text on this screenshot could not be read ({_read_error}). '
+                f'Without slot labels, ship name and tier the layout is a '
+                f'guess, so items may be missing or in the wrong slot. '
+                f'Run Auto-Detect again; the log has the details.')
+
         # Step 3 — layout detection.
         # ARCHITECTURE RULE: annotations.json is TRAINING DATA ONLY. WARP must
         # perform clean detection via layout_detector, never fall back to user

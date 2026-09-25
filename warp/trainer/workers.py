@@ -265,6 +265,9 @@ class RecognitionWorker(QThread):
         self._skip_bboxes = list(skip_bboxes) if skip_bboxes else []
         # EQ panel geometry captured during detection; consumed by _on_recognition_done
         self.eq_geom = None
+        # ImportResult.errors of this run — things the user has to be told,
+        # such as a text read that failed. Shown by _on_recognition_done.
+        self.errors: list[str] = []
 
     def _stage_cb(self, pct: int, label: str) -> None:
         if self.isInterruptionRequested():
@@ -323,6 +326,7 @@ class RecognitionWorker(QThread):
                 self.eq_geom = importer._get_layout()._eq_geom_cache.get(id(img))
             except Exception:
                 self.eq_geom = None
+            self.errors = list(result.errors)
             for e in result.errors:
                 _slog.warning(f'RecognitionWorker: pipeline error: {e}')
 

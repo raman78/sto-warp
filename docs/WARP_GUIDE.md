@@ -787,6 +787,19 @@ no way to see you had already checked it.
 
 Every status can be changed. Pick the row, correct the name, and accept it — an **Inferred** or **Auto** row is no more final than any other.
 
+**An amber ⚠ line under the list** means the last recognition could not
+do part of its job, and says what failed. The common case is text that
+could not be read. Without it the program cannot see the slot labels, the
+ship or the tier, so it guesses the layout, and items may be missing or in
+the wrong slot. Do not accept such a screenshot as it stands. Run
+Auto-Detect again, and if the line comes back, the log has the details. The
+line clears when you open another screenshot or detect again.
+
+**Starting Auto-Detect while one is running** stops the earlier run. Only
+the newest one reports back: its progress bar keeps moving and its results
+fill the list. The one you replaced no longer shows "Recognition cancelled"
+over a run that is still working.
+
 **Select** any item row to see its card on the canvas, next to the matching bounding box: matched reference icon, slot, item name and confidence. The reference icon is the picture from the icon library that the detector decided was the best match — if it does not look like the icon in the bounding box, the match is wrong and you should correct it. (Selecting a row and clicking the box on the canvas are the same action — either way both sides follow.)
 
 **Move through the list with the Up and Down arrow keys.** They work wherever you are in the window — after clicking a box on the canvas you do not have to click back into the list first. Each press moves one slot and steps over the grey group headings. Typing fields, the drop-downs and the screenshot list on the left keep their own arrow keys, so nothing you are editing gets disturbed.
