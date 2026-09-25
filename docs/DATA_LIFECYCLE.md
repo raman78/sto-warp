@@ -182,6 +182,17 @@ falls open rather than blocking the trainer outright. The virtual classes are
 added unconditionally, so they are excluded from that emptiness test — with
 them included it could never be empty and the fallback would be unreachable.
 
+**What a detector answer may send.** A row the program confirms by itself
+(`Auto≥`, yellow) is stored locally and nowhere else. Its crop stays out of
+the upload, because `_sync_crop_index` keeps it pending until a person
+confirms it. It also sends no pHash contribution, which `admin_merge` would
+count as a person's vote. Until 2026-09-25 the second part held only for
+`_apply_auto_accept`. The three threshold-driven callers of `_on_accept`
+(OCR finished, and the two rematch paths) contributed the detector's own
+answer and seeded it as the user's. One accepted hash collision would then
+come back to every install as the community's verdict at 1.00. The row goes
+out once a person confirms it.
+
 The backend does not repeat this check: it holds no item vocabulary at all
 (`config/labels.json` carries screen types and slot names, no item names), so
 the gate is the client's and the merge-side vocabulary check in

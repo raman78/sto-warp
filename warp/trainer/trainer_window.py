@@ -4768,11 +4768,21 @@ class WarpCoreWindow(QMainWindow):
                 )
             if name and ri.get('crop_bgr') is not None and slot not in NON_ICON_SLOTS:
                 from warp.recognition.icon_matcher import SETSIconMatcher
-                # origin='user' lets the entry survive WARP's reset_ml_session
-                # filter so a subsequent WARP detection run picks it up.
-                SETSIconMatcher.add_session_example(
-                    ri['crop_bgr'], name, origin='user')
-                self._contribute(ri, name)
+                if auto:
+                    # The detector agreeing with itself: seed it the way
+                    # `_apply_auto_accept` does, and send nothing. A
+                    # contribution is filed as a person's vote, so a hash
+                    # collision accepted here would return to every install
+                    # as the community's verdict at 1.00. It goes out when
+                    # a person confirms the row.
+                    SETSIconMatcher.add_session_example(ri['crop_bgr'], name)
+                else:
+                    # origin='user' lets the entry survive WARP's
+                    # reset_ml_session filter so a subsequent WARP detection
+                    # run picks it up.
+                    SETSIconMatcher.add_session_example(
+                        ri['crop_bgr'], name, origin='user')
+                    self._contribute(ri, name)
             elif name and slot in TEXT_LEARNING_SLOTS:
                 ocr_raw = ri.get('ocr_raw', '')
                 if ocr_raw and ocr_raw != name:

@@ -32,6 +32,11 @@ details live in the git history.
   right, but the names came from a crop that was partly the next row. A
   Pahvan beam array in an aft slot could come out as a Phaser Turret.
   Each slot is now read exactly where its box is drawn.
+- **Only what you confirm is shared with the community.** With
+  Auto-accept on, re-matching a slot (after moving its box or changing its
+  slot) could send the program's own answer to the community as if you
+  had confirmed it. Those answers now stay on your machine until you
+  confirm them.
 - **An empty slot with the yellow NEW banner on it is now read as
   empty.** The game paints that banner across the top of a slot when
   you have picked something up recently, and it paints it on slots
