@@ -40,6 +40,11 @@ details live in the git history.
   pictures of the item the community named. When several items share
   a fingerprint, WARP picks the one the icon actually looks like.
   Otherwise the slot is recognised as usual.
+- **Detection no longer fails while a game is using the graphics card.**
+  With a GPU build of PyTorch installed and a game holding most of the
+  card's memory, text recognition read nothing. Detection then hung for
+  about two minutes and returned no equipment. WARP never needed the card
+  for recognition, and now keeps off it.
 - **Each confirmed icon is saved as its own picture.** When two
   screenshots had an item in the same place, WARP CORE could save one
   screenshot's icon under the other's name and share it that way. About

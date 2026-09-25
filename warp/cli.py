@@ -14,6 +14,35 @@ from warp import __version__, display_version
 from warp.debug import log
 
 
+def _hide_gpu() -> None:
+    """Keep the windows off the graphics card; recognition runs on the CPU.
+
+    Nothing in recognition uses the GPU: the OCR reader is built with
+    `gpu=False` and every model loads with `map_location='cpu'`. EasyOCR's
+    recogniser still builds its DataLoader with `pin_memory=True`, and on a
+    CUDA build of torch pinning host memory opens a CUDA context. When a game
+    holds the card's memory that fails, the read returns no text at all, and
+    the layout falls back to a two-minute full scan that finds no equipment
+    (measured 2026-09-25 with 7.9 of 8 GB taken). Hiding the card makes
+    pinning a no-op. GPU training (`python -m warp.trainer.embedder_trainer`)
+    is a separate process and keeps it. A value set by the user is respected.
+
+    Must run before anything asks torch about CUDA; the check is lazy, so
+    before the GUI modules are imported is early enough.
+    """
+    import os
+    import warnings
+    if 'CUDA_VISIBLE_DEVICES' in os.environ:
+        log.info(f'GPU: CUDA_VISIBLE_DEVICES={os.environ["CUDA_VISIBLE_DEVICES"]!r} '
+                 f'set by the user — left as it is')
+        return
+    os.environ['CUDA_VISIBLE_DEVICES'] = ''
+    # With the card hidden torch says so on every OCR read; it is the intent.
+    warnings.filterwarnings('ignore', message=r".*'pin_memory' argument is set as true "
+                                              r"but no accelerator is found.*")
+    log.info('GPU: hidden from this process — recognition runs on the CPU')
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog='sto-warp',
@@ -75,6 +104,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == 'warp-core':
+        _hide_gpu()
         from PySide6.QtWidgets import QApplication
         from warp.trainer.trainer_window import WarpCoreWindow
         app = QApplication.instance() or QApplication(argv or sys.argv)
@@ -83,10 +113,12 @@ def main(argv: list[str] | None = None) -> int:
         return app.exec()
 
     if args.cmd == 'gui':
+        _hide_gpu()
         from warp.gui.warp_window import main as gui_main
         return gui_main(argv)
 
     if args.cmd in (None, 'launcher'):
+        _hide_gpu()
         from warp.gui.launcher import main as launcher_main
         return launcher_main(argv)
 

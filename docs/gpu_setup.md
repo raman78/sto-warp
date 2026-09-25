@@ -8,6 +8,20 @@ embedder during local model bootstrap. Speedup: roughly 5–10× (e.g.
 20 min on CPU → 2–4 min on a modern NVIDIA card). If you don't train
 embedders, stop reading — the default install is what you want.
 
+**The windows hide the card from themselves.** `sto-warp` (launcher, WARP,
+WARP CORE) sets `CUDA_VISIBLE_DEVICES` to empty before a window starts, and
+the system log records it (`GPU: hidden from this process`). The reason is a
+CUDA build of torch: EasyOCR, although built with `gpu=False`, pins host
+memory when it reads text, and pinning opens a CUDA context. With a game
+holding the card's memory that failed with `CUDA error: out of memory`, the
+read returned no text, and detection fell back to a two-minute full scan
+that found no equipment. With the card hidden, pinning does nothing and OCR
+runs on the CPU as intended. This was verified with 7.9 of 8 GB taken: 24
+tokens read instead of 0. GPU training
+(`python -m warp.trainer.embedder_trainer`) runs as its own process and
+still sees the card. If you set `CUDA_VISIBLE_DEVICES` yourself, it is left
+alone.
+
 ---
 
 ## Who this is for
