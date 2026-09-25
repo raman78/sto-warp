@@ -195,6 +195,11 @@ answer and seeded it as the user's. One accepted hash collision would then
 come back to every install as the community's verdict at 1.00. The row goes
 out once a person confirms it.
 
+Moving the box of such a row does not confirm it either. `_on_bbox_changed`
+re-matches the new crop and, for a row a person confirmed, re-sends it under
+their name. Until 2026-09-25 it did that for auto rows too, and redrew them
+green. An auto row now stays yellow after a move and sends nothing.
+
 The backend does not repeat this check: it holds no item vocabulary at all
 (`config/labels.json` carries screen types and slot names, no item names), so
 the gate is the client's and the merge-side vocabulary check in

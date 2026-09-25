@@ -124,6 +124,7 @@ class _AcceptWindow:
         }]
         self._review_list = type('L', (), {
             'currentRow': lambda s: 0, 'item': lambda s, r: None,
+            'count': lambda s: 1,
             '__getattr__': lambda s, n: (lambda *a, **k: None)})()
         self._ann_widget = type('A', (), {
             '__getattr__': lambda s, n: (lambda *a, **k: None)})()
@@ -188,3 +189,79 @@ def test_a_person_accepting_still_sends_and_seeds_as_user(seeded):
 
     assert w.contributed == ['Phaser Turret']
     assert seeded == ['user']
+
+
+# ── Moving a box is not confirming a name ──────────────────────────────────
+
+class _BoxWindow(_AcceptWindow):
+    """Enough of the window for `_on_bbox_changed` on one confirmed row."""
+
+    def __init__(self, auto: bool):
+        super().__init__()
+        from pathlib import Path
+        self._recognition_items[0].update(
+            state='confirmed', auto_confirmed=auto, bbox=(0, 0, 35, 44))
+        self._current_idx = 0
+        self._screenshots = [Path('shot.png')]
+        self._screen_types = {}
+        self._sets = None
+        self._data_mgr = type('D', (), {
+            'get_annotations': lambda s, p: [], 'save': lambda s: None})()
+        self.rows: list[dict] = []
+
+    def _build_search_candidates(self, slot=''):
+        return []
+
+    def _add_review_row(self, name, slot, conf, **kw):
+        self.rows.append(kw)
+
+    _on_bbox_changed = WarpCoreWindow._on_bbox_changed
+
+
+@pytest.fixture
+def rematch(monkeypatch):
+    """The re-match after a move, with no model and no disk."""
+    import numpy as np
+    import cv2
+    import warp.warp_importer as wi
+
+    class _Matcher:
+        _last_stage_scores: dict = {}
+        _last_match_src = 'embed'
+
+        def match(self, crop, candidate_names=None):
+            return 'Phaser Turret', 0.9, None, False
+
+    class _Importer:
+        def __init__(self, *a, **k):
+            pass
+
+        def _get_matcher(self):
+            return _Matcher()
+
+    monkeypatch.setattr(cv2, 'imread',
+                        lambda p: np.zeros((100, 100, 3), dtype=np.uint8))
+    monkeypatch.setattr(wi, 'WarpImporter', _Importer)
+
+
+def test_moving_the_box_of_an_auto_row_sends_nothing(rematch):
+    w = _BoxWindow(auto=True)
+    w._on_bbox_changed(0, (1, 1, 35, 44))
+
+    assert w.contributed == []
+
+
+def test_moving_the_box_of_an_auto_row_keeps_it_yellow(rematch):
+    w = _BoxWindow(auto=True)
+    w._on_bbox_changed(0, (1, 1, 35, 44))
+
+    assert w.rows and w.rows[-1].get('auto_confirmed') is True
+
+
+def test_moving_the_box_of_a_row_a_person_confirmed_resends_it(rematch):
+    """The better crop under the person's name is what this path is for."""
+    w = _BoxWindow(auto=False)
+    w._on_bbox_changed(0, (1, 1, 35, 44))
+
+    assert w.contributed == ['Phaser Turret']
+    assert not w.rows[-1].get('auto_confirmed')

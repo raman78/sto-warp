@@ -4404,14 +4404,23 @@ class WarpCoreWindow(QMainWindow):
                         else:
                             ri['conf'] = conf
                             ri['orig_name'] = name
-                            # Refresh visual row but keep confirmed status and user-selected name
+                            # Refresh visual row but keep confirmed status,
+                            # who confirmed it, and the confirmed name.
+                            # Moving a box confirms nothing: a yellow (auto)
+                            # row redrawn as green would claim the user
+                            # checked a name they never looked at.
+                            auto = bool(ri.get('auto_confirmed'))
                             self._review_list.takeItem(row)
                             self._add_review_row(ri['name'], ri['slot'], conf, confirmed=True,
+                                                 auto_confirmed=auto,
                                                  group_label=ri.get('_group_label'))
-                            # Bbox-only correction on a confirmed row: resend
-                            # the (better) crop with the user-confirmed name
-                            # so the backend gets the improved training signal.
-                            if ri.get('slot', '') not in NON_ICON_SLOTS and ri.get('name'):
+                            # Bbox-only correction on a row a person confirmed:
+                            # resend the (better) crop with their name so the
+                            # backend gets the improved training signal. An
+                            # auto row's name is the detector's own, and a
+                            # contribution is filed as a person's vote.
+                            if (ri.get('slot', '') not in NON_ICON_SLOTS
+                                    and ri.get('name') and not auto):
                                 self._contribute(ri, ri['name'])
 
                         self._review_list.insertItem(row, self._review_list.takeItem(self._review_list.count()-1))

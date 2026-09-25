@@ -44,7 +44,8 @@ details live in the git history.
   Auto-accept on, re-matching a slot (after moving its box or changing its
   slot) could send the program's own answer to the community as if you
   had confirmed it. Those answers now stay on your machine until you
-  confirm them.
+  confirm them. Moving the box of an automatically accepted (yellow) row
+  also no longer turns it green or sends it.
 - **An empty slot with the yellow NEW banner on it is now read as
   empty.** The game paints that banner across the top of a slot when
   you have picked something up recently, and it paints it on slots
