@@ -1582,17 +1582,21 @@ class SETSIconMatcher:
                     if p.exists():
                         crop_path = p
 
-                # Fallback: reconstruct filename from slot + name + ann_id
-                # (matches TrainingDataManager._export_crop naming convention)
+                # Fallback: the file name TrainingDataManager writes —
+                # `crop_name` is not always kept current. The screenshot key
+                # is in the name since 2026-09-25; the bare-ann_id form is
+                # kept for stores that predate it.
                 if crop_path is None:
                     ann_id = ann.get('ann_id', '')
                     if ann_id:
-                        safe_slot = slot.replace(' ', '_').lower()
-                        safe_name = name.replace(' ', '_').lower()[:40]
-                        fname = f'{safe_slot}__{safe_name}__{ann_id}.png'
-                        p = crops_dir / fname
-                        if p.exists():
-                            crop_path = p
+                        from warp.trainer.training_data import TrainingDataManager
+                        img_key = _key if isinstance(val, dict) else ''
+                        for k in ([img_key] if img_key else []) + ['']:
+                            p = crops_dir / TrainingDataManager._crop_fname(
+                                k, slot, name, ann_id)
+                            if p.exists():
+                                crop_path = p
+                                break
 
                 if crop_path is None:
                     continue

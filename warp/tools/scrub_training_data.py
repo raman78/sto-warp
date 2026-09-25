@@ -104,7 +104,10 @@ def _load_annotations(training_dir: Path) -> dict:
 
 
 def _iter_anns(data: dict):
-    """Yield (screenshot_label, anns_list, ann) for every annotation.
+    """Yield (screenshot_label, anns_list, ann, image_key) for every annotation.
+
+    ``image_key`` is the sha16 the new schema is keyed by, '' for legacy
+    entries; crop files are named with it (TrainingDataManager._crop_fname).
 
     Tolerates both schemas:
       - new (post-196e035): ``{sha16: {'filename': ..., 'annotations': [ann, ...]}}``
@@ -117,13 +120,15 @@ def _iter_anns(data: dict):
         if isinstance(val, dict):
             anns_list = val.get('annotations', [])
             label = val.get('filename', key)
+            image_key = key
         elif isinstance(val, list):
             anns_list = val
             label = key
+            image_key = ''
         else:
             continue
         for ann in anns_list:
-            yield label, anns_list, ann
+            yield label, anns_list, ann, image_key
 
 
 def _save_annotations(training_dir: Path, data: dict) -> None:
@@ -143,13 +148,16 @@ def _save_crop_index(training_dir: Path, idx: dict) -> None:
     idx_path.write_text(json.dumps(idx, indent=2), encoding='utf-8')
 
 
-def _crop_path_for_ann(training_dir: Path, ann: dict) -> Path | None:
+def _crop_path_for_ann(training_dir: Path, ann: dict,
+                       image_key: str = '') -> Path | None:
     """Resolve the crop PNG path for one annotation dict.
 
-    Primary source is the explicit ``crop_name`` field; fallback is the
-    legacy ``<slot>__<name>__<ann_id>.png`` convention so older
-    annotations are still scrubbable.
+    Primary source is the explicit ``crop_name`` field, which is not always
+    kept current. Fallback is the file name TrainingDataManager writes,
+    ``<slot>__<name>__<image_key>-<ann_id>.png``, then the legacy
+    ``<slot>__<name>__<ann_id>.png`` for older stores.
     """
+    from warp.trainer.training_data import TrainingDataManager
     crop_name = ann.get('crop_name', '')
     if crop_name:
         p = training_dir / crop_name
@@ -158,11 +166,13 @@ def _crop_path_for_ann(training_dir: Path, ann: dict) -> Path | None:
     ann_id = ann.get('ann_id', '')
     if not ann_id:
         return None
-    slot = ann.get('slot', '').replace(' ', '_').lower()
-    name = ann.get('name', '').replace(' ', '_').lower()[:40]
-    fname = f'{slot}__{name}__{ann_id}.png'
-    p = training_dir / 'crops' / fname
-    return p if p.exists() else None
+    slot, name = ann.get('slot', ''), ann.get('name', '')
+    keys = ([image_key] if image_key else []) + ['']
+    for k in keys:
+        p = training_dir / 'crops' / TrainingDataManager._crop_fname(k, slot, name, ann_id)
+        if p.exists():
+            return p
+    return None
 
 
 def find_virtual_label_poison(training_dir: Path,
@@ -172,7 +182,7 @@ def find_virtual_label_poison(training_dir: Path,
     """Find confirmed annotations whose label is __empty__/__inactive__
     but whose crop looks like a real, colourful icon."""
     suspects = []
-    for screenshot, _anns_list, ann in _iter_anns(data):
+    for screenshot, _anns_list, ann, image_key in _iter_anns(data):
         if ann.get('state') != 'confirmed':
             continue
         name = (ann.get('name') or '').strip()
@@ -181,7 +191,7 @@ def find_virtual_label_poison(training_dir: Path,
         # Skip entries the user already inspected and confirmed OK.
         if ann.get('poison_reviewed'):
             continue
-        crop_path = _crop_path_for_ann(training_dir, ann)
+        crop_path = _crop_path_for_ann(training_dir, ann, image_key)
         if crop_path is None:
             continue
         img = cv2.imread(str(crop_path))
@@ -207,10 +217,10 @@ def find_pixel_conflicts(training_dir: Path, data: dict) -> list[dict]:
     """Find groups of pixel-identical crops with different labels.
     All but the majority label are flagged as suspects."""
     by_hash: dict[str, list[dict]] = defaultdict(list)
-    for screenshot, _anns_list, ann in _iter_anns(data):
+    for screenshot, _anns_list, ann, image_key in _iter_anns(data):
         if ann.get('state') != 'confirmed':
             continue
-        crop_path = _crop_path_for_ann(training_dir, ann)
+        crop_path = _crop_path_for_ann(training_dir, ann, image_key)
         if crop_path is None:
             continue
         sha = _sha_of_file(crop_path)
@@ -344,7 +354,7 @@ def review_suspects(suspects: list[dict],
     if kept_ann_ids and training_dir is not None and data is not None:
         kept_set = set(kept_ann_ids)
         touched = 0
-        for _screenshot, _anns_list, ann in _iter_anns(data):
+        for _screenshot, _anns_list, ann, _key in _iter_anns(data):
             if ann.get('ann_id') in kept_set and not ann.get('poison_reviewed'):
                 ann['poison_reviewed'] = True
                 touched += 1

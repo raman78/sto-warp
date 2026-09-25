@@ -45,7 +45,9 @@ details live in the git history.
   screenshot's icon under the other's name and share it that way. About
   100 icons went to the community under the wrong item's name. On first
   start your saved icons are cut again from their screenshots, and the
-  corrected names are shared at the next sync.
+  corrected names are shared at the next sync. Icons of items with long
+  names, mostly consoles, were also being deleted every time WARP CORE
+  started. They are kept now, and the missing ones are cut again.
 - **Only what you confirm is shared with the community.** With
   Auto-accept on, re-matching a slot (after moving its box or changing its
   slot) could send the program's own answer to the community as if you

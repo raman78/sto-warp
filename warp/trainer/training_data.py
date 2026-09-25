@@ -259,7 +259,8 @@ class TrainingDataManager:
 
     @staticmethod
     def _crop_token(image_key: str, ann_id: str) -> str:
-        return f'{image_key}-{ann_id}'
+        """`{image_key}-{ann_id}`; the bare legacy `{ann_id}` when image_key is ''."""
+        return f'{image_key}-{ann_id}' if image_key else ann_id
 
     @classmethod
     def _crop_fname(cls, image_key: str, slot: str, name: str, ann_id: str) -> str:
@@ -270,12 +271,21 @@ class TrainingDataManager:
     @staticmethod
     def _parse_crop_fname(fname: str) -> tuple[str, str] | None:
         """(image_key, ann_id) from a crop filename; image_key is '' for the
-        legacy `{slot}__{name}__{ann_id}.png` form. None for anything else."""
-        parts = fname.rsplit('.', 1)[0].split('__')
-        if len(parts) < 3 or not parts[-1]:
+        legacy `{slot}__{name}__{ann_id}.png` form. None for anything else.
+
+        Split from the right: the name is cut at 40 characters, and a cut that
+        ends in '_' leaves `___` before the id. Splitting from the left then
+        read the id as `_<id>`, matched nothing, and the startup sweep deleted
+        every such crop as an orphan on every start — which is why long
+        console names had no crops."""
+        stem = fname.rsplit('.', 1)[0]
+        if stem.count('__') < 2:
             return None
-        key, sep, ann_id = parts[-1].rpartition('-')
-        return (key, ann_id) if sep else ('', parts[-1])
+        tok = stem.rsplit('__', 1)[1]
+        if not tok:
+            return None
+        key, sep, ann_id = tok.rpartition('-')
+        return (key, ann_id) if sep else ('', tok)
 
     def _crop_for(self, image_key: str, ann_id: str) -> str | None:
         """The indexed crop filename of this annotation on this screenshot."""
@@ -877,10 +887,14 @@ class TrainingDataManager:
         counted, and the old file is swept as an orphan: an unknown picture
         is worse than none. No-op once no legacy name is indexed.
         """
+        # Only legacy names of the active store. The filename-keyed legacy
+        # bucket keeps its old names by design and must not re-trigger this.
+        active_ids = {d.get('ann_id') for ann_list in self._annotations.values()
+                      for d in ann_list if d.get('ann_id')}
         legacy = {}
         for f in self._crop_index:
             parsed = self._parse_crop_fname(f)
-            if parsed and not parsed[0]:
+            if parsed and not parsed[0] and parsed[1] in active_ids:
                 legacy.setdefault(parsed[1], []).append(f)
         if not legacy:
             return 0, 0, 0
@@ -927,6 +941,8 @@ class TrainingDataManager:
                     lost.append(f"{self._image_meta.get(image_key, {}).get('filename', image_key)}"
                                 f" {ann.slot}={ann.name!r}")
                     d['crop_name'] = ''
+        if not (recut or renamed or lost):
+            return 0, 0, 0
         self._dirty = True
         self.save()
         from warp.debug import log as _slog

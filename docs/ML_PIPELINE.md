@@ -107,6 +107,22 @@ Re-cut crops with unchanged pixels keep their bytes and are not re-sent.
 Those whose label was wrong are re-sent under the right one, which the crop
 merge applies as a correction.
 
+**The name is read from the right.** Item names are cut at 40 characters,
+and a cut that ends in `_` (`console_-_universal_-_flagship_tactical_`)
+leaves `___` before the id. The startup sweep split names from the left, read
+the id as `_<id>`, found no annotation for it, and deleted the crop as an
+orphan on every start. That is why 188 console and weapon annotations with
+long names had no crop at all. `_parse_crop_fname` splits from the right,
+and those crops were cut again from their screenshots.
+
+**Readers do not rely on `crop_name`.** The field in `annotations.json` is
+not kept current: saving a row rewrites the record from a fresh
+`Annotation`, which carries none. The session seed
+(`SETSIconMatcher.seed_from_training_data`) and `scrub_training_data` fall
+back to the file name, built by the same `TrainingDataManager._crop_fname`
+the writer uses. They try the name with the screenshot key first, then the
+bare-`ann_id` form older stores still have.
+
 Screen type labels are saved separately when you tick / change the screen
 type for a file (stored in `screen_types/<TYPE>/<filename>.png`). The
 crop is also fed to the in-session matcher immediately, so the next
