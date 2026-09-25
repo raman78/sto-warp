@@ -101,8 +101,8 @@ EMBED_REAL_VS_VIRTUAL_MARGIN = 0.05
 # hash is weak (a median 12 of 64 bits set), so two different pictures can
 # share it; the hit is only used when the crop also resembles the gallery's
 # pictures of X — the community-confirmed crops and wiki art of that item.
-# Measured 2026-09-25 over 7301 user-confirmed crops (4427 hits, 357 naming
-# the wrong item): a floor of 0.40 rejects 319 of the 357 and 6 of the 4070
+# Measured 2026-09-25 over 7308 user-confirmed crops (4524 hits, 361 naming
+# the wrong item): a floor of 0.40 rejects 323 of the 361 and 6 of the 4163
 # correct hits. What survives it is mostly pairs whose icons the embedder
 # confuses (similar, not identical, art). See docs/ML_PIPELINE.md §6, "A hash hit
 # is a claim about a picture".

@@ -594,14 +594,21 @@ no hit. When no embedder is loaded nothing can be compared, so the name is
 still offered, but at `KNOWLEDGE_UNVERIFIED_CONF` (0.74). That is below
 WARP CORE's default auto-accept threshold, so a person looks at it first.
 
-Measured over 7301 user-confirmed crops, 4427 of which hit the table
+Measured over 7308 user-confirmed crops, 4524 of which hit the table
 (`dev/phash_verify_measure.py`, and the shipped `match()` reproduced its
 prediction exactly in `dev/phash_verify_shipped.py`):
 
 | | hits | kept after the check |
 |---|---|---|
-| hit names the confirmed item | 4070 | 4064 |
-| hit names another item | 357 | 38 |
+| hit names the confirmed item | 4163 | 4157 |
+| hit names another item | 361 | 38 |
+
+These figures were re-measured after a defect in the evaluation itself:
+annotations are keyed by image hash, and joining them to screenshots by
+filename had cut 224 of 8228 confirmed boxes out of the wrong image, since
+names such as `image.png` repeat. The first run gave 4427 hits, 357 wrong
+and 319 of them caught. The conclusion did not change, and the numbers
+above come from the corrected join (`dev/gt_crops.py`).
 
 The six correct hits lost are a floor, not an estimate: many of these crops
 are in the gallery themselves and match themselves. The 38 wrong hits that
@@ -623,7 +630,10 @@ as a collision. `knowledge.json` now carries the full tally, `votes`, phash
 whose pictures the crop resembles most, provided it clears the floor.
 Without an embedder the most-voted name is offered at
 `KNOWLEDGE_UNVERIFIED_CONF`. A backend that predates the tally sends only
-`knowledge`, and its leader stands alone.
+`knowledge`, and its leader stands alone. Built with the backend's real merger over the live table and
+the contributions left on HF, the tally raised correct knowledge answers
+on user-confirmed crops from 4174 to 4270 and lowered wrong ones from 39
+to 37 (`dev/phash_tally_effect.py`).
 
 ### A session example must have structure (2026-08-31)
 
