@@ -103,8 +103,8 @@ EMBED_REAL_VS_VIRTUAL_MARGIN = 0.05
 # pictures of X — the community-confirmed crops and wiki art of that item.
 # Measured 2026-09-25 over 7301 user-confirmed crops (4427 hits, 357 naming
 # the wrong item): a floor of 0.40 rejects 319 of the 357 and 6 of the 4070
-# correct hits. What survives it is mostly items drawn with the same icon,
-# which no picture can tell apart. See docs/ML_PIPELINE.md §6, "A hash hit
+# correct hits. What survives it is mostly pairs whose icons the embedder
+# confuses (similar, not identical, art). See docs/ML_PIPELINE.md §6, "A hash hit
 # is a claim about a picture".
 KNOWLEDGE_PICTURE_MIN_SIM = 0.40
 # Without an embedder there is nothing to compare the picture with, so a hit

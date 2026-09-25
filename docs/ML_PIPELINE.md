@@ -605,9 +605,13 @@ prediction exactly in `dev/phash_verify_shipped.py`):
 
 The six correct hits lost are a floor, not an estimate: many of these crops
 are in the gallery themselves and match themselves. The 38 wrong hits that
-survive are mostly items drawn with the same icon: `Auxiliary Battery` and
-`Auxiliary Battery - Large`, `Advanced` and `Sensor-Linked Phaser Beam
-Array`. No picture can separate those.
+survive are mostly pairs of items whose icons look alike to the embedder
+(similarity 0.8–0.9): `Auxiliary Battery` and `Auxiliary Battery - Large`,
+`Advanced` and `Sensor-Linked Phaser Beam Array`. They are not the same
+art. On the wiki the Sensor-Linked array has gold rails where the Advanced
+one has grey, and the Large battery shows two units. None of them is in
+`icon_equivalence.json`, correctly. The picture check cannot separate them
+because the embedder cannot yet; that is a recognition gap, not a hash one.
 
 One hash can also carry votes for several items. Measured on the live
 repository on 2026-09-25, one hash had been voted a console, a trait, a
