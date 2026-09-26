@@ -141,6 +141,24 @@ def test_the_search_reaches_items_far_down_the_ranking(qapp):
     assert d.shown_names() == ['Quantum Torpedo Launcher']
 
 
+@pytest.mark.parametrize('action', ['_show_more', '_show_all'])
+def test_the_choice_survives_showing_more(qapp, action):
+    d = _dialog(qapp)
+    d._grid.setCurrentRow(3)
+    getattr(d, action)()
+
+    assert d._grid.currentItem().data(0x0100) == 'Beam Array 03'
+    assert d._use.isEnabled()
+
+
+def test_the_choice_survives_a_search_that_still_matches_it(qapp):
+    d = _dialog(qapp)
+    d._grid.setCurrentRow(3)
+    d._search.setText('array 03')
+
+    assert d._grid.currentItem().data(0x0100) == 'Beam Array 03'
+
+
 def test_choosing_a_tile_returns_its_name(qapp):
     d = _dialog(qapp)
     d._grid.setCurrentRow(3)

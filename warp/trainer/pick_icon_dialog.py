@@ -168,6 +168,11 @@ class PickIconDialog(QDialog):
 
     def _refill(self, *_args) -> None:
         score = dict(self._ranked)
+        # The grid is rebuilt from scratch; the choice survives it whenever
+        # the chosen item is still listed (more tiles, all tiles, a search
+        # that still matches it).
+        cur = self._grid.currentItem()
+        keep = cur.data(Qt.ItemDataRole.UserRole) if cur is not None else ''
         self._grid.clear()
         for name in self.shown_names():
             it = QListWidgetItem(self._icon(name), f'{score[name]:.0%}  {name}')
@@ -182,6 +187,12 @@ class PickIconDialog(QDialog):
         self._more.setVisible(not searching and self._limit < total)
         self._all.setVisible(not searching and self._limit < total)
         self._use.setEnabled(False)
+        if keep:
+            for i in range(self._grid.count()):
+                if self._grid.item(i).data(Qt.ItemDataRole.UserRole) == keep:
+                    self._grid.setCurrentRow(i)
+                    self._grid.scrollToItem(self._grid.item(i))
+                    break
 
     def _show_more(self) -> None:
         self._limit += PAGE

@@ -839,7 +839,9 @@ compare icons by eye. **Pick from similar icons…** opens a window with the
 crop, enlarged four times, on the left, and the items this slot can hold on
 the right, most similar first. Each tile shows the item's icon **at the same
 size as the crop**, so the two can be compared directly, with the similarity
-percentage in front of its name. The selected tile is framed.
+percentage in front of its name. The selected tile is framed, and stays
+selected when you show more tiles, show all, or search, as long as it is
+still in the list.
 
 The window opens full-screen the first time. Resize or move it as you like;
 it reopens the way you left it.
