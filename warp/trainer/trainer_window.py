@@ -17,7 +17,7 @@ from PySide6.QtWidgets import (
     QInputDialog, QSizePolicy, QFrame, QScrollArea,
     QAbstractItemView, QCompleter, QMenu, QPlainTextEdit,
     QCheckBox, QDoubleSpinBox, QTabWidget, QTreeWidgetItem,
-    QAbstractSpinBox, QTextEdit,
+    QAbstractSpinBox, QTextEdit, QApplication, QDialog,
 )
 from PySide6.QtCore import Qt, QSettings, QSortFilterProxyModel, QSize, QTimer, Signal
 from PySide6.QtGui import QFont, QAction, QBrush, QColor, QIcon, QStandardItemModel, QStandardItem, QKeySequence, QShortcut
@@ -371,6 +371,8 @@ class WarpCoreWindow(QMainWindow):
         self._ann_widget.item_selected.connect(self._on_item_selected)
         self._ann_widget.item_deselected.connect(self._on_canvas_deselected)
         self._ann_widget.bbox_changed.connect(self._on_bbox_changed)
+        self._ann_widget.context_menu_requested.connect(
+            lambda row, gpos: self._show_item_menu(gpos, row))
         self._scroll_area = QScrollArea()
         self._scroll_area.setWidget(self._ann_widget)
         self._scroll_area.setWidgetResizable(False)
@@ -2611,13 +2613,8 @@ class WarpCoreWindow(QMainWindow):
             row = self._review_list._flat.index(item)
             if row < 0 or row >= len(self._recognition_items):
                 return
-            ri = self._recognition_items[row]
-            name = ri.get('name', '')
-            slot = ri.get('slot', '')
-            if not name:
-                return
-            self._show_item_link_menu(
-                self._review_list.viewport().mapToGlobal(pos), name, slot)
+            self._show_item_menu(
+                self._review_list.viewport().mapToGlobal(pos), row)
             return
 
         # --- group header: BOFF type-change menu ---
@@ -2651,29 +2648,89 @@ class WarpCoreWindow(QMainWindow):
             self._change_boff_group_type(item, group_label, new_type)
 
     # ------------------------------------------------------------------
-    def _show_item_link_menu(self, global_pos, name: str, slot: str):
-        """Show Open on STO Wiki / Open on vger context menu."""
+    def _show_item_menu(self, global_pos, row: int):
+        """The item menu of one review row, from the list or the canvas.
+
+        Pick from similar icons… for any icon slot, named or not — an
+        unrecognised slot is where it helps most. Open on vger / STO Wiki
+        when the row has a name to look up.
+        """
         from PySide6.QtGui import QDesktopServices
         from PySide6.QtCore import QUrl
         from warp.data.cargo import wiki_url, vger_url
 
+        if row < 0 or row >= len(self._recognition_items):
+            return
+        ri = self._recognition_items[row]
+        name = ri.get('name', '')
+        slot = ri.get('slot', '')
+
         menu = QMenu(self)
-        header = menu.addAction(name)
+        header = menu.addAction(name or '(not recognised)')
         header.setEnabled(False)
         f = header.font(); f.setBold(True); header.setFont(f)
         menu.addSeparator()
 
-        v_url = vger_url(slot)
-        act_vger = None
-        if v_url:
-            act_vger = menu.addAction('Open on vger.stobuilds.com')
-        act_wiki = menu.addAction('Open on STO Wiki')
+        act_pick = None
+        if slot and slot not in NON_ICON_SLOTS and ri.get('bbox'):
+            act_pick = menu.addAction('Pick from similar icons…')
+            act_pick.setEnabled(not self._is_current_locked())
+        v_url = vger_url(slot) if name else None
+        act_vger = menu.addAction('Open on vger.stobuilds.com') if v_url else None
+        act_wiki = menu.addAction('Open on STO Wiki') if name else None
 
         chosen = menu.exec(global_pos)
-        if chosen is act_vger and v_url:
+        if chosen is None:
+            return
+        if chosen is act_pick:
+            self._open_pick_dialog(row)
+        elif chosen is act_vger:
             QDesktopServices.openUrl(QUrl(v_url))
         elif chosen is act_wiki:
             QDesktopServices.openUrl(QUrl(wiki_url(name, slot)))
+
+    def _open_pick_dialog(self, row: int):
+        """Show the crop beside its closest look-alikes and confirm the one
+        the user picks — the same confirmation as typing the name."""
+        from warp.debug import log as _sl
+        from warp.recognition.icon_matcher import SETSIconMatcher
+        from warp.trainer.pick_icon_dialog import PickIconDialog
+
+        ri = self._recognition_items[row]
+        slot = ri.get('slot', '')
+        crop = ri.get('crop_bgr')
+        if crop is None and ri.get('bbox') and self._current_idx >= 0:
+            import cv2
+            img = cv2.imread(str(self._screenshots[self._current_idx]))
+            if img is not None:
+                x, y, w, h = ri['bbox']
+                crop = img[max(0, y):y + h, max(0, x):x + w].copy()
+        if crop is None or crop.size == 0:
+            self.statusBar().showMessage('Pick: no picture for this box.', 6000)
+            return
+        names = set(self._build_search_candidates(slot))
+        if not names:
+            self.statusBar().showMessage(
+                f'Pick: no item list for slot {slot!r} — item data not loaded?', 8000)
+            return
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            matcher = SETSIconMatcher(self._sets)
+            ranked, tm = matcher.rank_candidates(crop, names)
+        finally:
+            QApplication.restoreOverrideCursor()
+        _sl.info(f'pick: {slot!r} row={row} — {len(ranked)} candidates, '
+                 f'closest {ranked[0][0]!r} {ranked[0][1]:.2f}' if ranked else
+                 f'pick: {slot!r} row={row} — no candidates')
+        dlg = PickIconDialog(crop, slot, ranked,
+                             lambda n: matcher._thumb_for_name(n, tm),
+                             current=ri.get('name', ''), parent=self)
+        if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.chosen:
+            return
+        _sl.info(f'pick: {slot!r} row={row} → {dlg.chosen!r}')
+        self._review_list.setCurrentRow(row)
+        self._name_edit.setText(dlg.chosen)
+        self._on_accept()
 
     def _change_boff_group_type(self, parent_item, old_label: str, new_label: str):
         """Change all items in a BOFF group to a new group type and rematch."""

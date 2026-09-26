@@ -49,6 +49,9 @@ class AnnotationWidget(QWidget):
     item_selected    = Signal(dict)     # annotation dict
     item_deselected  = Signal()         # user clicked empty area
     bbox_changed     = Signal(int, tuple)  # (row, new_bbox) — Shift+LMB move/resize
+    # (review row, global QPoint): right-click on a box. The window builds
+    # the menu, so the canvas and the review list offer the same actions.
+    context_menu_requested = Signal(int, object)
 
     def __init__(self, data_manager: TrainingDataManager, parent=None):
         super().__init__(parent)
@@ -571,37 +574,11 @@ class AnnotationWidget(QWidget):
                 self.unsetCursor()
 
     def contextMenuEvent(self, event):
-        """Right-click on a review-item bbox → wiki / vger link menu."""
+        """Right-click on a review-item bbox → the window's item menu."""
         row = self._hit_test_review(event.pos())
         if row < 0 or row >= len(self._review_items):
             return
-        ri = self._review_items[row]
-        name = ri.get('name', '')
-        slot = ri.get('slot', '')
-        if not name:
-            return
-        from PySide6.QtWidgets import QMenu
-        from PySide6.QtGui import QDesktopServices
-        from PySide6.QtCore import QUrl
-        from warp.data.cargo import wiki_url, vger_url
-
-        menu = QMenu(self)
-        header = menu.addAction(name)
-        header.setEnabled(False)
-        f = header.font(); f.setBold(True); header.setFont(f)
-        menu.addSeparator()
-
-        v_url = vger_url(slot)
-        act_vger = None
-        if v_url:
-            act_vger = menu.addAction('Open on vger.stobuilds.com')
-        act_wiki = menu.addAction('Open on STO Wiki')
-
-        chosen = menu.exec(event.globalPos())
-        if chosen is act_vger and v_url:
-            QDesktopServices.openUrl(QUrl(v_url))
-        elif chosen is act_wiki:
-            QDesktopServices.openUrl(QUrl(wiki_url(name, slot)))
+        self.context_menu_requested.emit(row, event.globalPos())
 
     def mouseReleaseEvent(self, event: QMouseEvent):
         if event.button() != Qt.MouseButton.LeftButton: return

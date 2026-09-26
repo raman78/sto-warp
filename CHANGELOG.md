@@ -12,6 +12,12 @@ details live in the git history.
 
 ### Added
 
+- **Pick the right item from similar icons.** Right-click a slot and
+  choose **Pick from similar icons…**. A window shows your crop beside the
+  items that slot can hold, most similar first, and a search box lists the
+  whole group when none of them is right. Picking one confirms it. You no
+  longer need vger to fix a wrong match.
+
 - **WARP CORE now shows the skill tree it reads.** Open a Space or Ground
   skill screenshot and every skill gets a box, green if trained and red
   if not, with the totals above the review list. Until now WARP CORE said

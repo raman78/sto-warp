@@ -733,6 +733,47 @@ class SETSIconMatcher:
             thumb = self._thumb_for_name(name, tm_all)
         return name, score, thumb, (src == 'session')
 
+    def rank_candidates(self, crop_bgr: np.ndarray,
+                        names: set[str]) -> tuple[list[tuple[str, float]], object]:
+        """Every name in `names`, most similar to the crop first.
+
+        For the trainer's picker: a person chooses among them, so the whole
+        list is returned and nothing is cut at a threshold. The score is the
+        crop's best raw embedder similarity to that item's gallery rows
+        (confirmed crops and wiki art) — the same number the knowledge check
+        uses. An item the gallery lacks, or every item when no embedder is
+        loaded, is scored by its wiki template instead.
+
+        Returns (ranked, tm_scores); `tm_scores` goes to `_thumb_for_name`
+        so each tile shows the picture of the item that matched best.
+        """
+        import cv2
+        if crop_bgr is None or crop_bgr.size == 0 or not names:
+            return [(n, 0.0) for n in sorted(names)], None
+        crop64 = cv2.resize(crop_bgr, (MATCH_SIZE, MATCH_SIZE),
+                            interpolation=cv2.INTER_AREA)
+        scores: dict[str, float] = {}
+        if not self._ml_disabled and self._get_ml_session() is not None \
+                and self._ml_kind == 'embedder':
+            self._classify_ml_embed(crop64, None)
+            raw = self._last_embed_raw_sims
+            if raw is not None:
+                for i, lbl in enumerate(self._gallery_lbl):
+                    n = self._label_map.get(int(lbl), '')
+                    if n in names and raw[i] > scores.get(n, -1.0):
+                        scores[n] = float(raw[i])
+        tm_all = self._template_scores(crop64) if self._index else None
+        if tm_all is not None:
+            by_tm: dict[str, float] = {}
+            for i, entry in enumerate(self._index):
+                n = entry['name']
+                if n in names and n not in scores and tm_all[i] > by_tm.get(n, -1.0):
+                    by_tm[n] = float(tm_all[i])
+            scores.update(by_tm)
+        ranked = sorted(((n, max(0.0, min(1.0, scores.get(n, 0.0)))) for n in names),
+                        key=lambda t: (-t[1], t[0]))
+        return ranked, tm_all
+
     def _thumb_for_name(self, name: str, tm_scores=None) -> object:
         """Return a QImage thumbnail for an item name, from the wiki PNG index.
 

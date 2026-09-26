@@ -718,7 +718,7 @@ Whatever the source, the row always shows the tier the build was actually sized 
 | Select a box | **Left click** on the box — highlights it in the review list |
 | Hover over a box | Shows a tooltip just below the box (above it near the bottom edge) with the reference icon, slot, item name and confidence — compare the icon with what you see in the bbox to spot mismatches. After you confirm or correct an item, the tooltip updates to the icon and name you confirmed and notes whether it was confirmed by you or auto-accepted by the program |
 | Keep a tooltip on screen | Tick **Pin tooltip on selection** at the end of the toolbar — the selected box keeps its tooltip while you type the correction. See [Pin tooltip on selection](#pin-tooltip-on-selection) |
-| Right-click a box | Opens a menu with **Open on vger.stobuilds.com** and **Open on STO Wiki** links to look up the item in your browser |
+| Right-click a box | Opens the item menu: **Pick from similar icons…**, plus **Open on vger.stobuilds.com** and **Open on STO Wiki** when the box has a name — the same menu as right-clicking its row |
 | Draw new box | **Alt + LMB drag** — hold Alt, click and drag over an item icon |
 | Draw mode toggle | **Alt+A** button in the right panel — cursor stays as crosshair until toggled off |
 
@@ -806,10 +806,47 @@ over a run that is still working.
 
 **Enter also moves you on once an item is green.** On an item that still needs an answer, Enter accepts it and jumps to the next one that does. On an item you have already confirmed and not changed since, there is nothing left to accept, so Enter simply steps to the next slot — the same as pressing Down. That holds whether you are on the canvas, in the item list or in the name field, so you can walk a finished screenshot with one key. Change the name or the slot first and Enter goes back to meaning "accept", saving your correction.
 
-**Right-click** any item row to open a menu with external links:
+**Right-click** any item row, or its box on the canvas, to open the item menu:
 
+- **Pick from similar icons…** opens the picker described below. It is there
+  for every icon slot, recognised or not, because an unrecognised slot is
+  where it helps most.
 - **Open on vger.stobuilds.com** — opens the relevant vger category page in your browser (equipment or traits). Not shown for BOFF abilities.
 - **Open on STO Wiki** — opens the item's wiki page directly so you can verify what the item looks like, what set it belongs to, etc. Same behaviour as in the Results tree, including how the slot decides between two traits of the same name — see [Right-click — quick actions on a Results row](#right-click--quick-actions-on-a-results-row).
+
+#### Picking the item from similar icons
+
+When a slot is recognised wrongly, you no longer have to open vger and
+compare icons by eye. **Pick from similar icons…** opens a window with the
+crop, enlarged, on the left, and the items this slot can hold on the right,
+most similar first, each with its icon and a similarity percentage.
+
+```
+┌─ Pick the item — Aft Weapons ────────────────────────────────────────┐
+│ This crop    [ Search by name — lists every item this slot can hold ]│
+│ ┌────────┐   ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐              │
+│ │ (4×)   │   │icon│ │icon│ │icon│ │icon│ │icon│ │icon│  …           │
+│ └────────┘   └────┘ └────┘ └────┘ └────┘ └────┘ └────┘              │
+│ Now: Trans-  Advanced Sensor- Covert  …                              │
+│ phasic Mine  Phaser   Linked  Phaser                                 │
+│ Launcher     71%      69%     66%                                    │
+│              Closest 30 of 386  [Show 30 more]  [Use selected][Cancel]│
+└──────────────────────────────────────────────────────────────────────┘
+```
+
+- It opens on the **30 closest** items; **Show 30 more** adds the next 30.
+- If none of them is right, type in the **search** box. It then lists
+  every item of that slot whose name contains all the words you typed,
+  however far down the similarity order it is. This is the same list vger
+  would show for that category.
+- Double-click a tile, or select it and press **Use selected**. That
+  confirms the slot under that name, exactly as if you had typed it and
+  pressed Accept, so it is shared as your answer.
+
+The percentage is how much the crop looks like the pictures WARP has of
+that item. It is an ordering aid, not a verdict: two items with almost the
+same icon can sit side by side, and the right one is the one that matches
+the crop in front of you.
 
 At the bottom:
 - **Add BBox** — enter draw mode to add a missing box (Alt+A)
