@@ -110,6 +110,29 @@ def test_show_more_extends_it(qapp):
     assert len(d.shown_names()) == 2 * PAGE
 
 
+def test_show_all_lists_the_whole_group(qapp):
+    """None of the closest is right and the name is not known: every item
+    the slot can hold, as vger's category page would."""
+    d = _dialog(qapp)
+    d._show_all()
+
+    assert len(d.shown_names()) == 75
+    assert d.shown_names()[-1] == 'Quantum Torpedo Launcher'
+
+
+def test_tiles_are_drawn_at_the_crops_scale(qapp):
+    from PySide6.QtGui import QImage
+    from warp.trainer.pick_icon_dialog import CROP_SCALE, PickIconDialog
+    icon = QImage(49, 64, QImage.Format.Format_RGB888)
+    icon.fill(0x336699)
+    d = PickIconDialog(CROP, 'Fore Weapons', [('A', 0.9)], lambda _n: icon)
+    pm = d._icon('A').pixmap(d._tile)
+    h, w = CROP.shape[:2]
+
+    assert d._grid.iconSize().height() == h * CROP_SCALE
+    assert pm.height() == h * CROP_SCALE     # enlarged, not left at 64 px
+
+
 def test_the_search_reaches_items_far_down_the_ranking(qapp):
     """When none of the close ones is right: the whole group, by name."""
     d = _dialog(qapp)

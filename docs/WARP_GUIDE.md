@@ -818,8 +818,10 @@ over a run that is still working.
 
 When a slot is recognised wrongly, you no longer have to open vger and
 compare icons by eye. **Pick from similar icons…** opens a window with the
-crop, enlarged, on the left, and the items this slot can hold on the right,
-most similar first, each with its icon and a similarity percentage.
+crop, enlarged four times, on the left, and the items this slot can hold on
+the right, most similar first. Each tile shows the item's icon **at the same
+size as the crop**, so the two can be compared directly, with the similarity
+percentage in front of its name.
 
 ```
 ┌─ Pick the item — Aft Weapons ────────────────────────────────────────┐
@@ -827,14 +829,18 @@ most similar first, each with its icon and a similarity percentage.
 │ ┌────────┐   ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐ ┌────┐              │
 │ │ (4×)   │   │icon│ │icon│ │icon│ │icon│ │icon│ │icon│  …           │
 │ └────────┘   └────┘ └────┘ └────┘ └────┘ └────┘ └────┘              │
-│ Now: Trans-  Advanced Sensor- Covert  …                              │
-│ phasic Mine  Phaser   Linked  Phaser                                 │
-│ Launcher     71%      69%     66%                                    │
-│              Closest 30 of 386  [Show 30 more]  [Use selected][Cancel]│
+│ Now: Trans-  71% Adv- 69% Sen- 48% Ba'ul  43% Cov- …                 │
+│ phasic Mine  anced    sor-Lin… Antiproton ert                        │
+│ Launcher                                                             │
+│  Closest 30 of 386 [Show 30 more][Show all 386 for Aft Weapons]      │
+│                                           [Use selected] [Cancel]    │
 └──────────────────────────────────────────────────────────────────────┘
 ```
 
 - It opens on the **30 closest** items; **Show 30 more** adds the next 30.
+- **Show all … for <slot>** lists every item this slot can hold, still in
+  similarity order, like the category page on vger. Use it when none of the
+  closest is right and you do not know the name to search for.
 - If none of them is right, type in the **search** box. It then lists
   every item of that slot whose name contains all the words you typed,
   however far down the similarity order it is. This is the same list vger

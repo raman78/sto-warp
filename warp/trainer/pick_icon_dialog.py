@@ -21,8 +21,7 @@ from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
                                QVBoxLayout)
 
 PAGE = 30          # tiles shown before "Show more"
-TILE = QSize(74, 96)
-CROP_SCALE = 4
+CROP_SCALE = 4     # the crop and every tile are shown at this scale
 
 
 def _crop_pixmap(crop_bgr: np.ndarray) -> QPixmap:
@@ -56,6 +55,12 @@ class PickIconDialog(QDialog):
         self._picture = picture
         self._pictures: dict[str, QIcon] = {}
         self._limit = PAGE
+        self._slot = slot
+        # Tiles are drawn at the crop's own on-screen size, so the two are
+        # compared like for like. Qt never enlarges an icon past its pixmap,
+        # so each picture is scaled here rather than left to the view.
+        h, w = crop_bgr.shape[:2]
+        self._tile = QSize(w * CROP_SCALE, h * CROP_SCALE)
 
         crop = QLabel()
         crop.setPixmap(_crop_pixmap(crop_bgr))
@@ -75,8 +80,10 @@ class PickIconDialog(QDialog):
         self._search.textChanged.connect(self._refill)
         self._grid = QListWidget()
         self._grid.setViewMode(QListWidget.ViewMode.IconMode)
-        self._grid.setIconSize(QSize(TILE.width() - 10, TILE.height() - 30))
-        self._grid.setGridSize(QSize(TILE.width() + 40, TILE.height() + 24))
+        self._grid.setIconSize(self._tile)
+        # Room for three lines under the picture: the percentage leads, so a
+        # long name that has to be cut never takes the score with it.
+        self._grid.setGridSize(QSize(self._tile.width() + 40, self._tile.height() + 64))
         self._grid.setResizeMode(QListWidget.ResizeMode.Adjust)
         self._grid.setWordWrap(True)
         self._grid.setMovement(QListWidget.Movement.Static)
@@ -86,6 +93,10 @@ class PickIconDialog(QDialog):
         self._count = QLabel()
         self._more = QPushButton(f'Show {PAGE} more')
         self._more.clicked.connect(self._show_more)
+        # When none of the closest is right and the name is not known either:
+        # the whole group this slot can hold, like the category page on vger.
+        self._all = QPushButton(f'Show all {len(ranked)} for {slot}')
+        self._all.clicked.connect(self._show_all)
         self._use = QPushButton('Use selected')
         self._use.setDefault(True)
         self._use.setEnabled(False)
@@ -96,6 +107,7 @@ class PickIconDialog(QDialog):
         bottom = QHBoxLayout()
         bottom.addWidget(self._count)
         bottom.addWidget(self._more)
+        bottom.addWidget(self._all)
         bottom.addStretch(1)
         bottom.addWidget(self._use)
         bottom.addWidget(cancel)
@@ -123,16 +135,20 @@ class PickIconDialog(QDialog):
     def _icon(self, name: str) -> QIcon:
         if name not in self._pictures:
             img = self._picture(name)
-            self._pictures[name] = (QIcon(QPixmap.fromImage(img))
-                                    if isinstance(img, QImage) and not img.isNull()
-                                    else QIcon())
+            if isinstance(img, QImage) and not img.isNull():
+                pm = QPixmap.fromImage(img).scaled(
+                    self._tile, Qt.AspectRatioMode.KeepAspectRatio,
+                    Qt.TransformationMode.SmoothTransformation)
+                self._pictures[name] = QIcon(pm)
+            else:
+                self._pictures[name] = QIcon()
         return self._pictures[name]
 
     def _refill(self, *_args) -> None:
         score = dict(self._ranked)
         self._grid.clear()
         for name in self.shown_names():
-            it = QListWidgetItem(self._icon(name), f'{name}\n{score[name]:.0%}')
+            it = QListWidgetItem(self._icon(name), f'{score[name]:.0%}  {name}')
             it.setData(Qt.ItemDataRole.UserRole, name)
             it.setToolTip(f'{name} — similarity {score[name]:.0%}')
             self._grid.addItem(it)
@@ -142,10 +158,15 @@ class PickIconDialog(QDialog):
             f'{self._grid.count()} match(es) of {total}' if searching
             else f'Closest {self._grid.count()} of {total}')
         self._more.setVisible(not searching and self._limit < total)
+        self._all.setVisible(not searching and self._limit < total)
         self._use.setEnabled(False)
 
     def _show_more(self) -> None:
         self._limit += PAGE
+        self._refill()
+
+    def _show_all(self) -> None:
+        self._limit = len(self._ranked)
         self._refill()
 
     def _use_selected(self) -> None:
