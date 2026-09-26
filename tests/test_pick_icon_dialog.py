@@ -223,3 +223,43 @@ def test_the_canvas_asks_the_window_for_its_menu(qapp):
     w.contextMenuEvent(_Ev())
 
     assert seen == [0]
+
+
+# ── The window keeps its place ─────────────────────────────────────────────
+
+@pytest.fixture(autouse=True)
+def settings(tmp_path, monkeypatch):
+    """Every test here: closing the dialog writes QSettings, which must land
+    in tmp, never in the user's config."""
+    from PySide6.QtCore import QSettings
+    QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+    QSettings.setPath(QSettings.Format.IniFormat, QSettings.Scope.UserScope, str(tmp_path / 'qs'))
+    from warp.trainer.pick_icon_dialog import GEOMETRY_KEY
+    QSettings().remove(GEOMETRY_KEY)
+    yield
+    QSettings().remove(GEOMETRY_KEY)
+
+
+def test_it_opens_maximised_the_first_time(qapp, settings):
+    from PySide6.QtCore import Qt
+    d = _dialog(qapp)
+
+    assert d.windowState() & Qt.WindowState.WindowMaximized
+
+
+def test_it_reopens_where_it_was_left(qapp, settings):
+    from PySide6.QtCore import Qt
+    d = _dialog(qapp)
+    d.setWindowState(Qt.WindowState.WindowNoState)
+    d.setGeometry(40, 50, 700, 500)
+    d.reject()
+    again = _dialog(qapp)
+
+    assert not (again.windowState() & Qt.WindowState.WindowMaximized)
+    assert (again.width(), again.height()) == (700, 500)
+
+
+def test_the_selected_tile_gets_a_frame(qapp):
+    d = _dialog(qapp)
+
+    assert 'item:selected' in d._grid.styleSheet() and 'border' in d._grid.styleSheet()

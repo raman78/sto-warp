@@ -752,10 +752,28 @@ the tree entirely, the line says so: set the type to *Space Skills* or
 Lists all items detected in the current screenshot, one row per slot. Each row shows:
 - Slot name (e.g. "Fore Weapon 3")
 - Recognised item name (or "???" if not matched)
-- Confidence percentage, colour-coded:
+- Confidence percentage (the **Conf** column), colour-coded:
   - **Green** ≥ 85% — confident match
   - **Yellow** 70–84% — uncertain, review recommended
   - **Red** < 70% — poor match, manual correction needed
+
+**What Conf measures.** Despite the name, it is not a probability that
+the answer is right. It says how closely the crop matches the reference
+picture the recogniser picked, on that method's own scale:
+
+| Where the answer came from | What the number is |
+|---|---|
+| a picture the community confirmed, or its wiki icon (most rows) | how similar the crop is to the closest such picture |
+| a community fingerprint match | 100% — the crop's fingerprint equals one the community voted on (and the picture check passed) |
+| a confirmed crop from your own session | how similar the crop is to that crop |
+
+So 90% means "looks very much like the pictures WARP has of this item",
+not "90% chance it is this item". Two items drawn almost alike can both
+score high, an item WARP only knows from its wiki icon scores lower
+than it deserves (a clean wiki picture and an in-game crop never match
+closely), and an unrelated item with the same rarity frame and background
+can still reach 40%. Treat Conf as an ordering and a hint; the icon in
+the box decides.
 - Status — how far along the row is.
 
 The two columns answer different questions, and it is worth knowing which is
@@ -821,7 +839,10 @@ compare icons by eye. **Pick from similar icons…** opens a window with the
 crop, enlarged four times, on the left, and the items this slot can hold on
 the right, most similar first. Each tile shows the item's icon **at the same
 size as the crop**, so the two can be compared directly, with the similarity
-percentage in front of its name.
+percentage in front of its name. The selected tile is framed.
+
+The window opens full-screen the first time. Resize or move it as you like;
+it reopens the way you left it.
 
 ```
 ┌─ Pick the item — Aft Weapons ────────────────────────────────────────┐
@@ -849,10 +870,19 @@ percentage in front of its name.
   confirms the slot under that name, exactly as if you had typed it and
   pressed Accept, so it is shared as your answer.
 
-The percentage is how much the crop looks like the pictures WARP has of
-that item. It is an ordering aid, not a verdict: two items with almost the
-same icon can sit side by side, and the right one is the one that matches
-the crop in front of you.
+The percentage is **similarity, not probability**: how much the crop looks
+like the pictures WARP has of that item, exactly as described under
+[What Conf measures](#right-panel--recognition-review). It orders the tiles;
+it does not decide. The right item can sit well down the list, for two
+common reasons:
+
+- **WARP only has its wiki icon.** An in-game crop never matches a clean
+  wiki picture closely, so such an item scores low even when it is right.
+  Once you pick it, your crop becomes its first real picture and it scores
+  properly after the next training.
+- **Someone confirmed a look-alike under the wrong name.** Then the wrong
+  name shows your exact picture at a high score. Picking the right one
+  sends your correction.
 
 At the bottom:
 - **Add BBox** — enter draw mode to add a missing box (Alt+A)

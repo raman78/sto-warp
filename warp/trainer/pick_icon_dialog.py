@@ -14,13 +14,14 @@ from __future__ import annotations
 from typing import Callable
 
 import numpy as np
-from PySide6.QtCore import QSize, Qt
+from PySide6.QtCore import QByteArray, QSettings, QSize, Qt
 from PySide6.QtGui import QIcon, QImage, QPixmap
 from PySide6.QtWidgets import (QDialog, QHBoxLayout, QLabel, QLineEdit,
                                QListWidget, QListWidgetItem, QPushButton,
                                QVBoxLayout)
 
 PAGE = 30          # tiles shown before "Show more"
+GEOMETRY_KEY = 'pick_icon_dialog/geometry'
 CROP_SCALE = 4     # the crop and every tile are shown at this scale
 
 
@@ -50,6 +51,11 @@ class PickIconDialog(QDialog):
                  current: str = '', parent=None):
         super().__init__(parent)
         self.setWindowTitle(f'Pick the item — {slot}')
+        # A dialog gets no maximise button by default; this one is a
+        # workspace, so it has one and remembers how it was left.
+        self.setWindowFlags(self.windowFlags()
+                            | Qt.WindowType.WindowMaximizeButtonHint
+                            | Qt.WindowType.WindowMinimizeButtonHint)
         self.chosen = ''
         self._ranked = ranked
         self._picture = picture
@@ -87,6 +93,14 @@ class PickIconDialog(QDialog):
         self._grid.setResizeMode(QListWidget.ResizeMode.Adjust)
         self._grid.setWordWrap(True)
         self._grid.setMovement(QListWidget.Movement.Static)
+        # A changed background alone was hard to see on dark icons.
+        # The caption keeps its normal colour when selected: with only the
+        # border set, the selection text colour made it vanish.
+        from warp.style import ACCENT, FG
+        self._grid.setStyleSheet(
+            'QListWidget::item { border: 3px solid transparent; border-radius: 4px; }'
+            f'QListWidget::item:selected {{ border: 3px solid {ACCENT}; '
+            f'background: transparent; color: {FG}; }}')
         self._grid.itemDoubleClicked.connect(lambda _it: self._use_selected())
         self._grid.currentItemChanged.connect(
             lambda it, _prev: self._use.setEnabled(it is not None))
@@ -119,7 +133,11 @@ class PickIconDialog(QDialog):
         root = QHBoxLayout(self)
         root.addLayout(left)
         root.addLayout(right, 1)
-        self.resize(980, 640)
+        geom = QSettings().value(GEOMETRY_KEY)
+        if isinstance(geom, QByteArray) and not geom.isEmpty():
+            self.restoreGeometry(geom)          # size, position, maximised
+        else:
+            self.setWindowState(Qt.WindowState.WindowMaximized)
         self._refill()
 
     # ── contents ────────────────────────────────────────────────────────────
@@ -139,7 +157,11 @@ class PickIconDialog(QDialog):
                 pm = QPixmap.fromImage(img).scaled(
                     self._tile, Qt.AspectRatioMode.KeepAspectRatio,
                     Qt.TransformationMode.SmoothTransformation)
-                self._pictures[name] = QIcon(pm)
+                icon = QIcon(pm)
+                # Qt tints a selected icon; the frame marks the choice, and
+                # the picture has to stay comparable with the crop.
+                icon.addPixmap(pm, QIcon.Mode.Selected)
+                self._pictures[name] = icon
             else:
                 self._pictures[name] = QIcon()
         return self._pictures[name]
@@ -168,6 +190,12 @@ class PickIconDialog(QDialog):
     def _show_all(self) -> None:
         self._limit = len(self._ranked)
         self._refill()
+
+    def done(self, result: int) -> None:
+        """Every way out — a pick, Cancel, the close button — keeps the
+        size and position for next time."""
+        QSettings().setValue(GEOMETRY_KEY, self.saveGeometry())
+        super().done(result)
 
     def _use_selected(self) -> None:
         it = self._grid.currentItem()

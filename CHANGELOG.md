@@ -15,8 +15,14 @@ details live in the git history.
 - **Pick the right item from similar icons.** Right-click a slot and
   choose **Pick from similar icons…**. A window shows your crop beside the
   items that slot can hold, most similar first, and a search box lists the
-  whole group when none of them is right. Picking one confirms it. You no
-  longer need vger to fix a wrong match.
+  whole group when none of them is right, or **Show all** lists every item
+  of that kind. Icons are shown at the same size as your crop, the
+  selected one is framed, and the window opens full-screen and remembers
+  its size and position. Picking one confirms it. You no longer need vger
+  to fix a wrong match.
+- **The guide explains what the Conf percentage means.** It is how closely
+  the icon matches WARP's reference pictures, not the chance that the
+  answer is right.
 
 - **WARP CORE now shows the skill tree it reads.** Open a Space or Ground
   skill screenshot and every skill gets a box, green if trained and red
