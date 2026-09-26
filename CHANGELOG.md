@@ -40,6 +40,11 @@ details live in the git history.
   pictures of the item the community named. When several items share
   a fingerprint, WARP picks the one the icon actually looks like.
   Otherwise the slot is recognised as usual.
+- **A broken recognition model can no longer take over.** The model
+  published on 26 September treated every icon as almost identical, so
+  WARP CORE would have auto-accepted nearly any answer. WARP now checks a
+  downloaded model before using it, and if the model is broken it falls
+  back to the previous recognition method and says so in the log.
 - **The same icon is no longer re-sent on every sync.** An icon you
   confirmed in two places, such as an inactive officer slot under two
   seats, used to be sent again at every sync, each time under the other

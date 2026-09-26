@@ -111,6 +111,34 @@ KNOWLEDGE_PICTURE_MIN_SIM = 0.40
 # is reported just under WARP CORE's default auto-accept threshold (0.75): the
 # community's name is still offered, but a person looks at it first.
 KNOWLEDGE_UNVERIFIED_CONF = 0.74
+# A healthy embedder spreads its gallery out: the mean cosine similarity of
+# random gallery pairs was 0.034 on every published version up to
+# 2026-09-26 04:38 UTC. The version trained at 05:59 that day measured
+# 0.990 — every picture mapped to almost the same vector (a beam array and
+# a console at 0.995) while its val_recall@1 still read 0.80, so the
+# publication guard let it through. Every absolute threshold above then
+# means nothing: auto-accept takes any answer, the knowledge check rejects
+# nothing, the empty-slot guards cannot tell empty from filled. A gallery
+# above this is refused and recognition falls back to the classifier.
+GALLERY_COLLAPSED_SIM = 0.5
+
+
+def gallery_spread(embeddings: np.ndarray, sample: int = 800) -> float:
+    """Mean cosine similarity between random pairs of gallery rows.
+
+    Near 0 for a gallery whose pictures are told apart, near 1 when they
+    have collapsed onto one direction. A fixed seed keeps the figure the
+    same for the same file. Shared with the backend's publication guard.
+    """
+    emb = np.asarray(embeddings, dtype=np.float32)
+    if len(emb) < 2:
+        return 0.0
+    norms = np.linalg.norm(emb, axis=1, keepdims=True)
+    emb = emb / np.where(norms == 0, 1, norms)
+    n = min(sample, len(emb))
+    a = emb[np.random.default_rng(0).choice(len(emb), n, replace=False)]
+    b = emb[np.random.default_rng(1).choice(len(emb), n, replace=False)]
+    return float(np.mean(a @ b.T))
 # Template matching cutoff (TM_CCOEFF_NORMED below this is silently dropped).
 # The unrestricted floor (TEMPLATE_THRESHOLD * 0.7 = 0.385) is correct when
 # the matcher must discriminate across all 4070+ wiki PNGs. When the caller
@@ -1298,7 +1326,8 @@ class SETSIconMatcher:
         emb_path     = models_dir / 'icon_embedder.pt'
         gallery_path = models_dir / 'embedding_index.npz'
         emb_label    = models_dir / 'embedder_label_map.json'
-        if emb_path.exists() and gallery_path.exists() and emb_label.exists():
+        if (not getattr(self, '_embedder_refused', False)
+                and emb_path.exists() and gallery_path.exists() and emb_label.exists()):
             try:
                 import torch
                 import torch.nn as nn
@@ -1310,6 +1339,13 @@ class SETSIconMatcher:
                 # Match admin_train_metric.py architecture: backbone with no classifier,
                 # plus a Linear projection to EMBED_DIM with L2-normalize on output.
                 gallery = np.load(str(gallery_path))
+                spread = gallery_spread(gallery['embeddings'])
+                if spread > GALLERY_COLLAPSED_SIM:
+                    raise ValueError(
+                        f'the embedder gallery has collapsed — random pictures are '
+                        f'{spread:.3f} alike on average (healthy is near 0; refused '
+                        f'above {GALLERY_COLLAPSED_SIM}). The published model is '
+                        f'broken; the next update should replace it')
                 embed_dim = int(gallery['embeddings'].shape[1])
                 backbone = efficientnet_b0(weights=None)
                 in_features = backbone.classifier[1].in_features
@@ -1339,6 +1375,10 @@ class SETSIconMatcher:
                          f'gallery={len(self._gallery_emb)}, dim={embed_dim})')
                 return self._ml_session
             except Exception as e:
+                # Once per matcher: without this, a refused embedder and no
+                # classifier to fall back to would reload the gallery, and
+                # log this, on every single match.
+                self._embedder_refused = True
                 log.warning(f'WARP: embedder load failed: {e} — falling back to classifier')
 
         # Priority 1: locally trained PyTorch model (.pt)

@@ -570,6 +570,28 @@ Independently of both, `_embedder_needs_refresh()` still forces a **full**
 redownload when the embedder files are missing or carry pre-2026-05-16
 snake_case labels.
 
+### A collapsed embedder is refused (2026-09-26)
+
+The embedder published on 2026-09-26 at 05:59 UTC mapped every picture to
+almost the same vector. Random pairs from its gallery averaged 0.990
+cosine similarity, and a beam array and a console scored 0.995. Every
+earlier version measured 0.034. Its `val_recall@1` still read 0.80,
+because the *order* of neighbours carried some signal, so the publication
+guard, which checks class count and accuracy, let it through.
+
+The client reads embedder similarity as an absolute number in several
+places: auto-accept at 0.75, the knowledge picture check at 0.40, and the
+empty-slot guards. At 0.99 for everything, auto-accept takes any answer,
+the picture check rejects nothing, and an empty slot cannot be told from a
+filled one.
+
+So `_get_ml_session` measures the gallery before using it
+(`gallery_spread`, mean similarity of random pairs with a fixed seed). Above
+`GALLERY_COLLAPSED_SIM` (0.5) the embedder is refused with a warning in the
+detection log, and recognition falls back to the softmax classifier and the
+templates until an update brings a sound model. The refusal is remembered
+for the matcher's lifetime, so it is neither retried nor logged per match.
+
 ### screen_classifier fallback
 
 If `screen_classifier.pt` is missing (e.g., first install before bootstrap
