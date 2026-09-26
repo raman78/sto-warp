@@ -8,122 +8,91 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [Unreleased]
+## [1.0.39] — 2026-09-26
 
 ### Added
 
-- **Pick the right item from similar icons.** Right-click a slot and
-  choose **Pick from similar icons…**. A window shows your crop beside the
-  items that slot can hold, most similar first, and a search box lists the
-  whole group when none of them is right, or **Show all** lists every item
-  of that kind. Icons are shown at the same size as your crop, the
-  selected one is framed, and the window opens full-screen and remembers
-  its size and position. Picking one confirms it. You no longer need vger
-  to fix a wrong match.
-- **Starship traits show their starship icon.** A few traits share a name
-  with a ground trait, such as Sniper and Engineered Soldier. Their rows,
-  tooltips and picker tiles showed the ground icon. They now show the one
-  that matches the slot.
-- **The guide explains what the Conf percentage means.** It is how closely
-  the icon matches WARP's reference pictures, not the chance that the
-  answer is right.
-
-- **WARP CORE now shows the skill tree it reads.** Open a Space or Ground
-  skill screenshot and every skill gets a box, green if trained and red
-  if not, with the totals above the review list. Until now WARP CORE said
-  only that skill screens were not supported, even though WARP was
-  already reading them for the SETS export. The display is for checking
-  only: skills are read by a fixed rule, not a model, so there is nothing
-  to correct.
-- **Skill screens are marked Done once you confirm their type.** The type
-  is the only thing on them left to review. A type the program only
-  guessed still waits for you, because your confirmation is what teaches
-  it to recognise skill screens.
+- **Pick from similar icons.** Right-clicking a slot in WARP CORE offers
+  **Pick from similar icons…**: a window shows the crop beside the items
+  that slot can hold, most similar first, at the crop's own size. A search
+  box and **Show all** list the whole group when none of the closest is
+  right. The window opens full-screen and remembers its size and position,
+  and picking an item confirms it — no trip to vger needed.
+- **WARP CORE shows the skill tree it reads.** On a Space or Ground skill
+  screenshot every skill gets a box, green if trained and red if not, with
+  the totals above the review list. The display is for checking only:
+  skills are read by a fixed rule, not a model, so there is nothing to
+  correct.
+- **Skill screens are marked Done once their type is confirmed.** The type
+  is the only thing on them left to review. A type that was only guessed
+  still waits, because that confirmation is what teaches the program to
+  recognise skill screens.
+- **The guide explains what the Conf percentage means**: how closely the
+  icon matches WARP's reference pictures, not the chance that the answer
+  is right.
 
 ### Fixed
 
-- **Items are read from the boxes you see.** On some space screenshots,
-  when the Deflector was hard to read, WARP read every slot below it a
-  few pixels higher or lower than the box it drew. The boxes looked
-  right, but the names came from a crop that was partly the next row. A
-  Pahvan beam array in an aft slot could come out as a Phaser Turret.
-  Each slot is now read exactly where its box is drawn.
-- **A community match no longer overrides a different-looking icon.**
-  The community's shared list recognises icons by a short fingerprint,
-  and two different icons can share one. WARP took any match as certain,
-  so a blue beam array could be named as an orange Phaser Turret at
-  100%. A match is now used only when the icon also looks like the
-  pictures of the item the community named. When several items share
-  a fingerprint, WARP picks the one the icon actually looks like.
-  Otherwise the slot is recognised as usual.
-- **A broken recognition model can no longer take over.** The model
-  published on 26 September treated every icon as almost identical, so
-  WARP CORE would have auto-accepted nearly any answer. WARP now checks a
-  downloaded model before using it, and if the model is broken it falls
-  back to the previous recognition method and says so in the log.
-- **The same icon is no longer re-sent on every sync.** An icon you
-  confirmed in two places, such as an inactive officer slot under two
-  seats, used to be sent again at every sync, each time under the other
-  slot. It is now sent once. If you gave two copies of one icon different
-  names, the log says which, so you can correct one.
-- **Short tier badges are shared again.** A tier badge like `T6` is
-  narrower than the size limit for text pictures, so it was never sent.
-- **WARP CORE tells you when a screenshot's text could not be read.** An
-  amber line under the review list names the failure, instead of the
-  screenshot quietly coming back without equipment.
+- **Items are read from the boxes that are drawn.** On some space
+  screenshots with a hard-to-read Deflector, every slot below it was read a
+  few pixels off its box, partly from the next row — a Pahvan beam array in
+  an aft slot could come out as a Phaser Turret. Each slot is now read
+  exactly where its box is.
+- **A community match no longer overrides a different-looking icon.** The
+  shared community list recognises icons by a short fingerprint, and two
+  different icons can share one, so a blue beam array could be named as an
+  orange Phaser Turret at 100%. A match is now used only when the icon also
+  looks like the item the community named; when several items share a
+  fingerprint, the one the icon resembles is chosen.
+- **A broken recognition model can no longer take over.** A model published
+  on 26 September treated every icon as almost identical, which would have
+  let WARP CORE auto-accept nearly any answer. Downloaded models are now
+  checked before use; a broken one is set aside with a note in the log and
+  recognition falls back to the previous method.
+- **Starship traits show the starship icon.** Traits that share a name with
+  a ground trait, such as Sniper and Engineered Soldier, showed the ground
+  icon in rows, tooltips and the picker.
+- **An empty slot under the yellow NEW banner is read as empty.** The game
+  paints that banner over recently changed slots, empty ones included, and
+  it was taken for an item. It is now ignored when deciding whether a slot
+  is filled; occupied slots are unaffected.
+- **Correct "empty" labels are no longer thrown out when learning from the
+  shared collection.** The same banner made the check that guards the
+  collection reject them, so those corrections were dropped at every start.
+- **Each confirmed icon is saved as its own picture.** When two screenshots
+  had an item in the same place, one screenshot's icon could be saved and
+  shared under the other's name. Saved icons are cut again from their
+  screenshots on first start, and the corrected names are shared at the next
+  sync. Icons of items with long names, mostly consoles, were also deleted
+  at every start; they are kept now, and the missing ones are cut again.
+- **Only confirmed answers are shared.** With Auto-accept on, re-matching a
+  slot could send the program's own answer to the community as a
+  confirmation. Such answers now stay local until confirmed, and moving the
+  box of an automatically accepted (yellow) row no longer turns it green or
+  sends it.
+- **The same icon is no longer re-sent on every sync.** An icon confirmed
+  in two places, such as an inactive officer slot under two seats, was sent
+  again at each sync under alternating slots. It is now sent once; if two
+  copies of one icon carry different names, the log names them so one can
+  be corrected.
+- **Short tier badges are shared again.** A badge like `T6` is narrower
+  than the minimum size for text pictures, so it was never sent.
+- **Unreadable screenshot text is reported.** An amber line under WARP
+  CORE's review list names the failure, instead of the screenshot quietly
+  coming back without equipment.
 - **Detecting again no longer shows "Recognition cancelled" for the new
-  run.** Starting Auto-Detect while one is running used to report the old
-  run's cancellation as if it were the new one's, and stop the progress
-  bar while the new run went on out of sight.
-- **Detection no longer fails while a game is using the graphics card.**
-  With a GPU build of PyTorch installed and a game holding most of the
-  card's memory, text recognition read nothing. Detection then hung for
-  about two minutes and returned no equipment. WARP never needed the card
-  for recognition, and now keeps off it.
-- **Each confirmed icon is saved as its own picture.** When two
-  screenshots had an item in the same place, WARP CORE could save one
-  screenshot's icon under the other's name and share it that way. About
-  100 icons went to the community under the wrong item's name. On first
-  start your saved icons are cut again from their screenshots, and the
-  corrected names are shared at the next sync. Icons of items with long
-  names, mostly consoles, were also being deleted every time WARP CORE
-  started. They are kept now, and the missing ones are cut again.
-- **Only what you confirm is shared with the community.** With
-  Auto-accept on, re-matching a slot (after moving its box or changing its
-  slot) could send the program's own answer to the community as if you
-  had confirmed it. Those answers now stay on your machine until you
-  confirm them. Moving the box of an automatically accepted (yellow) row
-  also no longer turns it green or sends it.
-- **An empty slot with the yellow NEW banner on it is now read as
-  empty.** The game paints that banner across the top of a slot when
-  you have picked something up recently, and it paints it on slots
-  that hold nothing too. WARP took the bright yellow for an item and
-  went looking for a name to give it, so an empty device slot came
-  back with some equipment in it and had to be corrected by hand. The
-  banner is now recognised for what it is — part of the interface, not
-  part of the slot — and ignored when deciding whether a slot is
-  filled. Slots that do hold something are unaffected: across 142
-  screenshots the only cells that changed their answer were empty
-  device slots wearing the banner.
-- **Slots you had correctly marked empty are no longer ignored when
-  WARP learns from the shared collection.** Those same banners made
-  the check that protects the collection from wrongly labelled
-  pictures reject them, so a correction you made was quietly dropped
-  every time the program started. Fifteen such pictures were being
-  skipped; fourteen of them were right all along.
-
-- **The drawing crosshair no longer behaves as though Alt were still
-  held.** In WARP CORE, letting Alt go while another window had the
-  focus — after Alt+Tab, or after dragging a window by its Alt
-  shortcut — left the canvas stuck in draw mode: the crosshair stayed,
-  clicks drew boxes instead of selecting them, and the only way out
-  was to press and release Alt over the canvas again. The canvas now
-  reads the keys that are actually held rather than trusting that it
-  was told about every press and release, so a release it never saw
-  costs nothing: moving the mouse, pressing a key or coming back to
-  the window puts the cursor right. The crosshair also goes the moment
-  Alt does — it used to hang on until you next moved the mouse, and
-  longer than that if the pointer was resting over a box.
+  run.** Starting Auto-Detect during a run reported the old run's
+  cancellation as the new one's and stopped the progress bar while the new
+  run went on.
+- **Detection no longer hangs while a game holds the graphics card.** With
+  a GPU build of PyTorch and a game using most of the card's memory, text
+  recognition read nothing and detection hung for minutes before returning
+  no equipment. WARP does not need the card for recognition and now stays
+  off it.
+- **The drawing crosshair no longer sticks after Alt is released
+  elsewhere.** Releasing Alt while another window had focus (after Alt+Tab,
+  for instance) left the WARP CORE canvas in draw mode. The canvas now reads
+  which keys are actually held, and the crosshair goes the moment Alt does.
 
 ## [1.0.38] — 2026-09-11
 
