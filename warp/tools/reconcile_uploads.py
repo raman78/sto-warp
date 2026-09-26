@@ -90,49 +90,34 @@ def local_screens(store: Path) -> dict[str, str]:
 
 
 def local_crops(store: Path) -> dict[str, str]:
-    """`{sha: 'slot|name'}` from `annotations.json`, not from the filenames.
+    """{sha: 'slot|name'} for what this store's uploader would send.
 
-    A crop's filename carries the label it had when the file was written, so
-    reading it there would hide a later correction — which is exactly where a
-    correction matters.
+    Built from the uploader's own pieces, not a second reading of the
+    store: the crops `confirmed_crops_in` selects (auto-accepted rows stay
+    pending and are never sent), minus the ones its validation refuses,
+    under the one label per picture `pick_upload_label` chooses. Counting
+    anything else reported deliberate non-sends as transport faults —
+    measured 2026-09-26, 230 auto-accepted crops listed as "unsent".
     """
+    from warp.trainer.sync import (_validate_annotation, _validate_crop,
+                                   pick_upload_label)
+    from warp.trainer.training_data import confirmed_crops_in
     out: dict[str, str] = {}
-    ann, crops = store / 'annotations.json', store / 'crops'
-    if not ann.exists() or not crops.is_dir():
-        return out
     try:
-        data = json.loads(ann.read_text(encoding='utf-8'))
+        index = json.loads((store / 'crops' / 'crop_index.json').read_text(encoding='utf-8'))
     except Exception:
         return out
-
-    # Keyed by (screenshot, ann_id): ann_id alone is shared by the same box on
-    # different screenshots. Crop names carry `{image_key}-{ann_id}`.
-    by_id: dict[tuple[str, str], str] = {}
-    for image_key, rec in data.items():
-        if not isinstance(rec, dict):
+    by_sha: dict[str, list[str]] = {}
+    for item in confirmed_crops_in(store, index):
+        path = Path(item['path'])
+        if _validate_annotation(item) or _validate_crop(path):
             continue
-        for a in rec.get('annotations') or []:
-            if isinstance(a, dict) and a.get('ann_id') and a.get('name'):
-                by_id[(image_key, str(a['ann_id']))] = f"{a.get('slot', '')}|{a['name']}"
-
-    # A store not yet migrated still has `{ann_id}`-only names; those resolve
-    # only where one annotation in the whole store has that id.
-    by_bare: dict[str, list[str]] = {}
-    for (_k, aid), lab in by_id.items():
-        by_bare.setdefault(aid, []).append(lab)
-
-    for png in crops.rglob('*.png'):
-        key, _, ann_id = png.stem.rsplit('__', 1)[-1].rpartition('-')
-        if key:
-            label = by_id.get((key, ann_id))
-        else:
-            labels = by_bare.get(ann_id, [])
-            label = labels[0] if len(labels) == 1 else None
-        if label:
-            try:
-                out[_sha(png)] = label
-            except Exception:
-                pass
+        try:
+            by_sha.setdefault(_sha(path), []).append(f"{item['slot']}|{item['name']}")
+        except Exception:
+            pass
+    for sha, labels in by_sha.items():
+        out[sha] = pick_upload_label(labels)
     return out
 
 

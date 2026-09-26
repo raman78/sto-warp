@@ -62,6 +62,13 @@ to match one machine.
 Reads only public files, so no token. Point it at another store with
 `--store`.
 
+The local side is what the uploader would send, built from the uploader's
+own pieces: `confirmed_crops_in` for the selection, its validation, and
+`pick_upload_label` for one label per picture. Auto-accepted rows stay
+pending and are never sent, so they are not listed. Until 2026-09-26 the
+tool read `annotations.json` directly and reported 230 of them as
+`unsent`.
+
 ### Is the pipeline moving?
 
 ```

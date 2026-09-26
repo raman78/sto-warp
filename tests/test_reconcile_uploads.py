@@ -91,19 +91,45 @@ def test_the_hash_comes_from_the_client_not_a_copy(tmp_path):
     assert len(sha) == 32
 
 
-def test_a_crop_label_comes_from_the_annotations_not_the_filename(tmp_path):
+def _store(tmp_path, entries):
+    """A store as the trainer writes it: real PNGs plus crops/crop_index.json.
+    `entries` is [(filename, slot, name, state, pixel_value)]."""
+    import numpy as np
+    cv2 = pytest.importorskip('cv2')
+    (tmp_path / 'crops').mkdir()
+    index = {}
+    for fname, slot, name, state, value in entries:
+        img = np.full((40, 30, 3), value, dtype=np.uint8)
+        cv2.imwrite(str(tmp_path / 'crops' / fname), img)
+        index[fname] = {'slot': slot, 'name': name, 'state': state}
+    (tmp_path / 'crops' / 'crop_index.json').write_text(json.dumps(index))
+    return tmp_path
+
+
+def test_a_crop_label_comes_from_the_store_not_the_filename(tmp_path):
     """The filename carries the label the file had when it was written, so a
     correction made later would be invisible exactly where it matters."""
-    (tmp_path / 'crops').mkdir()
-    (tmp_path / 'crops' / 'boff__old__abc123def456.png').write_bytes(
-        b'\x89PNG' + b'\x00' * 50)
-    (tmp_path / 'annotations.json').write_text(json.dumps({
-        'k': {'filename': 's.png', 'annotations': [
-            {'ann_id': 'abc123def456', 'slot': 'Boff Tactical',
-             'name': 'Corrected Name'}]}}), encoding='utf-8')
+    store = _store(tmp_path, [('boff__old__k-abc123def456.png', 'Boff Tactical',
+                               'Corrected Name', 'confirmed', 90)])
 
-    assert list(rec.local_crops(tmp_path).values()) == \
-        ['Boff Tactical|Corrected Name']
+    assert list(rec.local_crops(store).values()) == ['Boff Tactical|Corrected Name']
+
+
+def test_an_auto_accepted_crop_is_not_counted_as_unsent(tmp_path):
+    """The uploader keeps it pending until a person confirms it; listing it
+    as a transport fault reported 230 deliberate non-sends as faults."""
+    store = _store(tmp_path, [('x__y__k-1.png', 'Devices', 'Item', 'pending', 90)])
+
+    assert rec.local_crops(store) == {}
+
+
+def test_one_picture_counts_once_under_the_label_the_uploader_sends(tmp_path):
+    store = _store(tmp_path, [
+        ('a__x__k-1.png', 'Boff Temporal', '__inactive__', 'confirmed', 60),
+        ('b__x__k-2.png', 'Boff Tactical', '__inactive__', 'confirmed', 60),
+    ])
+
+    assert list(rec.local_crops(store).values()) == ['Boff Tactical|__inactive__']
 
 
 def test_a_legacy_screen_cache_cannot_support_an_outvoted_claim(tmp_path):
@@ -122,32 +148,3 @@ def test_a_missing_cache_leaves_everything_unproven(tmp_path):
     to the fault reading rather than being excused."""
     assert rec.sent_labels(tmp_path, 'crops') == {}
 
-
-def test_a_crop_name_carrying_the_screenshot_takes_that_screenshots_label(tmp_path):
-    """The same box on two screenshots shares an ann_id; the label must come
-    from the screenshot the crop was cut from."""
-    (tmp_path / 'crops').mkdir()
-    (tmp_path / 'crops' / 'trait__x__bbbb-abc123def456.png').write_bytes(
-        b'\x89PNG' + b'\x00' * 50)
-    (tmp_path / 'annotations.json').write_text(json.dumps({
-        'aaaa': {'filename': 'a.png', 'annotations': [
-            {'ann_id': 'abc123def456', 'slot': 'Traits', 'name': 'Fragment of AI Tech'}]},
-        'bbbb': {'filename': 'b.png', 'annotations': [
-            {'ann_id': 'abc123def456', 'slot': 'Traits', 'name': 'Unconventional Systems'}]},
-    }), encoding='utf-8')
-
-    assert list(rec.local_crops(tmp_path).values()) == ['Traits|Unconventional Systems']
-
-
-def test_a_legacy_name_with_a_shared_id_is_not_guessed(tmp_path):
-    (tmp_path / 'crops').mkdir()
-    (tmp_path / 'crops' / 'trait__x__abc123def456.png').write_bytes(
-        b'\x89PNG' + b'\x00' * 50)
-    (tmp_path / 'annotations.json').write_text(json.dumps({
-        'aaaa': {'filename': 'a.png', 'annotations': [
-            {'ann_id': 'abc123def456', 'slot': 'Traits', 'name': 'Fragment of AI Tech'}]},
-        'bbbb': {'filename': 'b.png', 'annotations': [
-            {'ann_id': 'abc123def456', 'slot': 'Traits', 'name': 'Unconventional Systems'}]},
-    }), encoding='utf-8')
-
-    assert rec.local_crops(tmp_path) == {}

@@ -65,6 +65,11 @@ MAX_NAME_LEN      = 120
 MIN_CROP_PX       = 16   # icon crops: minimum on both sides (BOFF ability icons can be ~22px)
 MIN_TEXT_CROP_H   = 10   # text crops (ship_type/ship_tier): minimum height only
 MIN_TEXT_CROP_W   = 50   # text crops: minimum width
+# A tier badge is far narrower than a class line: measured 2026-09-25 over
+# 55 confirmed tier crops, the smallest was 28 px wide ('T6' at 28×14), and
+# 9 of them were under 50 px, so the text minimum refused every short badge.
+# Class lines measured 121 px and up, so they keep MIN_TEXT_CROP_W.
+MIN_TIER_CROP_W   = 20
 
 # Backend batch sizes must stay ≤ MAX_BULK_* in sets-warp-backend/main.py.
 BULK_CROPS_BATCH    = 50
@@ -123,6 +128,19 @@ def _validate_annotation(item: dict) -> str | None:
 _TEXT_CROP_PREFIXES = ('ship_type_', 'ship_tier_')
 
 
+def pick_upload_label(labels: list[str]) -> str:
+    """The one 'slot|name' sent for a picture confirmed under `labels`.
+
+    The commonest label; ties go to the first in sort order, so the choice
+    does not depend on the order the store lists its copies in. The server
+    keeps one label per picture per install, so sending several flips it.
+    """
+    counts: dict[str, int] = {}
+    for lab in labels:
+        counts[lab] = counts.get(lab, 0) + 1
+    return min(counts, key=lambda lab: (-counts[lab], lab))
+
+
 def _stat_key(path: Path) -> tuple[int, int] | None:
     """Return (mtime_ns, size) for cache invalidation, or None if missing."""
     try:
@@ -145,7 +163,8 @@ def _validate_crop(path: Path) -> str | None:
             return "unreadable image"
         h, w = img.shape[:2]
         if any(path.name.startswith(p) for p in _TEXT_CROP_PREFIXES):
-            if h < MIN_TEXT_CROP_H or w < MIN_TEXT_CROP_W:
+            min_w = MIN_TIER_CROP_W if path.name.startswith('ship_tier_') else MIN_TEXT_CROP_W
+            if h < MIN_TEXT_CROP_H or w < min_w:
                 return f"too small ({w}×{h})"
         else:
             if h < MIN_CROP_PX or w < MIN_CROP_PX:
@@ -322,13 +341,12 @@ class SyncWorker(QThread):
         file_meta_dirty = False
 
         self.progress.emit(10, "Preparing files…")
+        # Pass 1: validate and hash every crop, grouped by picture.
+        by_sha: dict[str, list[tuple[dict, Path]]] = {}
         for item in confirmed:
-            if daily_count + uploaded >= MAX_DAILY_UPLOADS:
-                break
-
             err = _validate_annotation(item)
             if err:
-                logger.warning(f"Sync: skipping invalid annotation ({err}): {item}")
+                _slog.warning(f"HF Sync: skipping invalid annotation ({err}): {item}")
                 continue
 
             crop_path = Path(item["path"])
@@ -338,23 +356,54 @@ class SyncWorker(QThread):
                 continue
 
             cached = file_meta.get(str(crop_path))
-            if cached and cached.get('mtime_ns') == stat_key[0] and cached.get('size') == stat_key[1]:
-                if not cached.get('valid', False):
-                    continue
+            same_file = (cached and cached.get('mtime_ns') == stat_key[0]
+                         and cached.get('size') == stat_key[1])
+            if same_file and cached.get('valid', False):
                 sha = cached['sha']
             else:
+                # A refusal is re-checked every pass rather than remembered:
+                # the rules change (tier badges were refused by a width meant
+                # for class lines), and a remembered refusal would outlive the
+                # rule that made it. Only valid results are cached.
                 err = _validate_crop(crop_path)
                 if err:
+                    if not same_file:
+                        _slog.warning(f"HF Sync: not sending {item['slot']}={item['name']!r} — "
+                                      f"crop refused ({err}): {crop_path.name}")
                     file_meta[str(crop_path)] = {'mtime_ns': stat_key[0], 'size': stat_key[1], 'valid': False}
                     file_meta_dirty = True
-                    logger.warning(f"Sync: skipping invalid crop ({err}): {crop_path.name}")
                     continue
                 sha = self._file_sha256(crop_path)
                 file_meta[str(crop_path)] = {'mtime_ns': stat_key[0], 'size': stat_key[1], 'sha': sha, 'valid': True}
                 file_meta_dirty = True
+            by_sha.setdefault(sha, []).append((item, crop_path))
+
+        # Pass 2: one label per picture. The cache and the server both keep
+        # one label per picture (the server: last wins per install), so
+        # identical pixels confirmed in two places used to flip the cached
+        # label and be re-sent as a "correction" on every sync. The label
+        # sent is the commonest among the copies, ties broken by name, so it
+        # does not depend on the order the store lists them in. Copies that
+        # disagree about the *name*, not just the slot, are a real conflict
+        # and are reported with where each came from.
+        conflicts = 0
+        for sha, members in by_sha.items():
+            if daily_count + uploaded >= MAX_DAILY_UPLOADS:
+                break
+            current_label = pick_upload_label(
+                [f'{it["slot"]}|{it["name"]}' for it, _p in members])
+            item, crop_path = next(m for m in members
+                                   if f'{m[0]["slot"]}|{m[0]["name"]}' == current_label)
+            names = {it['name'] for it, _p in members}
+            if len(names) > 1:
+                conflicts += 1
+                if conflicts <= 20:
+                    where = '; '.join(f"{it['name']!r} in {it['slot']} ({it.get('source', '?')})"
+                                      for it, _p in members)
+                    _slog.warning(f'HF Sync: one picture confirmed under different names — '
+                                  f'sending {current_label!r}; correct the others in WARP CORE: {where}')
 
             file_already_on_hf = sha in existing_hashes
-            current_label = f'{item["slot"]}|{item["name"]}'
             cached_label  = uploaded_labels.get(sha)
             label_changed = cached_label != current_label
             if file_already_on_hf and not label_changed:
@@ -381,6 +430,8 @@ class SyncWorker(QThread):
                 uploaded += 1
             else:
                 corrections += 1
+        if conflicts:
+            _slog.warning(f'HF Sync: {conflicts} picture(s) confirmed under more than one name')
 
         total_to_send = len(batch_items)
         _slog.info(

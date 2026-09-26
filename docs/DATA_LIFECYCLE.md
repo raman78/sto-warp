@@ -396,6 +396,27 @@ format, which held no label, migrates to an empty one so every entry in it is
 re-sent once — that backlog of undelivered corrections is the point of the
 migration rather than a side effect.
 
+**One picture, one label.** The upload cache and the server both keep one
+label per picture per install; on the server the last one wins. The same
+pixels are often confirmed in two places: an inactive BOFF cell under two
+seats, a console as Engineering and as Universal. The uploader used to
+send each copy in turn, so every sync flipped the cached label and re-sent
+the other one as a "correction". On 2026-09-25 the same 51 corrections went
+out at 00:39 and again at 19:17. `SyncWorker._upload` now groups crops by
+picture and sends the label `pick_upload_label` chooses: the commonest
+among the copies, ties broken by sort order so the choice does not depend
+on how the store is listed. Copies that disagree about the *name*, not just
+the slot, are a real conflict, logged with each copy's screenshot so it can
+be corrected in WARP CORE.
+
+**A refused crop is re-checked, not remembered.** `_validate_crop` refused
+text crops narrower than 50 px, a limit meant for class lines. Tier badges
+measure 28 px and up, so every short `T6` badge was refused (9 of 55
+confirmed). The refusal was also cached per file, so a corrected rule would
+never have reached them. Tier badges now have their own minimum
+(`MIN_TIER_CROP_W`, 20 px), and only valid results are cached. The refusal
+is written to the visible log, once per file.
+
 ## 5c. Telling a lost upload from a lost vote
 
 Two failures look identical from outside and are opposite in meaning: a

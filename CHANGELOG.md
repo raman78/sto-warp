@@ -40,6 +40,13 @@ details live in the git history.
   pictures of the item the community named. When several items share
   a fingerprint, WARP picks the one the icon actually looks like.
   Otherwise the slot is recognised as usual.
+- **The same icon is no longer re-sent on every sync.** An icon you
+  confirmed in two places, such as an inactive officer slot under two
+  seats, used to be sent again at every sync, each time under the other
+  slot. It is now sent once. If you gave two copies of one icon different
+  names, the log says which, so you can correct one.
+- **Short tier badges are shared again.** A tier badge like `T6` is
+  narrower than the size limit for text pictures, so it was never sent.
 - **WARP CORE tells you when a screenshot's text could not be read.** An
   amber line under the review list names the failure, instead of the
   screenshot quietly coming back without equipment.

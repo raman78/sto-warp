@@ -134,6 +134,23 @@ class Annotation:
         return hashlib.md5(raw.encode()).hexdigest()[:12]
 
 
+def confirmed_crops_in(store_dir: Path, crop_index: dict) -> list[dict]:
+    """The crops the uploader sends: indexed as confirmed, file present.
+
+    A module function so a read-only tool (`warp.tools.reconcile_uploads`)
+    can ask the same question without building a TrainingDataManager, whose
+    constructor migrates and sweeps the store.
+    """
+    result = []
+    crops_dir = Path(store_dir) / TrainingDataManager.CROPS_DIR
+    for fname, meta in crop_index.items():
+        if meta.get("state") == AnnotationState.CONFIRMED:
+            p = crops_dir / fname
+            if p.exists():
+                result.append({"path": str(p), **meta})
+    return result
+
+
 class TrainingDataManager:
     """
     Manages all annotation data for the WARP CORE trainer.
@@ -1056,14 +1073,7 @@ class TrainingDataManager:
         Returns list of confirmed crop metadata dicts for upload.
         Each dict: { path, slot, name, source }
         """
-        result = []
-        crops_dir = self._dir / self.CROPS_DIR
-        for fname, meta in self._crop_index.items():
-            if meta.get("state") == AnnotationState.CONFIRMED:
-                p = crops_dir / fname
-                if p.exists():
-                    result.append({"path": str(p), **meta})
-        return result
+        return confirmed_crops_in(self._dir, self._crop_index)
 
     def get_stats(self) -> dict:
         """Returns summary statistics for the dataset."""
