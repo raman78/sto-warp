@@ -2722,8 +2722,10 @@ class WarpCoreWindow(QMainWindow):
         _sl.info(f'pick: {slot!r} row={row} — {len(ranked)} candidates, '
                  f'closest {ranked[0][0]!r} {ranked[0][1]:.2f}' if ranked else
                  f'pick: {slot!r} row={row} — no candidates')
+        from warp.gui import env_for_slot
+        env = env_for_slot(slot)
         dlg = PickIconDialog(crop, slot, ranked,
-                             lambda n: matcher._thumb_for_name(n, tm),
+                             lambda n: matcher._thumb_for_name(n, tm, env),
                              current=ri.get('name', ''), parent=self)
         if dlg.exec() != QDialog.DialogCode.Accepted or not dlg.chosen:
             return

@@ -774,7 +774,7 @@ class SETSIconMatcher:
                         key=lambda t: (-t[1], t[0]))
         return ranked, tm_all
 
-    def _thumb_for_name(self, name: str, tm_scores=None) -> object:
+    def _thumb_for_name(self, name: str, tm_scores=None, env: str | None = None) -> object:
         """Return a QImage thumbnail for an item name, from the wiki PNG index.
 
         Used when the winner carries no entry of its own — an embedder match
@@ -801,6 +801,17 @@ class SETSIconMatcher:
         rows = [i for i, entry in enumerate(self._index) if entry['name'] == name]
         if not rows:
             return None
+        if env:
+            # A name shared by a space and a ground trait has one picture
+            # each; the slot's environment decides, not the template score.
+            from warp.data.cargo import env_tag_matches
+            tagged = [i for i in rows
+                      if env_tag_matches(self._index[i].get('variant', ''), env)]
+            if tagged:
+                rows = tagged
+            else:
+                rows = [i for i in rows if env_tag_matches(
+                    self._index[i].get('variant', ''), env) is not False] or rows
         if tm_scores is not None and len(rows) > 1:
             best = max(rows, key=lambda i: float(tm_scores[i]))
         else:

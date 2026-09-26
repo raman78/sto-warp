@@ -20,6 +20,10 @@ details live in the git history.
   selected one is framed, and the window opens full-screen and remembers
   its size and position. Picking one confirms it. You no longer need vger
   to fix a wrong match.
+- **Starship traits show their starship icon.** A few traits share a name
+  with a ground trait, such as Sniper and Engineered Soldier. Their rows,
+  tooltips and picker tiles showed the ground icon. They now show the one
+  that matches the slot.
 - **The guide explains what the Conf percentage means.** It is how closely
   the icon matches WARP's reference pictures, not the chance that the
   answer is right.

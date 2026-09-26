@@ -1018,6 +1018,26 @@ def _trait_icon_aliases() -> dict[str, list[str]]:
     return _bucketed('trait_icon_aliases', _build_trait_icon_aliases)
 
 
+# The wiki tags the second picture of a name shared by a space and a ground
+# trait; 'starship' is one of those tags ('Sniper (starship)'), and case
+# varies ('Engineered Soldier (Space)').
+_ENV_TAGS = {'space': ('(space)', '(starship)'), 'ground': ('(ground)',)}
+
+
+def env_tag_matches(label: str, env: str | None) -> bool | None:
+    """True when `label` carries `env`'s tag, False when it carries the other
+    environment's, None when it carries neither (or env is unknown)."""
+    if env not in _ENV_TAGS:
+        return None
+    low = label.lower()
+    if any(t in low for t in _ENV_TAGS[env]):
+        return True
+    other = 'ground' if env == 'space' else 'space'
+    if any(t in low for t in _ENV_TAGS[other]):
+        return False
+    return None
+
+
 def ref_icon_path(name: str, env: str | None = None) -> Path | None:
     """Path to the local reference-icon PNG, or ``None`` if not cached.
 
@@ -1029,17 +1049,24 @@ def ref_icon_path(name: str, env: str | None = None) -> Path | None:
     """
     from urllib.parse import quote_plus
     d = icons_dir()
+    aliases = list(_trait_icon_aliases().get(name, ()))
+    # An alias tagged for this environment beats the bare file: 'Sniper.png'
+    # is the ground trait and 'Sniper (starship).png' the starship one, and
+    # returning the bare file first put the yellow ground icon on a
+    # Starship Traits row.
+    for alias in aliases:
+        if env_tag_matches(alias, env):
+            ap = d / f'{quote_plus(alias)}.png'
+            if ap.is_file():
+                return ap
     p = d / f'{quote_plus(name)}.png'
     if p.is_file():
         return p
     # Traits are filed under `icon_name` (e.g. 'Hive Defenses (space)'),
     # not the display name — fall back to those variants so a confirmed
-    # trait's icon still resolves in tooltips.
-    aliases = list(_trait_icon_aliases().get(name, ()))
-    if env in ('space', 'ground'):
-        tag = f'({env})'
-        # env-matching aliases first, preserving relative order otherwise.
-        aliases.sort(key=lambda a: 0 if tag in a.lower() else 1)
+    # trait's icon still resolves in tooltips. The other environment's
+    # alias comes last.
+    aliases.sort(key=lambda a: 1 if env_tag_matches(a, env) is False else 0)
     for alias in aliases:
         ap = d / f'{quote_plus(alias)}.png'
         if ap.is_file():
