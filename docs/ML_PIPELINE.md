@@ -376,12 +376,25 @@ a k-NN gallery from the full training set, and uploads the result to
 ```
 1. Read data/annotations.jsonl → (sha, name, slot) tuples
 2. Download crop PNGs by SHA from sets-sto/sto-icon-dataset
-3. Stratified train/val split (80/20)
-4. Train EfficientNet-B0 + ArcFace (margin=0.5, scale=30, 256-d embed)
-5. Build gallery: embed every training crop, store per-class centroid
-6. Save: icon_embedder.pt, embedding_index.npz, embedder_label_map.json
-7. Upload to sets-sto/warp-knowledge/models/
+3. Stratified train/val split (80/20), seeded
+4. Load the backbone from the current icon_classifier.pt (warm-start),
+   freeze it, extract every crop's features once
+5. Train the projection + ArcFace (margin=0.5, scale=30, 256-d embed);
+   retry from the next seed if the final loss did not converge
+6. Build gallery: embed every crop, one row per crop (no centroids)
+7. Save: icon_embedder.pt, embedding_index.npz, embedder_label_map.json
+8. Upload to sets-sto/warp-knowledge/models/, unless the class count or
+   accuracy regressed or the gallery has collapsed
 ```
+
+The backbone is frozen, so the classifier it is warm-started from decides
+what the embedder knows about STO icons; with ImageNet features alone it
+scored 93.8% top-1 on unseen crops against 95.5% warm-started. The nightly
+run has done this since 2026-09-26; before that only manual runs did. The
+reasons, the measurement, the convergence check and the publication guard
+are in `sets-warp-backend/docs/technical_overview.md` ("The embedder must
+have learned, and a run can be reproduced", "The embedder's gallery must
+be spread out"); the client's own refusal of a collapsed gallery is below.
 
 #### Virtual gallery classes (`__inactive__`, `__empty__`)
 
