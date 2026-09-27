@@ -231,6 +231,30 @@ its neighbours. When the numbers disagree the rows stay unnamed, deliberately �
 an unnamed row costs the user one manual box, a wrongly named one silently
 writes an item into the wrong slot.
 
+That box is asked for, not left for the user to notice. The pixel analysis
+records every unnamed row that holds an item (`last_unnamed_rows`), and the
+importer turns the ones no box covers into a line in `ImportResult.errors`,
+which WARP CORE shows under the review list: *"4 row(s) of the equipment
+panel could not be named (rows 8-11 from the top) and have no boxes yet…"*.
+Once the user draws boxes there they come back merged as confirmed, cover
+the row, and the line goes quiet. Only rows known to belong to the panel are
+reported: those above the last named row, and those within the rows every
+ship draws after it (`space_eq_rows`: under Aft Weapons always Devices and
+three console rows). Past that a label-less stack can run on into whatever
+sits under the panel — on the 109 annotated screenshots four such rows held
+another panel's icons — and asking for them would ask for rows that do not
+exist. With OCR off, seven of the 109 screenshots raise the line.
+
+When the user draws such a box, WARP CORE suggests its slot from the rows
+around it (`WarpCoreWindow._suggest_slot_from_position`). It walks the same
+order, from `space_eq_rows`, skipping rows the identified ship lacks — only
+an identified one: the fallback profile for an unknown ship sets every
+optional row to 0 and is a guess (`ImportResult.ship_matched`). And a box in
+the equipment column takes only an equipment row as the one above it. Before
+both, it offered Sec-Def for the Engines row of a ship with no secondary
+deflector, and a BOFF seat's successor for a Shield row that had the seat
+level with it in the next panel.
+
 This replaced indexing a flat list by row number, which broke whenever the
 list's order did not match the panel's. On `image-4e7c6849dd28da67.png`, where
 the *Devices* and *Universal Consoles* labels are covered, the list placed
@@ -535,7 +559,8 @@ emission — is unchanged.
   scored too, and where several share the best score only the rows they all
   agree on are named. A row left unnamed is logged with the reason
   (`eq_stack: N row(s) under Aft Weapons left unnamed — …`) and is handled
-  like any row whose label OCR missed.
+  like any row whose label OCR missed — reported to the user if it holds an
+  item (§2, "When OCR does not deliver the label").
 
 The importer hands the matcher to `detect()` for `SPACE` builds for this
 alone (`_needs_matcher`); nothing else in the space chain uses it.

@@ -771,6 +771,11 @@ class LayoutDetector:
         # cells out of the row, and sizing it by a guessed profile draws boxes
         # on bare panel. Reset per detect() call.
         self.last_row_cell_counts: dict[str, int] = {}
+        # Equipment rows no name could be given, that hold at least one item:
+        # {'row': position from the top (1-based), 'cy', 'filled', and the row's
+        # area 'x0'/'x1'/'y0'/'y1'}. They get no
+        # boxes, so the importer tells the user to add them. Reset per detect().
+        self.last_unnamed_rows: list[dict] = []
 
     def _img_key(self, img: np.ndarray) -> str:
         """A key for per-image caches that survives repeated `detect()` calls.
@@ -922,6 +927,7 @@ class LayoutDetector:
         self.last_row_pixel_counts = {}
         self.last_trait_icon_counts = {}
         self.last_row_cell_counts = {}
+        self.last_unnamed_rows = []
         if build_type in ('TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS'):
             # Strategy 0: structure-driven trait grid detector with ML probe.
             # Multi-panel grid lock + multi-chain row extraction + per-group
@@ -2859,6 +2865,36 @@ class LayoutDetector:
                 f'LayoutDetector: {len(_unnamed)} row(s) left unnamed at '
                 f'cy={_unnamed} — the profile sequence does not fit the gaps '
                 f'between the OCR-anchored rows')
+            # Those holding an item are the ones the user must add by hand.
+            # A row is known to be a panel row if it lies above the last named
+            # one, or within the rows every ship draws after that slot
+            # (space_eq_rows: under Aft always Devices and three console rows).
+            # Past that a stack can run on into whatever sits under the panel
+            # — four such rows on the 109 annotated screenshots held another
+            # panel's icons — and asking for those would ask for rows that do
+            # not exist. With no row named at all, every row is reported.
+            _named_i = [i for i, cy in enumerate(geom.row_cys) if cy in filled]
+            if _named_i:
+                _last = max(_named_i)
+                _slot = filled[geom.row_cys[_last]]
+                _after = (_SPACE_ROWS.ROWS[_SPACE_ROWS.INDEX[_slot] + 1:]
+                          if _slot in _SPACE_ROWS.INDEX else ())
+                _limit = _last + sum(1 for r in _after if not r.optional)
+            else:
+                _limit = len(geom.row_cys)
+            self.last_unnamed_rows = []
+            for i, cy in enumerate(geom.row_cys):
+                if cy not in _unnamed or i > _limit:
+                    continue
+                _, _states = self._count_icons_in_row(
+                    img, max(0, cy - icon_h // 2), min(h, cy + icon_h // 2),
+                    panel_right, cell_w, 'unnamed row', panel_x_start=panel_x_start)
+                n_filled = sum(1 for st in _states if st == 'active')
+                if n_filled:
+                    self.last_unnamed_rows.append({
+                        'row': i + 1, 'cy': cy, 'filled': n_filled,
+                        'y0': cy - icon_h // 2, 'y1': cy + icon_h // 2,
+                        'x0': panel_x_start, 'x1': panel_right})
 
         result: dict = {}
         for i, cy in enumerate(geom.row_cys):

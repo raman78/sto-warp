@@ -1360,6 +1360,18 @@ class RecognisedItem:
     match_origin: str  = ''
 
 
+def _row_ranges(rows: list[int]) -> str:
+    """'row 3', 'rows 1-2, 4-12' — positions from the top, runs collapsed."""
+    runs: list[list[int]] = []
+    for r in sorted(rows):
+        if runs and r == runs[-1][-1] + 1:
+            runs[-1].append(r)
+        else:
+            runs.append([r])
+    parts = [str(g[0]) if len(g) == 1 else f'{g[0]}-{g[-1]}' for g in runs]
+    return ('row ' if len(rows) == 1 else 'rows ') + ', '.join(parts)
+
+
 @dataclass
 class ImportResult:
     build_type:   str
@@ -1367,6 +1379,9 @@ class ImportResult:
     ship_type:    str  = ''
     ship_tier:    str  = ''
     ship_profile: dict = field(default_factory=dict)
+    # True when the profile is a real ship's (ShipDB matched it), False when
+    # it is the generic fallback guessed for an unidentified ship.
+    ship_matched: bool = False
     items:        list = field(default_factory=list)
     errors:       list = field(default_factory=list)
     warnings:     list = field(default_factory=list)
@@ -2110,6 +2125,7 @@ class WarpImporter:
             ship_type    = ship_type,
             ship_tier    = ship_tier,
             ship_profile = profile,
+            ship_matched = bool(resolution is not None and resolution.matched),
             screen_type  = _ml_stype or '',
         )
 
@@ -2521,6 +2537,17 @@ class WarpImporter:
                         layout = _apply_confirmed(layout)
                     _slog.info(f'WarpImporter: refined profile from pixel counts: '
                                f'{dict((k,v) for k,v in profile.items() if v)}')
+
+        # Equipment rows that hold items but could not be named get no boxes.
+        # Say so where the user looks — once they draw boxes there (merged
+        # back as confirmed), the row is no longer missing and this goes quiet.
+        _missing = self._unnamed_rows_without_boxes(layout)
+        if _missing:
+            result.errors.append(
+                f'{len(_missing)} row(s) of the equipment panel could not be named '
+                f'({_row_ranges([r["row"] for r in _missing])} from the top) and have '
+                f'no boxes yet. Add them in WARP CORE: Alt+drag over each icon, and '
+                f'check the slot it suggests.')
 
         matcher = self._get_matcher()
 
@@ -3629,6 +3656,22 @@ class WarpImporter:
         except Exception as e:
             _slog.debug(f'WarpImporter: _load_confirmed_profile error: {e}')
             return {}
+
+    def _unnamed_rows_without_boxes(self, layout: dict) -> list[dict]:
+        """Equipment rows the detector could not name that hold items and that
+        no box of *layout* covers yet (see LayoutDetector.last_unnamed_rows)."""
+        rows = getattr(self._get_layout(), 'last_unnamed_rows', None)
+        if not isinstance(rows, list):     # a detector that never measured
+            return []
+        boxes = [b for bs in (layout or {}).values() for b in bs if b and len(b) >= 4]
+        out = []
+        for r in rows:
+            covered = any(r['y0'] <= b[1] + b[3] / 2 <= r['y1']
+                          and r['x0'] - 5 <= b[0] + b[2] / 2 <= r['x1'] + 5
+                          for b in boxes)
+            if not covered:
+                out.append(r)
+        return out
 
     def _build_slot_candidates(self, slot_defs: list,
                                 build_type: str = '') -> dict[str, set[str]]:

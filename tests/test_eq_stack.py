@@ -158,3 +158,16 @@ def test_a_grid_found_without_a_matcher_is_not_reused_once_one_is_there(detector
     assert len(detector._get_eq_geometry(img).eq_label_cys) == 6
     detector._stack_matcher, detector._stack_eq_cache = _ColourMatcher(), EQ_CACHE
     assert len(detector._get_eq_geometry(img).eq_label_cys) == 11
+
+
+def test_rows_left_unnamed_that_hold_items_are_recorded_for_the_user(detector, monkeypatch):
+    """Without a matcher, and with a profile that expects four rows under Aft
+    where five are drawn, those rows stay unnamed and get no boxes. The ones
+    known to be panel rows — the four every ship draws under Aft — are
+    recorded so the importer can ask for them; the fifth may lie past the
+    panel's bottom and is not."""
+    monkeypatch.setattr(ld, 'detect_eq_geometry', lambda img, ocr_tokens=None: None)
+    detector._stack_matcher, detector._stack_eq_cache = None, None
+    detector._detect_via_pixel_analysis(
+        _panel(), ld.SPACE_SLOT_ORDER_STANDARD, {'Universal Consoles': 0})
+    assert [r['row'] for r in detector.last_unnamed_rows] == [7, 8, 9, 10]

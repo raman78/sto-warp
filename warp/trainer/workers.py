@@ -268,6 +268,10 @@ class RecognitionWorker(QThread):
         # ImportResult.errors of this run — things the user has to be told,
         # such as a text read that failed. Shown by _on_recognition_done.
         self.errors: list[str] = []
+        # ImportResult.ship_profile — how many of each slot the recognised
+        # ship has, for the slot suggester (rows the ship lacks are skipped).
+        # Empty unless the ship was identified.
+        self.ship_profile: dict = {}
 
     def _stage_cb(self, pct: int, label: str) -> None:
         if self.isInterruptionRequested():
@@ -327,6 +331,11 @@ class RecognitionWorker(QThread):
             except Exception:
                 self.eq_geom = None
             self.errors = list(result.errors)
+            # Only a matched ship's profile says which rows it lacks; the
+            # fallback for an unidentified ship is a guess (every optional row
+            # 0) and must not hide a row from the suggester.
+            self.ship_profile = (dict(getattr(result, 'ship_profile', None) or {})
+                                 if getattr(result, 'ship_matched', False) else {})
             for e in result.errors:
                 _slog.warning(f'RecognitionWorker: pipeline error: {e}')
 

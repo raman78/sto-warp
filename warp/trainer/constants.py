@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+from warp.recognition.space_eq_rows import SLOTS as _SPACE_EQ_ROWS
+
 
 # ── QSettings keys ─────────────────────────────────────────────────────
 _KEY_LAST_DIR    = 'warp_core/last_dir'
@@ -22,10 +24,11 @@ CONF_MEDIUM = 0.70
 # ── Slot groups per screen type ────────────────────────────────────────
 SLOT_GROUPS: dict[str, list[str]] = {
     # SPACE_EQ: space equipment + ship metadata (name/type/tier live on space screenshots)
+    # The equipment rows in on-screen order come from space_eq_rows.ROWS, the
+    # one table of them, so the slot suggester walks the same sequence the
+    # detector does.
     'SPACE_EQ': [
-        'Fore Weapons', 'Deflector', 'Sec-Def', 'Engines', 'Warp Core', 'Shield',
-        'Aft Weapons', 'Experimental', 'Devices', 'Universal Consoles',
-        'Engineering Consoles', 'Science Consoles', 'Tactical Consoles', 'Hangars',
+        *_SPACE_EQ_ROWS,
         'Ship Type', 'Ship Tier',
     ],
     # GROUND_EQ: ground equipment only — no ship metadata
@@ -61,9 +64,7 @@ SLOT_GROUPS: dict[str, list[str]] = {
     'DISCARD': [],
     # SPACE_MIXED: merged space screenshot — equipment + traits + boffs + specs, no ground gear
     'SPACE_MIXED': [
-        'Fore Weapons', 'Deflector', 'Sec-Def', 'Engines', 'Warp Core', 'Shield',
-        'Aft Weapons', 'Experimental', 'Devices', 'Universal Consoles',
-        'Engineering Consoles', 'Science Consoles', 'Tactical Consoles', 'Hangars',
+        *_SPACE_EQ_ROWS,
         'Ship Type', 'Ship Tier',
         'Personal Space Traits', 'Starship Traits', 'Space Reputation', 'Active Space Rep',
         'Boff Tactical', 'Boff Engineering', 'Boff Science',

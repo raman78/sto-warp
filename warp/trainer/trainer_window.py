@@ -174,6 +174,9 @@ class WarpCoreWindow(QMainWindow):
         # window is in Fast Correction Mode; None otherwise.
         self._fast_session = None
         self._screen_types: dict[str, str] = {}
+        # Slot counts of the ship recognised on each screenshot, from the last
+        # Auto-Detect — lets the slot suggester skip rows this ship lacks.
+        self._ship_profiles: dict[str, dict] = {}
         self._screen_types_manual: set[str] = set()   # green — user confirmed
         self._screen_types_ml_auto: set[str] = set()  # yellow — ML ≥95% auto-accepted
         self._screenshots_done: set[str] = self._load_done()  # fully annotated, locked
@@ -1861,6 +1864,8 @@ class WarpCoreWindow(QMainWindow):
             self.statusBar().showMessage(f'Recognition done — {len(items)} item(s).')
         merged = self._merge_recognition(preserve_existing or [], items)
         self._recognition_cache[filename] = merged
+        if self._recog_worker is not None:
+            self._ship_profiles[filename] = dict(getattr(self._recog_worker, 'ship_profile', {}) or {})
         if self._current_idx >= 0 and self._screenshots[self._current_idx].name == filename:
             self._populate_review_panel(merged, stype)
             self._show_recognition_warnings(
@@ -4127,9 +4132,24 @@ class WarpCoreWindow(QMainWindow):
             # that are above OR in the same row as the new bbox.
             # Same-row slots (|Δy| < 0.5*bh) count when the new bbox is to the
             # right — handles Body Armor → EV Suit which are side-by-side.
+            # Which panel the new box is in: the one of the item nearest it
+            # across. A box in the equipment column takes only equipment rows
+            # as its predecessor — a BOFF seat or a trait level with it in the
+            # next panel is not the row above (it suggested 'Boff Science' for
+            # a Shield row on image-c8be3f34ec234254.png).
+            from warp.recognition import space_eq_rows as _eq_rows
+            _nearest = min(
+                ((abs(p[0] - bx_center), slot)
+                 for slot, positions in slot_pos_map.items() if slot not in NON_ICON_SLOTS
+                 for p in positions),
+                default=(0, ''))[1]
+            _eq_column = _nearest in _eq_rows.INDEX
+
             icon_above = []
             for slot, positions in slot_pos_map.items():
                 if slot in NON_ICON_SLOTS:
+                    continue
+                if _eq_column and slot not in _eq_rows.INDEX:
                     continue
                 avg_cx = sum(p[0] for p in positions) / len(positions)
                 avg_cy = sum(p[1] for p in positions) / len(positions)
@@ -4182,9 +4202,18 @@ class WarpCoreWindow(QMainWindow):
                 # only advance via vertically_below — they share a column, not a row.
                 _HORIZONTAL_ADVANCE = frozenset({'Body Armor', 'EV Suit', 'Personal Shield'})
                 advance = vertically_below or (same_row_right and last_slot in _HORIZONTAL_ADVANCE)
-                if advance and last_slot in slot_order:
-                    last_idx = slot_order.index(last_slot)
-                    for candidate in slot_order[last_idx + 1:]:
+                # The rows this ship draws, so an optional row it lacks is not
+                # offered next (it suggested 'Sec-Def' for an Engines row on a
+                # ship with no secondary deflector). Without a recognised ship
+                # every row stays in, as before.
+                _profile = {}
+                if self._current_idx >= 0:
+                    _profile = self._ship_profiles.get(
+                        self._screenshots[self._current_idx].name, {})
+                _sequence = _eq_rows.row_sequence(slot_order, _profile)
+                if advance and last_slot in _sequence:
+                    last_idx = _sequence.index(last_slot)
+                    for candidate in _sequence[last_idx + 1:]:
                         if candidate in allowed and candidate not in NON_ICON_SLOTS:
                             reason = 'below' if vertically_below else 'same-row-right'
                             _sl.info(f'slot_suggest: bbox cy={cy} → {candidate!r} '

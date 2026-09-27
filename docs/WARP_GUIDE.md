@@ -814,6 +814,13 @@ the wrong slot. Do not accept such a screenshot as it stands. Run
 Auto-Detect again, and if the line comes back, the log has the details. The
 line clears when you open another screenshot or detect again.
 
+The line also tells you when a row of the equipment panel could not be
+named — *"2 row(s) of the equipment panel could not be named (rows 8-9 from
+the top) and have no boxes yet"*. WARP would rather leave a row out than put
+its items in the wrong slot, so those icons have no boxes. Add them as
+described in [Adding a missing bounding box](#adding-a-missing-bounding-box);
+once the row has boxes the line no longer mentions it.
+
 **Starting Auto-Detect while one is running** stops the earlier run. Only
 the newest one reports back: its progress bar keeps moving and its results
 fill the list. The one you replaced no longer shows "Recognition cancelled"
@@ -997,6 +1004,13 @@ If WARP missed a slot entirely (no box drawn over an item):
 2. The cursor changes to a gold crosshair.
 3. Drag over the item icon to draw a box.
 4. The box is recognised immediately. Correct the name if needed, then Accept.
+
+The slot of the new box is suggested from the rows around it. For an
+equipment box it follows the order the game draws the rows in and skips any
+the recognised ship does not have — no Secondary Deflector on a ship without
+one — and it only looks at equipment rows above, never at a Bridge Officer
+seat or trait level with the box in the next panel. If the ship was not
+recognised, every row stays possible, so check the suggestion.
 
 The crosshair follows the Alt key itself, not the moment you pressed it: if you
 switch to another window while holding Alt and let it go there, the canvas
