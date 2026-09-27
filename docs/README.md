@@ -9,7 +9,7 @@ written for people who read or change the code.
 | Doc | Scope |
 |---|---|
 | [`ML_PIPELINE.md`](ML_PIPELINE.md) | End-to-end ML: local capture, community training, model delivery |
-| [`EQ_DETECTION.md`](EQ_DETECTION.md) | Equipment panel — geometry, row labelling, slot profile, tier recovery |
+| [`EQ_DETECTION.md`](EQ_DETECTION.md) | Equipment panel — geometry, row labelling, slot profile, tier recovery, panels with no labels |
 | [`BOFF_DETECTION.md`](BOFF_DETECTION.md) | BOFF panel — profession markers, seat layout |
 | [`TRAIT_DETECTION.md`](TRAIT_DETECTION.md) | Trait panels — grid localisation, section assignment |
 | [`SHIP_INFO_DETECTION.md`](SHIP_INFO_DETECTION.md) | Ship name / class / tier from the top band, and their bboxes |

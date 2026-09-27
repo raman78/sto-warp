@@ -2154,6 +2154,10 @@ class WarpImporter:
         
         _needs_matcher = build_type in (
             'SPACE_MIXED', 'GROUND_MIXED',
+            # A space panel with no readable labels is found from its cells
+            # (eq_stack), which names the rows under Aft Weapons by the items
+            # in them — the only use the space chain makes of the matcher.
+            'SPACE',
             'BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS',
             # Traits use the structure-driven trait_grid detector (Strategy 0)
             # which probes icons through icon_matcher.classify_patch to label

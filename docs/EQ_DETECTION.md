@@ -1,7 +1,8 @@
 # Equipment panel detection
 
-Production modules: `warp/recognition/eq_geometry.py` (panel geometry),
-`warp/recognition/layout_detector.py` (`LayoutDetector._detect_via_pixel_analysis`
+Production modules: `warp/recognition/eq_geometry.py` (panel geometry from
+the row labels), `warp/recognition/eq_stack.py` (panel geometry when there
+are no labels, §6), `warp/recognition/layout_detector.py` (`LayoutDetector._detect_via_pixel_analysis`
 — row → slot labelling and bbox emission), `warp/warp_importer.py` (slot
 profile). The detector locates the 6-cell × N-row equipment matrix on a
 SPACE / SPACE_MIXED screenshot, decides which slot each row is, and emits
@@ -470,6 +471,107 @@ being confused, not from misalignment: the grid box sits on the icon.
 Rows that differ between ship types need no offset. They are handled by
 the profile, which adds or drops whole rows (§2, §3).
 
+## 6. When the panel has no labels — `eq_stack.detect_eq_stack`
+
+§1 places the panel from its row labels. A screenshot cropped past the label
+column — a collage of panels, say — has none, and neither does one whose
+OCR pass read nothing. Such a panel used to get no equipment boxes at all.
+`LayoutDetector._get_eq_geometry` now asks `eq_stack.detect_eq_stack` when
+`detect_eq_geometry` returns `None`, so labels still come first and the
+label-less path runs only where they are missing. Its geometry carries
+`mode='stack'`.
+
+### Finding the panel
+
+The idea is that the grid itself is recognisable. Every row is
+right-justified, so the panel's rightmost column has a cell in every row,
+one row pitch apart, filled or not. And every ship draws Deflector, Engines,
+Warp Core and Shield — Sec-Def on some — as one-cell rows directly under
+Fore Weapons. No other panel has that shape.
+
+1. Icon-sized bright components (`trait_grid._detect_icon_ccs`) are grouped
+   by right edge and size and chained at whole multiples of one row pitch.
+   Dark or merged icons are missed by a brightness test, so a chain may skip
+   up to four rows.
+2. Every skipped row inside the chain must pass `_cell_exists`, which answers
+   for empty cells too. The stack is then extended up and down while
+   `_cell_exists` still sees a cell.
+3. `panel_right` is the median right edge of the chain — within 3 px of the
+   confirmed boxes on 98 of 109 screenshots; the adaptive-background scan of
+   §1 made it worse here. The cell pitch in x is each row's span from first to
+   last cell over its steps, a fraction of a pixel: the median of single steps
+   (34 or 35 px) drifted 2 px by the fifth cell.
+4. Each row's cells are counted by `_count_icons_in_row`, called with the
+   arguments `_detect_via_pixel_analysis` builds from a geometry.
+5. The stack is the panel only if it is one row, then a run of 3-6 one-cell
+   rows, then 3-8 more rows (`_fit_panel`). Rows outside that are trimmed. A
+   trait grid never fits — the game draws the frame of every empty trait
+   slot, so its rows are full — and a side list fails the rule that the run
+   starts on the second row.
+
+### Naming the rows
+
+Rows are named by writing them into `eq_label_cys`, the channel OCR labels
+use, so everything after it — `fill_unanchored_rows`, the profile, bbox
+emission — is unchanged.
+
+- **From the shape.** A run of four one-cell rows is Deflector, Engines,
+  Warp Core, Shield; five adds Sec-Def after Deflector. The row above is
+  Fore Weapons, the row below Aft Weapons. A run of three or six is
+  ambiguous and names nothing.
+- **From the content, under Aft Weapons.** There the game draws
+  [Experimental], Devices, [Universal], Engineering, Science, Tactical,
+  [Hangars] (`space_eq_rows.ROWS`). The number of rows fixes how many of the
+  optional ones are present but not which. Each filled cell is read by the
+  matcher, and every arrangement the table allows is scored by the cells
+  whose item could not sit in the row it assigns. "Could sit" comes straight
+  from the cargo groups: a Universal console is in every console group, and
+  the Universal row's group holds every console, so only typed consoles,
+  devices, experimental weapons and hangar pets tell rows apart.
+- **Only where the answer is unique.** The best arrangement may leave at most
+  10% of the read cells out of place (`MAX_MISFIT`) — a sole arrangement is
+  not right because it is the only one. Trailing rows in which nothing was
+  read may lie past the panel's bottom, so arrangements without them are
+  scored too, and where several share the best score only the rows they all
+  agree on are named. A row left unnamed is logged with the reason
+  (`eq_stack: N row(s) under Aft Weapons left unnamed — …`) and is handled
+  like any row whose label OCR missed.
+
+The importer hands the matcher to `detect()` for `SPACE` builds for this
+alone (`_needs_matcher`); nothing else in the space chain uses it.
+
+### Keeping what it names
+
+`detect()` for a `SPACE` build accepts the pixel analysis only when it covers
+70% of the profile's slots, and otherwise falls back to learned layouts and
+fixed positions. A label-less grid names only the rows it is sure of, so it
+can fall short of that while every box it names is right; its result is kept
+regardless. Measured with OCR off over the 55 annotated SPACE_EQ screenshots,
+before content naming existed: 1092 correctly named boxes keeping it, 973
+sending those screens on to the fallbacks, whose fixed positions misname
+rows.
+
+### Measured
+
+The shipped importer over the 109 annotated space screenshots, 3206
+confirmed equipment boxes (`dev/measure_eq_stack_e2e.py`,
+`dev/measure_eq_right_edge.py`). A box counts when it overlaps a confirmed
+one at IoU ≥ 0.5; "right slot" when it also carries that box's slot.
+
+| OCR switched off (no labels anywhere) | confirmed | right slot before | right slot now | wrong slot now | boxes with no confirmed box, before → now |
+|---|---|---|---|---|---|
+| SPACE_EQ | 1668 | 899 | 1588 | 6 | 384 → 25 |
+| SPACE_MIXED | 1538 | 0 | 1266 | 2 | 0 → 92 |
+
+With OCR on, every screenshot with labels comes out identical; the one
+without them, `image-c8be3f34ec234254.png`, went from no equipment boxes to
+all 11 rows, its 6 confirmed boxes found with the right slot and item.
+
+Naming by content costs about 1.2 s per label-less screenshot — some 16
+matcher calls — and nothing where labels were read. The added recognition
+time on such screens is mostly the importer matching the slots that now
+exist.
+
 ## Failure modes
 
 | Symptom in logs | Cause | Where to look |
@@ -479,6 +581,8 @@ the profile, which adds or drops whole rows (§2, §3).
 | `pixel_count=N profile=M` with `N > M` | profile under-counts — usually a missing tier bonus | §4 |
 | Two slots emitted on one row cy | pre-`EQ-1` regression | `LayoutDetector._detect_via_pixel_analysis` |
 | `mode=MATH_FALLBACK` | no single-slot icon right edge found; `panel_right` extrapolated | `detect_eq_geometry` |
+| `eq_stack: no equipment panel found without labels` | no labels, and no stack of cells with the equipment panel's shape — a cropped fragment, or no panel at all | §6 |
+| `eq_stack: N row(s) under Aft Weapons left unnamed — …` | the rows' items fit no single arrangement; the reason is in the line | §6, `_content_anchors` |
 
 ## Measured baseline
 

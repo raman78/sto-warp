@@ -30,6 +30,7 @@ from warp.recognition import boff_marker as _boff_marker
 from warp.recognition import trait_grid as _trait_grid
 from warp.recognition.eq_geometry import detect_eq_geometry, EQGeometry, STD_ORDER
 from warp.recognition import space_eq_rows as _SPACE_ROWS
+from warp.recognition.eq_stack import detect_eq_stack
 from warp.recognition.ground_eq_geometry import (
     detect_ground_eq_geometry,
     project_cells as _project_ground_cells,
@@ -729,6 +730,10 @@ class LayoutDetector:
         # outside a detect() call, in which case the space panel reads for
         # itself — the standalone behaviour the dev probes rely on.
         self._ocr_tokens: list[dict] | None = None
+        # The matcher and the cargo equipment groups for the same call, so the
+        # label-less panel geometry (eq_stack) can name rows by their content.
+        self._stack_matcher = None
+        self._stack_eq_cache: dict | None = None
         self._calibration = self._load_calibration()
         self._community_anchors: list | None = None  # instance cache for community_anchors.json (P11)
         # Per-detect()-call cached EQ geometry result (keyed by id(img)).
@@ -742,7 +747,7 @@ class LayoutDetector:
         # same screenshot reuses the geometry instead of recomputing it. The
         # importer calls `detect()` twice whenever pixel counts refine the ship
         # profile, and the panel geometry does not depend on the profile.
-        self._eq_geom_cache: dict[str, EQGeometry | None] = {}
+        self._eq_geom_cache: dict[tuple, EQGeometry | None] = {}
         self._ground_eq_geom_cache: dict[str, GroundEQGeometry | None] = {}
         self._ocr_labels_cache: dict[str, dict] = {}
         self._img_key_memo: tuple = (None, '')
@@ -785,9 +790,15 @@ class LayoutDetector:
         return digest
 
     def _get_eq_geometry(self, img: np.ndarray) -> EQGeometry | None:
-        """Cached wrapper around detect_eq_geometry. Returns None when OCR
-        yields no usable EQ labels (e.g. BOFF-only or trait-only screen)."""
-        key = self._img_key(img)
+        """The space equipment grid, cached per screenshot. From the OCR-read
+        row labels when there are any (detect_eq_geometry), otherwise from the
+        cells alone (eq_stack.detect_eq_stack, mode 'stack'). None when
+        neither finds a panel — a BOFF-only or trait-only screen."""
+        # Keyed on whether a matcher was at hand too: without one the
+        # label-less grid names fewer rows, and a later call that has one
+        # must not be handed that poorer answer from the cache.
+        matcher = getattr(self, '_stack_matcher', None)
+        key = (self._img_key(img), matcher is not None)
         if key in self._eq_geom_cache:
             return self._eq_geom_cache[key]
         try:
@@ -796,6 +807,16 @@ class LayoutDetector:
         except Exception as e:
             _slog.warning(f'LayoutDetector: detect_eq_geometry crashed: {e}')
             geom = None
+        if geom is None:
+            # No labels to anchor on — a screenshot cropped past the label
+            # column, or an OCR pass that read nothing. Find the grid from the
+            # cells themselves; see eq_stack.
+            try:
+                geom = detect_eq_stack(img, self, matcher,
+                                       getattr(self, '_stack_eq_cache', None))
+            except Exception as e:
+                _slog.warning(f'LayoutDetector: detect_eq_stack crashed: {e}')
+                geom = None
         self._eq_geom_cache[key] = geom
         if geom is not None:
             _slog.info(
@@ -896,6 +917,8 @@ class LayoutDetector:
         # read the same tokens instead of the space one opening the screenshot
         # a second time.
         self._ocr_tokens = ocr_tokens
+        self._stack_matcher = icon_matcher
+        self._stack_eq_cache = getattr(app_cache, 'equipment', None) if app_cache is not None else None
         self.last_row_pixel_counts = {}
         self.last_trait_icon_counts = {}
         self.last_row_cell_counts = {}
@@ -1103,10 +1126,19 @@ class LayoutDetector:
         # which had 32 px mean panel_right error and returned None for 4
         # screens on the same benchmark. Learned moves to Strategy 1b as a
         # safety net when geometry produces no usable result.
-        geom_available = self._get_eq_geometry(img) is not None
+        geom = self._get_eq_geometry(img)
+        geom_available = geom is not None
         if geom_available:
             result = self._detect_via_pixel_analysis(img, slot_order, profile)
-            if result and len(result) >= max(3, int(len(slot_order) * 0.7)):
+            # A label-less grid (eq_stack) names only the rows it is sure of,
+            # so it can fall short of 70% of the profile's slots while every
+            # box it names is right. Measured with OCR off over 55 SPACE_EQ
+            # screenshots, before rows under Aft were named by content: 1092
+            # correctly named boxes taking it, against 973 sending such screens
+            # on to the fallbacks below, whose fixed positions misname rows
+            # (docs/EQ_DETECTION.md).
+            if result and (geom.mode == 'stack'
+                           or len(result) >= max(3, int(len(slot_order) * 0.7))):
                 # Supplement missing optional slots (Hangars, Universal
                 # Consoles, Sec-Def, Experimental) from learned layout.
                 missing = [s for s in slot_order

@@ -254,6 +254,7 @@ screenshot through this pipeline:
   │ 4. Layout detection │  per build_type, in priority order:
   │                     │   • Strategy 0:  BOFF marker grid (BOFFS / MIXED)
   │                     │   • Strategy 1:  EQ geometry detector (OCR-anchored)
+  │                     │     (no labels: found from its cells instead)
   │                     │   • Strategy 1G: Ground EQ geometry
   │                     │   • Strategy 2:  pixel analysis (legacy)
   │                     │   • Strategy 3:  learned anchors.json
