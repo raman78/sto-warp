@@ -2,6 +2,38 @@
 
 ## Space Equipment
 
+The sections below group the slots by what they hold. That is **not** the
+order the game draws them in. On screen, one row per slot type, top to
+bottom:
+
+| # | Row | Present on every ship? |
+|---|---|---|
+| 1 | Fore Weapons | yes |
+| 2 | Deflector | yes |
+| 3 | Secondary Deflector | optional |
+| 4 | Impulse Engines | yes |
+| 5 | Warp Core / Singularity Core | yes |
+| 6 | Shields | yes |
+| 7 | Aft Weapons | optional (0 on 28 ships in cargo) |
+| 8 | Experimental Weapon | optional |
+| 9 | Devices | yes |
+| 10 | Universal Consoles | optional |
+| 11 | Engineering Consoles | yes |
+| 12 | Science Consoles | yes |
+| 13 | Tactical Consoles | yes |
+| 14 | Hangars | optional |
+
+A ship that lacks an optional row simply does not draw it; the rows below
+move up. Every row is right-justified against the panel's right edge and
+holds at most 6 cells.
+
+> **WARP:** `STD_ORDER` in `warp/recognition/eq_geometry.py` is this table,
+> and `OPTIONAL_ROWS` beside it marks the optional rows. Until 2026-09-27
+> `STD_ORDER` followed the grouping below instead — Aft and Experimental
+> second and third — because this section had no on-screen order to copy.
+> Order measured from the confirmed boxes of every annotated SPACE_EQ /
+> SPACE_MIXED screenshot.
+
 ### Weaponry
 
 - **Fore Weapons** — 1 to 5 slots. Primary offensive slots. Supports all weapon types except Mines. Required slot for Dual Cannons and Dual Heavy Cannons.

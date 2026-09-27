@@ -22,7 +22,9 @@ Pipeline:
      EQ label column. Discards off-panel hits (HUD "Shields", specialization
      "Miracle Worker" / "Temporal Operative", tooltip prose, etc.).
   4. detect_stripe_start (HSV gradient) per label → panel_x_start (median).
-  5. row_pitch = median of cy-gaps / canonical-step-count between EQ-column hits.
+  5. row_pitch = median of cy-gap / rows-between over consecutive EQ-column
+     hits, counting only pairs with no optional row between them
+     (STD_ORDER is the on-screen order, OPTIONAL_ROWS the rows a ship may lack).
   6. est_dx = row_pitch × DX_RATIO  (0.725 — see comment below)
   7. detect_v8_adaptive_bg (RTL adaptive-bg scan) on canonical single-slot rows
      (Deflector / Engines / Warp Core / Shields) → panel_right (median).
@@ -52,6 +54,8 @@ from typing import Optional
 import cv2
 import numpy as np
 
+from warp.debug import log as _log
+
 def _get_easyocr_reader():
     """The process-wide reader — see `text_extractor.shared_reader`.
 
@@ -73,19 +77,29 @@ DX_RATIO = 0.725
 # X-cluster tolerance (px) when grouping label x1 values.
 X_CLUSTER_TOL = 30
 
+# Where the right-edge scan on single-slot rows stops, in cells of est_dx from
+# panel_x_start. The scan returns the rightmost bright column it reaches, so
+# this bound decides how far past the icon it can wander.
+RIGHT_SEARCH_END = 6.05
+
 # Single-slot rows whose right edge is reliable for anchoring panel_right.
 TARGET_SINGLE_SLOTS = {'Deflector', 'Engines', 'Warp Core', 'Shields'}
 
-# Canonical EQ row order (top→bottom in STO UI).
+# EQ rows in the order the game draws them, top to bottom (measured on the
+# confirmed boxes of every annotated SPACE_EQ / SPACE_MIXED screenshot). The
+# index is the row's position when every row is present. Until 2026-09-27
+# this held the order the slot types are *listed* in docs/sto_slots_rules.md
+# — weapons, then core equipment — which put Aft and Experimental second and
+# third, and skewed every row-pitch pair that spanned them.
 STD_ORDER = {
     'Fore Weapons':         0,
-    'Aft Weapons':          1,
-    'Experimental':         2,
-    'Deflector':            3,
-    'Sec-Def':              4,
-    'Engines':              5,
-    'Warp Core':            6,
-    'Shields':              7,
+    'Deflector':            1,
+    'Sec-Def':              2,
+    'Engines':              3,
+    'Warp Core':            4,
+    'Shields':              5,
+    'Aft Weapons':          6,
+    'Experimental':         7,
     'Devices':              8,
     'Universal Consoles':   9,
     'Engineering Consoles': 10,
@@ -94,17 +108,26 @@ STD_ORDER = {
     'Hangars':              13,
 }
 
+# Rows a ship may not have (docs/sto_slots_rules.md; Aft is 0 on 28 ships in
+# cargo). Between two read labels, each of these may or may not be drawn, so
+# the number of rows separating the labels is only known when none lies
+# between them.
+OPTIONAL_ROWS = frozenset({
+    'Sec-Def', 'Aft Weapons', 'Experimental', 'Universal Consoles', 'Hangars',
+})
+_OPTIONAL_IDX = frozenset(STD_ORDER[n] for n in OPTIONAL_ROWS)
+
 # German UI variants — kept as a base, extended below from ui_translations.csv.
 # STD_ORDER (English) keys map row label → canonical row index. The localized
 # GERMAN_ORDER below resolves localized OCR text to the same row index.
 GERMAN_ORDER = {
-    'Bug Waffen':       0,
-    'Heck Waffen':      1,
-    'Deflektor':        3,
-    'Antriebe':         5,
-    'Warp Antrieb':     6,
-    'Schilde':          7,
-    'Geraete':          8,
+    'Bug Waffen':       STD_ORDER['Fore Weapons'],
+    'Heck Waffen':      STD_ORDER['Aft Weapons'],
+    'Deflektor':        STD_ORDER['Deflector'],
+    'Antriebe':         STD_ORDER['Engines'],
+    'Warp Antrieb':     STD_ORDER['Warp Core'],
+    'Schilde':          STD_ORDER['Shields'],
+    'Geraete':          STD_ORDER['Devices'],
 }
 
 # Single-token first-line keywords for the row-label OCR classifier.
@@ -498,6 +521,14 @@ def _detect_right_edge_adaptive_bg(img_hsv: np.ndarray, y0: int, y1: int,
 # Row reconstruction
 # ----------------------------------------------------------------------------
 
+def _row_steps(idx_a: int, idx_b: int) -> tuple[int, bool]:
+    """Rows from row idx_a down to row idx_b (idx_a < idx_b), and whether that
+    count is certain. Optional rows between them are counted as absent; the
+    count is certain only when there are none."""
+    between = [i for i in range(idx_a + 1, idx_b) if i in _OPTIONAL_IDX]
+    return idx_b - idx_a - len(between), not between
+
+
 def _rows_from_filtered_hits(filtered: list[dict], row_pitch: int) -> list[int]:
     """Compute visible row cy positions from filtered OCR hits.
     Between consecutive OCR cys, insert round(gap/row_pitch) - 1 interpolated
@@ -593,18 +624,24 @@ def detect_eq_geometry(img: np.ndarray,
         return None
     panel_x_start = int(median(x_starts))
 
-    # row_pitch from canonical-idx-aware cy gaps
+    # row_pitch from the cy gap between consecutive read labels, divided by
+    # the number of rows between them. That number is certain only when no
+    # optional row lies between the two (_row_steps); such pairs are used
+    # whenever there is one. Otherwise every pair is used assuming its
+    # optional rows absent — the common case in cargo — and the log says so.
     items = sorted(eq_by_idx.items())
-    pitches: list[float] = []
-    for i in range(1, len(items)):
-        idx_prev, h_prev = items[i - 1]
-        idx_curr, h_curr = items[i]
-        steps = idx_curr - idx_prev
-        if steps <= 0:
-            continue
-        pitches.append((h_curr['cy'] - h_prev['cy']) / steps)
+    certain: list[float] = []
+    assumed: list[float] = []
+    for (idx_prev, h_prev), (idx_curr, h_curr) in zip(items, items[1:]):
+        steps, sure = _row_steps(idx_prev, idx_curr)
+        (certain if sure else assumed).append((h_curr['cy'] - h_prev['cy']) / steps)
+    pitches = certain or assumed
     if not pitches:
         return None
+    if not certain:
+        _log.info(f'eq_geometry: row pitch from {len(assumed)} label pair(s) '
+                  f'with an optional row between them, assumed absent — '
+                  f'no pair of adjacent fixed rows was read')
     row_pitch = int(round(median(pitches)))
     est_dx = row_pitch * DX_RATIO
 
@@ -621,7 +658,7 @@ def detect_eq_geometry(img: np.ndarray,
     # are present. STO right-justifies, so single-slot icons sit exactly
     # at panel_right.
     x_search_start = int(panel_x_start + 4.5 * est_dx)
-    x_search_end_tight = min(W - 1, int(panel_x_start + 6.05 * est_dx))
+    x_search_end_tight = min(W - 1, int(panel_x_start + RIGHT_SEARCH_END * est_dx))
     # Wider range for the multi-cell fallback: est_dx can underestimate
     # true dx by up to ~1.5 px/cell (DX_RATIO stdev ≈ 0.03), so by
     # 6 cells the tight bound may sit ~6-9 px short of the real right

@@ -76,7 +76,7 @@ substituting for the other.
 | `mode` | `v8` when the right edge landed on real icons, else `MATH_FALLBACK` |
 
 The module docstring carries the full step list and the derivation of
-`DX_RATIO = 0.725` in `eq_geometry.py`. Two steps matter for correctness
+`DX_RATIO = 0.725` in `eq_geometry.py`. Three steps matter for correctness
 beyond what the code states:
 
 ### Every keyword hit survives to the column filter
@@ -106,6 +106,47 @@ When two hits in the label column map to the same canonical index
 label's own height. Further apart they are different rows, and averaging
 would place the row where no row exists; the more confident hit wins
 instead.
+
+### Row pitch counts only the rows it can be sure of
+
+`row_pitch` is read from the labels OCR found: for two consecutive labels,
+the gap between them divided by the number of rows that separate them. That
+number comes from `STD_ORDER`, the rows in the order the game draws them
+(table in [STO slot rules](sto_slots_rules.md)). It is only known when no
+optional row (`OPTIONAL_ROWS`: Sec-Def, Aft, Experimental, Universal
+Consoles, Hangars) lies between the two labels — such a row is drawn on
+some ships and not on others. `_row_steps` makes that call, and only pairs
+with a certain count feed the median. If OCR read no such pair, every pair
+is used with its optional rows counted absent, and the log says so
+(`row pitch from N label pair(s) with an optional row between them`). On
+the 109 annotated space screenshots that fallback never fired.
+
+Until 2026-09-27 `STD_ORDER` followed the slot *groups* in the rules
+document — Aft and Experimental second and third — and every pair was
+used. Pairs such as Fore → Aft or Shield → Devices then gave 5× or 2× the
+real pitch, and Aft → Deflector a negative one. The median still landed
+within a pixel, which is why no row went missing (1236 of 1240 GT rows
+before and after), but the pitch read about 1 px short of the truth, and
+now equals it.
+
+The right-edge scan's search window, `RIGHT_SEARCH_END` cells of `est_dx`
+(`row_pitch × DX_RATIO`) from `panel_x_start`, was tuned against that short
+pitch. With the true pitch it reaches ~4 px further and on 9 screenshots
+picks up bright pixels just past the icon. Measured through the shipped
+importer, OCR on, 3206 confirmed equipment boxes
+(`dev/measure_eq_right_edge.py`):
+
+| | located | right slot | right item |
+|---|---|---|---|
+| before the fix | 3188 | 3185 | 3146 |
+| fixed, `RIGHT_SEARCH_END = 6.05` | 3188 | 3185 | 3146 |
+| fixed, `RIGHT_SEARCH_END = 6.00` | 3184 | 3182 | 3135 |
+
+So the window stays at 6.05. Mean IoU against the confirmed boxes fell
+from 0.991 to 0.977; most of those boxes are the old detector's output,
+accepted, so that figure favours the old geometry by construction and
+cannot separate a real shift from the bias. `DX_RATIO` was re-derived
+against the true pitch and came out 0.727, so it is unchanged.
 
 ## 2. Row → slot labelling — `_detect_via_pixel_analysis`
 
