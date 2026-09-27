@@ -27,6 +27,7 @@ except Exception:
     _slog = log
 
 from warp import config
+from warp.recognition import space_eq_rows as _SPACE_ROWS
 
 SCREENSHOT_EXTENSIONS = {'.png', '.jpg', '.jpeg', '.webp', '.bmp'}
 
@@ -212,21 +213,12 @@ KEEP_LOW_CONF_GRID_BBOXES = True
 # This order NEVER changes regardless of ship type.
 # Optional slots (mandatory=False) may simply be absent for a given ship.
 
+# Order and presence come from space_eq_rows.ROWS, the one table of the
+# space panel's rows; this is its per-slot view for the matcher.
 SPACE_SLOT_ORDER: list[dict] = [
-    {'name': 'Fore Weapons',         'key': 'fore_weapons',  'mandatory': True,  'max': 5, 'weapon': True,  'exp': False},
-    {'name': 'Deflector',            'key': 'deflector',     'mandatory': True,  'max': 1, 'weapon': False, 'exp': False},
-    {'name': 'Sec-Def',              'key': 'sec_def',       'mandatory': False, 'max': 1, 'weapon': False, 'exp': False},
-    {'name': 'Engines',              'key': 'engines',       'mandatory': True,  'max': 1, 'weapon': False, 'exp': False},
-    {'name': 'Warp Core',            'key': 'core',          'mandatory': True,  'max': 1, 'weapon': False, 'exp': False},
-    {'name': 'Shield',               'key': 'shield',        'mandatory': True,  'max': 1, 'weapon': False, 'exp': False},
-    {'name': 'Aft Weapons',          'key': 'aft_weapons',   'mandatory': False, 'max': 5, 'weapon': True,  'exp': False},
-    {'name': 'Experimental',         'key': 'experimental',  'mandatory': False, 'max': 1, 'weapon': True,  'exp': True},
-    {'name': 'Devices',              'key': 'devices',       'mandatory': True,  'max': 6, 'weapon': False, 'exp': False},
-    {'name': 'Universal Consoles',   'key': 'uni_consoles',  'mandatory': False, 'max': 3, 'weapon': False, 'exp': False},
-    {'name': 'Engineering Consoles', 'key': 'eng_consoles',  'mandatory': True,  'max': 5, 'weapon': False, 'exp': False},
-    {'name': 'Science Consoles',     'key': 'sci_consoles',  'mandatory': True,  'max': 5, 'weapon': False, 'exp': False},
-    {'name': 'Tactical Consoles',    'key': 'tac_consoles',  'mandatory': True,  'max': 5, 'weapon': False, 'exp': False},
-    {'name': 'Hangars',              'key': 'hangars',       'mandatory': False, 'max': 4, 'weapon': False, 'exp': False},
+    {'name': r.slot, 'key': r.key, 'mandatory': not r.optional,
+     'max': r.max, 'weapon': r.weapon, 'exp': r.exp}
+    for r in _SPACE_ROWS.ROWS
 ]
 
 GROUND_SLOT_ORDER: list[dict] = [

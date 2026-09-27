@@ -77,7 +77,7 @@ build type:
 
 | Source | Slots capped at one |
 |---|---|
-| `SPACE_SLOT_ORDER` (`warp_importer.py`) | `Deflector`, `Sec-Def`, `Engines`, `Warp Core`, `Shield`, `Experimental` |
+| `SPACE_SLOT_ORDER` (`warp_importer.py`, built from `space_eq_rows.ROWS`) | `Deflector`, `Sec-Def`, `Engines`, `Warp Core`, `Shield`, `Experimental` |
 | `GROUND_SLOT_ORDER` (`warp_importer.py`) | `Kit`, `Body Armor`, `EV Suit`, `Personal Shield` |
 | `SPEC_SLOT_ORDER` (`warp_importer.py`) | `Primary Specialization`, `Secondary Specialization` |
 | ship info (no `max` entry — one per screenshot by definition) | `Ship Name`, `Ship Type`, `Ship Tier` |

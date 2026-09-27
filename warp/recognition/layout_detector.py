@@ -29,6 +29,7 @@ from warp import userdata as _userdata
 from warp.recognition import boff_marker as _boff_marker
 from warp.recognition import trait_grid as _trait_grid
 from warp.recognition.eq_geometry import detect_eq_geometry, EQGeometry, STD_ORDER
+from warp.recognition import space_eq_rows as _SPACE_ROWS
 from warp.recognition.ground_eq_geometry import (
     detect_ground_eq_geometry,
     project_cells as _project_ground_cells,
@@ -38,12 +39,8 @@ from warp.recognition.ground_eq_geometry import (
     SLOT_WEAPONS as _G_WEAPONS,
 )
 
-# STD_ORDER (eq_geometry) uses 'Shields' (plural); production uses 'Shield'.
-# All other names match 1:1.
-_STD_IDX_TO_PROD_SLOT: dict[int, str] = {
-    idx: ('Shield' if name == 'Shields' else name)
-    for name, idx in STD_ORDER.items()
-}
+# Row index (eq_geometry.STD_ORDER / EQGeometry.eq_label_cys) → slot name.
+_STD_IDX_TO_PROD_SLOT: dict[int, str] = dict(_SPACE_ROWS.SLOT_BY_INDEX)
 
 
 def drop_boxes_on_text(result: dict, ocr_tokens: list[dict] | None,
@@ -577,14 +574,10 @@ CANONICAL_LAYOUT_FILENAME = 'canonical_layout.json'
 # Minimum brightness score for canonical layout to be accepted
 _CANONICAL_MIN_SCORE    = 0.35
 
-# Slot order for space builds
-# Slot names must match warp_importer.py SPACE_SLOT_ORDER exactly
-SPACE_SLOT_ORDER_STANDARD = [
-    'Fore Weapons', 'Deflector', 'Engines', 'Warp Core', 'Shield',
-    'Aft Weapons', 'Devices', 'Universal Consoles', 'Engineering Consoles',
-    'Science Consoles', 'Tactical Consoles',
-]
-SPACE_SLOT_ORDER_CARRIER = SPACE_SLOT_ORDER_STANDARD + ['Hangars']
+# Slot order for space builds — views of space_eq_rows.ROWS: the rows assumed
+# for any ship, and a carrier's.
+SPACE_SLOT_ORDER_STANDARD = list(_SPACE_ROWS.BASE_ORDER)
+SPACE_SLOT_ORDER_CARRIER = list(_SPACE_ROWS.CARRIER_ORDER)
 
 GROUND_SLOT_ORDER = [
     'Kit Modules', 'Kit', 'Body Armor', 'EV Suit', 'Personal Shield', 'Weapons',
@@ -2796,36 +2789,13 @@ class LayoutDetector:
             if std_idx in _STD_IDX_TO_PROD_SLOT
         }
 
-        # Positional fallback: extend slot_order with optional slots present
-        # in profile (Sec-Def after Deflector, Experimental/Hangars after
-        # Aft Weapons). Mirrors _detect_via_ocr_anchored extended_order logic
-        # so ships with Secondary Deflector or Experimental Weapons don't
-        # shift rows when OCR misses the label for those rows.
-        #
-        # ShipDB profile is the source of truth for slot presence: when the
-        # profile is known, drop base slots the ship has 0 of (e.g. ships
-        # without Universal Consoles) so the positional sequence does not
-        # reserve a row for them and shove the real rows below into the
-        # wrong label. Unknown profile → keep full slot_order (no regression).
-        profile_known = bool(profile)
-        extended_order: list[str] = []
-        for s in slot_order:
-            if profile_known and profile.get(s, -1) == 0:
-                continue
-            if s in extended_order:
-                continue
-            extended_order.append(s)
-            if s == 'Deflector' and profile.get('Sec-Def', 0) > 0 and 'Sec-Def' not in extended_order:
-                extended_order.append('Sec-Def')
-            # Experimental only. `Hangars` used to be inserted here too, and
-            # the game draws it LAST, not after Aft Weapons — which put it at
-            # position 6 of the sequence and shifted every row below it down by
-            # one. It is already last in SPACE_SLOT_ORDER_CARRIER, so it needs
-            # no insertion; the `s in extended_order` guard above keeps it from
-            # being appended twice if a caller's order lists it early.
-            if s == 'Aft Weapons' and profile.get('Experimental', 0) > 0 \
-                    and 'Experimental' not in extended_order:
-                extended_order.append('Experimental')
+        # Positional fallback for rows OCR missed. The rows this ship draws,
+        # in the order the game draws them:
+        # optional rows the profile grants are put in their place, rows it
+        # counts as 0 are dropped so the positional sequence does not reserve
+        # a row for them — see space_eq_rows.row_sequence, shared with the
+        # OCR-anchored path below.
+        extended_order = _SPACE_ROWS.row_sequence(slot_order, profile)
 
         # Rows OCR could not read are named from the rows it could, using the
         # sequence the ship's profile says this panel holds — see
@@ -3227,23 +3197,12 @@ class LayoutDetector:
         # Interpolate cy for slots missing from OCR but present in profile.
         # STO equipment rows are sequential in slot_order at consistent row_h spacing,
         # so a gap in OCR can be filled from neighboring found labels.
-        # Insert optional slots (Sec-Def/Hangars/Experimental) at their canonical
-        # STO UI positions so linear interpolation counts the correct number of
-        # rows between anchors (see docs/sto_slots_rules.md):
-        #   - Secondary Deflector: after Deflector, before Engines (Science Vessels)
-        #   - Hangars: after Aft Weapons (Carriers)
-        #   - Experimental Weapon: after Aft Weapons (Escorts/Destroyers/etc.)
-        extended_order: list[str] = []
-        for s in slot_order:
-            extended_order.append(s)
-            if s == 'Deflector' and profile.get('Sec-Def', 0) > 0 and 'Sec-Def' not in extended_order:
-                extended_order.append('Sec-Def')
-            if s == 'Aft Weapons':
-                for opt in ('Hangars', 'Experimental'):
-                    if profile.get(opt, 0) > 0 and opt not in extended_order:
-                        extended_order.append(opt)
-        active_slots = [s for s in extended_order
-                        if profile.get(s, SLOT_DEFAULT_COUNTS.get(s, 1)) > 0]
+        # The rows this ship draws, in on-screen order, so interpolation counts
+        # the right number of rows between two anchors. Shared with
+        # _detect_via_pixel_analysis (space_eq_rows.row_sequence). The copy that
+        # lived here inserted Hangars after Aft Weapons, which placed an unread
+        # Hangars label between Aft and Devices, where no row exists.
+        active_slots = _SPACE_ROWS.row_sequence(slot_order, profile)
         labeled_idx = [i for i, s in enumerate(active_slots) if s in eq_labels]
         for i, slot in enumerate(active_slots):
             if slot in eq_labels:

@@ -55,6 +55,7 @@ import cv2
 import numpy as np
 
 from warp.debug import log as _log
+from warp.recognition import space_eq_rows as _ROWS
 
 def _get_easyocr_reader():
     """The process-wide reader — see `text_extractor.shared_reader`.
@@ -85,36 +86,15 @@ RIGHT_SEARCH_END = 6.05
 # Single-slot rows whose right edge is reliable for anchoring panel_right.
 TARGET_SINGLE_SLOTS = {'Deflector', 'Engines', 'Warp Core', 'Shields'}
 
-# EQ rows in the order the game draws them, top to bottom (measured on the
-# confirmed boxes of every annotated SPACE_EQ / SPACE_MIXED screenshot). The
-# index is the row's position when every row is present. Until 2026-09-27
-# this held the order the slot types are *listed* in docs/sto_slots_rules.md
-# — weapons, then core equipment — which put Aft and Experimental second and
-# third, and skewed every row-pitch pair that spanned them.
-STD_ORDER = {
-    'Fore Weapons':         0,
-    'Deflector':            1,
-    'Sec-Def':              2,
-    'Engines':              3,
-    'Warp Core':            4,
-    'Shields':              5,
-    'Aft Weapons':          6,
-    'Experimental':         7,
-    'Devices':              8,
-    'Universal Consoles':   9,
-    'Engineering Consoles': 10,
-    'Science Consoles':     11,
-    'Tactical Consoles':    12,
-    'Hangars':              13,
-}
+# Row label → the row's position when every row is present, in the order the
+# game draws them. A view of space_eq_rows.ROWS, keyed by the label the game
+# prints (Shields, not the slot name Shield) because that is what OCR reads.
+STD_ORDER = dict(_ROWS.LABEL_INDEX)
 
-# Rows a ship may not have (docs/sto_slots_rules.md; Aft is 0 on 28 ships in
-# cargo). Between two read labels, each of these may or may not be drawn, so
-# the number of rows separating the labels is only known when none lies
-# between them.
-OPTIONAL_ROWS = frozenset({
-    'Sec-Def', 'Aft Weapons', 'Experimental', 'Universal Consoles', 'Hangars',
-})
+# Rows a ship may not have. Between two read labels each of these may or may
+# not be drawn, so the rows separating the labels are only known when none of
+# them lies between.
+OPTIONAL_ROWS = frozenset(r.label for r in _ROWS.ROWS if r.optional)
 _OPTIONAL_IDX = frozenset(STD_ORDER[n] for n in OPTIONAL_ROWS)
 
 # German UI variants — kept as a base, extended below from ui_translations.csv.

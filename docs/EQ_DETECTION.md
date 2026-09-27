@@ -111,8 +111,9 @@ instead.
 
 `row_pitch` is read from the labels OCR found: for two consecutive labels,
 the gap between them divided by the number of rows that separate them. That
-number comes from `STD_ORDER`, the rows in the order the game draws them
-(table in [STO slot rules](sto_slots_rules.md)). It is only known when no
+number comes from `STD_ORDER`, the rows in the order the game draws them —
+a view of `space_eq_rows.ROWS`, keyed by the printed label (table in
+[STO slot rules](sto_slots_rules.md)). It is only known when no
 optional row (`OPTIONAL_ROWS`: Sec-Def, Aft, Experimental, Universal
 Consoles, Hangars) lies between the two labels — such a row is drawn on
 some ships and not on others. `_row_steps` makes that call, and only pairs
@@ -165,12 +166,15 @@ for each cy in geom.row_cys:
 
 - `cy_to_slot` (`layout_detector.py`) is built from
   `geom.eq_label_cys` through `_STD_IDX_TO_PROD_SLOT`
-  (`layout_detector.py`), which maps the geometry module's canonical
-  names to production slot names (`Shields` → `Shield`).
-- `extended_order` (`layout_detector.py`) starts from
-  `SPACE_SLOT_ORDER_STANDARD` (`layout_detector.py`), drops slots the
-  profile counts as 0, and inserts optional ones (`Sec-Def` after
-  `Deflector`; `Experimental` / `Hangars` after `Aft Weapons`).
+  (`layout_detector.py`), which maps a row's index to its slot name.
+- `extended_order` is `space_eq_rows.row_sequence(slot_order, profile)`:
+  the rows this ship draws, in the order the game draws them. It drops rows
+  the profile counts as 0 and puts each optional row the profile grants at
+  its place in `space_eq_rows.ROWS` — Sec-Def under Deflector, Experimental
+  under Aft Weapons, Hangars last. The OCR-anchored fallback
+  (`_detect_via_ocr_anchored`) builds its sequence with the same function;
+  until 2026-09-27 it had its own copy, which put Hangars after Aft
+  Weapons and so placed an unread Hangars label between Aft and Devices.
 - The collision guard (`LayoutDetector._detect_via_pixel_analysis` in `layout_detector.py`) enforces **EQ-1**.
   Without it, `result[slot_name] = bboxes` replaced an OCR-anchored row's
   bboxes with a guessed row's, and the anchored row was left with nothing

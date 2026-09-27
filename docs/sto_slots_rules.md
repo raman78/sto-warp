@@ -27,12 +27,17 @@ A ship that lacks an optional row simply does not draw it; the rows below
 move up. Every row is right-justified against the panel's right edge and
 holds at most 6 cells.
 
-> **WARP:** `STD_ORDER` in `warp/recognition/eq_geometry.py` is this table,
-> and `OPTIONAL_ROWS` beside it marks the optional rows. Until 2026-09-27
-> `STD_ORDER` followed the grouping below instead — Aft and Experimental
-> second and third — because this section had no on-screen order to copy.
-> Order measured from the confirmed boxes of every annotated SPACE_EQ /
-> SPACE_MIXED screenshot.
+> **WARP:** this table is `ROWS` in `warp/recognition/space_eq_rows.py`, the
+> only place the order is written. Every other view reads it:
+> `eq_geometry.STD_ORDER` / `OPTIONAL_ROWS` (keyed by the printed label,
+> *Shields*), the layout detector's base and carrier orders, the importer's
+> `SPACE_SLOT_ORDER`, and `row_sequence`, which builds the rows one ship
+> draws from its slot counts. Until 2026-09-27 the order was typed out five
+> times and the copies drifted: `STD_ORDER` followed the grouping below —
+> Aft and Experimental second and third — because this section had no
+> on-screen order to copy, and one of the layout detector's two sequence
+> builders put Hangars after Aft. Order measured from the confirmed boxes of
+> every annotated SPACE_EQ / SPACE_MIXED screenshot.
 
 ### Weaponry
 
