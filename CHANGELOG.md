@@ -8,6 +8,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [Unreleased]
+
+### Fixed
+
+- **No more "skipping invalid annotation (empty name)" for every ship name
+  on each sync.** WARP CORE kept a picture of your ship's name, which it
+  never shares, and the sync then turned each one down. Those pictures are
+  no longer made, and the ones already there are removed when WARP CORE
+  starts.
+- **Fewer "one picture confirmed under different names" warnings for ship
+  tiers.** A tier whose box covers the whole ship class line is not saved as
+  a picture of a tier, but older versions had already saved some. They are
+  removed on start, and the log names each screenshot so you can draw a box
+  around the tier badge instead. The tier itself stays in the build.
+
 ## [1.0.39] — 2026-09-26
 
 ### Added

@@ -47,7 +47,9 @@ against that anchor.
   bbox is a wrong training sample, not just a cosmetic defect.
 - **S3** — `Ship Name` is anchor-internal. It is never emitted as a slot —
   the comment guarding that same block says why — because it identifies the
-  player, not the build.
+  player, not the build. Where a `Ship Name` box exists in the training
+  store, it is kept for its position only: its name is stored empty and no
+  crop picture is written (`_crop_refused`).
 - **S4** — A non-empty `ShipResolution.type` does **not** mean the class was
   recognised. When nothing matched, the OCR string is echoed back;
   `ShipResolution.matched` is the only honest signal.

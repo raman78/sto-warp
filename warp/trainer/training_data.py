@@ -199,6 +199,12 @@ class TrainingDataManager:
             self.migrate_crop_names()
         except Exception as e:
             logger.warning(f'TrainingDataManager: migrate_crop_names failed: {e}')
+        # Pictures that must not exist (Ship Name, class-line tiers), written
+        # by versions before the rule. Before the repair, which reads the index.
+        try:
+            self.sweep_refused_crops()
+        except Exception as e:
+            logger.warning(f'TrainingDataManager: sweep_refused_crops failed: {e}')
         # Auto-repair crop_index on startup (fixes entries from pre-fix versions)
         try:
             repaired = self.repair_crop_index()
@@ -691,6 +697,13 @@ class TrainingDataManager:
             logger.warning(f'_sync_crop_index: {image_path.name} is not on disk — '
                            f'crop for {ann.slot}={ann.name!r} left as it was')
             return
+        if self._crop_refused(key, ann.slot, ann.bbox):
+            # No picture and no index entry — an entry is what the uploader
+            # reads. One written before the rule existed goes now.
+            self._cleanup_crops_for_ann(key, ann.ann_id)
+            self._say_crop_refused(image_path.name, ann)
+            ann.crop_name = ''
+            return
         fname     = self._crop_fname(key, ann.slot, ann.name, ann.ann_id)
         out_path  = self._dir / self.CROPS_DIR / fname
 
@@ -749,10 +762,15 @@ class TrainingDataManager:
         a box of its own, and then the tier is known to everybody instead of to
         nobody.
         """
+        return self._tier_box_shares_class_line(self._image_id(image_path), bbox)
+
+    def _tier_box_shares_class_line(self, image_key: str,
+                                    bbox: tuple | None) -> bool:
+        """`tier_box_is_the_class_line` for a screenshot known by its key, so
+        the startup sweep can ask without the screenshot on disk."""
         if not bbox or len(bbox) < 4:
             return False
-        key = self._image_id(image_path)
-        for d in self._annotations.get(key, []):
+        for d in self._annotations.get(image_key, []):
             if d.get('slot') != 'Ship Type':
                 continue
             other = tuple(d.get('bbox') or ())
@@ -762,24 +780,47 @@ class TrainingDataManager:
                 return True
         return False
 
+    def _crop_refused(self, image_key: str, slot: str, bbox) -> bool:
+        """Must this annotation have no crop picture at all?
+
+        Two cases, and the annotation itself is kept in both:
+          - `Ship Name`: the slot is position-only. The picture is the
+            player's ship name, which identifies the player (S3 in
+            SHIP_INFO_DETECTION.md), and its label is always empty.
+          - a `Ship Tier` whose box is the class line — see
+            `tier_box_is_the_class_line`.
+
+        One rule for every writer — export, index sync, index repair and the
+        startup sweep — so none of them can put back what another removed.
+        """
+        if slot == 'Ship Name':
+            return True
+        return (slot == 'Ship Tier'
+                and self._tier_box_shares_class_line(image_key, tuple(bbox or ())))
+
+    @staticmethod
+    def _say_crop_refused(image_name: str, ann: Annotation) -> None:
+        # Ship Name is refused by design and there is nothing to correct, so
+        # it is not announced. A tier is: the user can draw the badge a box.
+        if ann.slot == 'Ship Tier':
+            logger.info(
+                f'{image_name}: no crop for Ship Tier {ann.name!r} — its '
+                f'box {tuple(ann.bbox)} is the ship class line, not the badge. '
+                f'Draw a box around the tier badge to contribute it.')
+
     def _export_crop(self, image_path: Path, ann: Annotation, img=None):
         """
         Crops the icon region from the original screenshot and saves it as PNG.
         Filename is derived from item name + slot (for easy dataset browsing).
         TEXT_LEARNING_SLOTS get a crop so the text region can be uploaded for OCR training.
 
-        One case is refused: a `Ship Tier` whose box is the class line — see
-        `tier_box_is_the_class_line`. The annotation is kept, so the tier is
-        still in the build and still shown for review; only the picture is not
-        written, because that picture is of the wrong thing.
+        Refused, per `_crop_refused`: `Ship Name`, and a `Ship Tier` whose box
+        is the class line. The annotation is kept, so it is still in the build
+        and still shown for review; only the picture is not written.
         """
         import cv2
-        if ann.slot == 'Ship Tier' and self.tier_box_is_the_class_line(
-                image_path, tuple(ann.bbox or ())):
-            logger.info(
-                f'{image_path.name}: no crop for Ship Tier {ann.name!r} — its '
-                f'box {tuple(ann.bbox)} is the ship class line, not the badge. '
-                f'Draw a box around the tier badge to contribute it.')
+        if self._crop_refused(self._image_id(image_path), ann.slot, ann.bbox):
+            self._say_crop_refused(image_path.name, ann)
             ann.crop_name = ''
             return
         if img is None:
@@ -844,6 +885,8 @@ class TrainingDataManager:
                     continue
                 ann = self._dict_to_ann(d)
                 if not ann.name:
+                    continue
+                if self._crop_refused(image_key, ann.slot, ann.bbox):
                     continue
                 fname = self._crop_fname(image_key, ann.slot, ann.name, ann.ann_id)
                 # Update crop_index entry to CONFIRMED
@@ -970,6 +1013,65 @@ class TrainingDataManager:
         for entry in lost[:20]:
             _slog.info(f'migrate_crop_names:   no crop: {entry}')
         return recut, renamed, len(lost)
+
+    def sweep_refused_crops(self) -> tuple[int, int]:
+        """Remove crop pictures written before `_crop_refused` existed.
+
+        Returns (ship_name_crops, class_line_tier_crops) removed.
+
+        Until 2026-09-27 every `Ship Name` got a PNG of the player's ship name,
+        indexed as confirmed; the uploader then refused each one on every sync
+        for its empty label. And tier crops cut from the class line before
+        `_export_crop` learned to refuse them stayed on disk, where they share
+        pixels with the `Ship Type` crop and were reported as one picture
+        confirmed under two names. The annotations stay; only the pictures
+        and their index entries go. No-op once none is left. Entries whose
+        annotation is gone, or named before the screenshot key was part of the
+        name, are left to `migrate_crop_names` and `cleanup_orphaned_crops`.
+        """
+        crops_dir = self._dir / self.CROPS_DIR
+        removed = {'Ship Name': 0, 'Ship Tier': 0}
+        tier_shots: list[str] = []
+        cleared = 0
+
+        def drop(fname: str) -> bool:
+            p = crops_dir / fname
+            had = self._crop_index.pop(fname, None) is not None or p.exists()
+            if p.exists():
+                p.unlink()
+            return had
+
+        for image_key, ann_list in self._annotations.items():
+            image_name = self._image_meta.get(image_key, {}).get('filename', image_key)
+            for d in ann_list:
+                slot = d.get('slot', '')
+                if not self._crop_refused(image_key, slot, d.get('bbox')):
+                    continue
+                targets = {f for f in self._crop_index
+                           if self._parse_crop_fname(f) == (image_key, d.get('ann_id', ''))}
+                if d.get('crop_name'):
+                    targets.add(Path(d['crop_name']).name)
+                    d['crop_name'] = ''
+                    cleared += 1
+                n = sum(drop(f) for f in targets)
+                removed[slot] += n
+                if n and slot == 'Ship Tier':
+                    tier_shots.append(f'{image_name} ({d.get("name", "")!r})')
+
+        n_name, n_tier = removed['Ship Name'], removed['Ship Tier']
+        if not (n_name or n_tier or cleared):
+            return 0, 0
+        self._dirty = True
+        self.save()
+        if n_name or n_tier:
+            from warp.debug import log as _slog
+            _slog.info(f'sweep_refused_crops: removed {n_name} Ship Name crops (the '
+                       f'player\'s ship name, never shared) and {n_tier} Ship Tier crops '
+                       f'cut from the class line')
+            for shot in tier_shots[:20]:
+                _slog.info(f'sweep_refused_crops:   {shot} — draw a box around the '
+                           f'tier badge in WARP CORE to contribute the tier')
+        return n_name, n_tier
 
     def cleanup_orphaned_crops(self) -> tuple[int, int, int]:
         """Sweep stale data left by the pre-fix correction bugs.

@@ -417,6 +417,24 @@ never have reached them. Tier badges now have their own minimum
 (`MIN_TIER_CROP_W`, 20 px), and only valid results are cached. The refusal
 is written to the visible log, once per file.
 
+**Some pictures are never written at all.** `_crop_refused` in
+`training_data.py` names two, and every writer asks it — the crop export, the
+index sync, the index repair — so none can put back what another removed. A
+`Ship Name` has no picture: the slot is position-only (S3 in
+[`SHIP_INFO_DETECTION.md`](SHIP_INFO_DETECTION.md)), its label is always
+empty, and the strip shows the player's ship name. A `Ship Tier` whose box is
+the class line has none either, for the reason given in
+`tier_box_is_the_class_line`. In both cases the annotation stays; only the
+picture and its index entry are withheld, so the uploader never sees them.
+Older versions wrote both, indexed as confirmed: every sync then refused each
+`Ship Name` for its empty label, and reported each class-line tier as one
+picture confirmed under two names, because its pixels are the `Ship Type`
+crop's. `sweep_refused_crops` removes those leftovers when the store opens
+and names each screenshot whose tier lost its picture, since drawing a box
+around the badge is what gets that tier shared. Measured on the maintainer's
+store 2026-09-27: 31 `Ship Name` crops and 49 class-line tier crops; the next
+uploader's selection went from 29 refusals and 3 name conflicts to none of either.
+
 ## 5c. Telling a lost upload from a lost vote
 
 Two failures look identical from outside and are opposite in meaning: a
