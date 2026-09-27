@@ -32,7 +32,7 @@ written for people who read or change the code.
 |---|---|
 | [`FAST_CORRECTION_MODE.md`](FAST_CORRECTION_MODE.md) | The throwaway workspace: staging, snapshot/restore, lifecycle |
 | [`REVIEW_MERGE.md`](REVIEW_MERGE.md) | How the review panel merges confirmed annotations with fresh detection |
-| [`gpu_setup.md`](gpu_setup.md) | Optional GPU acceleration — for trainers, not for recognition |
+| [`gpu_setup.md`](gpu_setup.md) | Optional GPU acceleration — for trainers, not for recognition; and what the windows set before they start (GPU hidden, one BLAS thread) |
 | [`RELEASE_HOWTO.md`](RELEASE_HOWTO.md) | Cutting a release (in Polish) |
 | [`MAINTAINER_TOOLS.md`](MAINTAINER_TOOLS.md) | Which diagnostic or repair tool answers which question, in both repos |
 

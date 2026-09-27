@@ -43,6 +43,36 @@ def _hide_gpu() -> None:
     log.info('GPU: hidden from this process — recognition runs on the CPU')
 
 
+def _single_thread_blas() -> None:
+    """Keep numpy's OpenBLAS to one thread so it does not starve torch.
+
+    Every icon match runs the embedder (torch, its own thread pool) and then
+    a numpy product against the gallery (OpenBLAS, a second pool). After the
+    product the OpenBLAS threads keep spinning on the cores, and the next
+    convolution fights them for CPU. Measured 2026-09-27 on the shipped
+    `classify_patch`: 47.9 ms per call by default, 9.1 ms with one BLAS
+    thread. Whole recognition of one screenshot that reaches the full scan:
+    98.8 s → 33.2 s; four that do not: 43.7 s → 36.0 s. Results identical
+    item for item in both runs.
+
+    OpenBLAS reads the variable when numpy loads it, so this must run before
+    anything imports numpy; before the GUI modules are imported is early
+    enough. A value set by the user is respected.
+    """
+    import os
+    if 'OPENBLAS_NUM_THREADS' in os.environ:
+        log.info(f'CPU: OPENBLAS_NUM_THREADS={os.environ["OPENBLAS_NUM_THREADS"]!r} '
+                 f'set by the user — left as it is')
+        return
+    os.environ['OPENBLAS_NUM_THREADS'] = '1'
+    log.info('CPU: numpy BLAS limited to one thread — torch keeps the cores')
+
+
+def _prepare_window_process() -> None:
+    _hide_gpu()
+    _single_thread_blas()
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = argparse.ArgumentParser(
         prog='sto-warp',
@@ -104,7 +134,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     if args.cmd == 'warp-core':
-        _hide_gpu()
+        _prepare_window_process()
         from PySide6.QtWidgets import QApplication
         from warp.trainer.trainer_window import WarpCoreWindow
         app = QApplication.instance() or QApplication(argv or sys.argv)
@@ -113,12 +143,12 @@ def main(argv: list[str] | None = None) -> int:
         return app.exec()
 
     if args.cmd == 'gui':
-        _hide_gpu()
+        _prepare_window_process()
         from warp.gui.warp_window import main as gui_main
         return gui_main(argv)
 
     if args.cmd in (None, 'launcher'):
-        _hide_gpu()
+        _prepare_window_process()
         from warp.gui.launcher import main as launcher_main
         return launcher_main(argv)
 
