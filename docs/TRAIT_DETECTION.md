@@ -183,7 +183,7 @@ every trait-bearing build type:
 | Build type | Behaviour |
 |------------|-----------|
 | `SPACE_TRAITS` / `GROUND_TRAITS` | Strategy 0 trait_grid (≥5 bboxes), falls back to OCR-header `_detect_traits` |
-| `SPACE_MIXED` / `GROUND_MIXED` | trait_grid runs once and is merged into whichever equipment chain wins (learned / OCR-anchored / full_scan). Trait sections **overwrite** any equipment-chain trait output, since trait_grid classifies each row-group independently and is more accurate. |
+| `SPACE_MIXED` / `GROUND_MIXED` | trait_grid runs once and is merged into whichever equipment chain wins (geom/pixel / OCR-anchored / learned). When none of them anchors the equipment panel, the screen keeps the trait grid and the marker BOFFs and nothing else. Trait sections **overwrite** any equipment-chain trait output, since trait_grid classifies each row-group independently and is more accurate. |
 
 ### What the merge may and may not replace
 

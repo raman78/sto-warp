@@ -1,7 +1,7 @@
 # WARP ML Roadmap — Layout + Content Recognition
 
 **Updated:** 2026-04-10
-**Status:** v2.9 — P0–P11 complete. Full scan (Item 12) implemented.
+**Status:** v2.9 — P0–P11 complete. Full scan (Item 12) implemented, then removed 2026-09-27 (see below).
 
 ---
 
@@ -14,18 +14,25 @@ Four strategies, tried in order:
 | Strategy | Screen types | Mechanism |
 |----------|-------------|-----------|
 | 1 — Learned layouts | All | `anchors.json` from confirmed annotations — most accurate when populated |
-| FS — Full scan | MIXED, BOFFS | OCR labels + EfficientNet dense scan + fusion scoring — handles arbitrary layouts |
 | 2 — Pixel analysis | EQ, TRAITS | Right-to-left brightness scan, ShipDB profile floor |
 | 2.5 — Canonical | EQ, TRAITS | Median Y from anchors.json + brightness score |
 | 3 — OCR labels | EQ | EasyOCR slot label positions |
 | 4 — Static anchors | All | Hardcoded `SPACE_ANCHORS_REL` — last resort |
 
-**Full scan (Strategy FS) — implemented 2026-04-10:**
-- Dense sliding window (stride = icon_est//2) across full image
-- `classify_patch()` → EfficientNet ML-only classification per patch
-- NMS deduplication → row clustering by Y proximity
-- Per-row scoring: `0.65 × type_score + 0.35 × ocr_score`
-- Used for MIXED and BOFFS when learned layouts are absent
+**Full scan (Strategy FS) — implemented 2026-04-10, removed 2026-09-27.**
+A sliding window over the whole screenshot, every window sent through the icon
+matcher, rows formed by height alone and scored 65% on item type, 35% on
+distance to an OCR label. It was the primary MIXED strategy before the
+equipment geometry, BOFF marker and trait-grid detectors existed, and a
+fallback after them. Measured before removal over the 98 annotated
+screenshots whose type can reach it (MIXED and BOFFS), with every OCR read
+returning no text so that no label existed anywhere: the final layout was
+identical box for box with and without it — 2977 of 4771 ground-truth boxes
+located either way — while it cost about 12 s on each of the 63 screenshots
+it ran on. Rows formed by height alone mix the equipment, trait and BOFF
+panels that sit side by side, so no item type dominates a row, and without
+a label no row clears the score threshold. The case it was meant to rescue —
+a screenshot whose equipment panel carries no labels — is still open.
 
 ### Icon recognition (SETSIconMatcher)
 

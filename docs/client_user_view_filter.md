@@ -123,14 +123,12 @@ not inflate the number.
 via `_VIRTUAL_NAMES` when it collects the abilities that describe a seat, so a
 seat is never labelled from an empty cell.
 
-### 2.5 `__boff_*` never leaves the layout detector
+### 2.5 `__boff_*` no longer exists
 
-`LayoutDetector._detect_via_full_scan` tags a detection with
-`__boff_<profession>` as its *item type*, and `_score_row_for_slot` reads that
-tag when scoring a row against a candidate slot. `_get_item_type` returns the
-same form. Nothing outside `layout_detector.py` reads these names — they are
-row hints on a detection tuple, never an item name — so no downstream filter
-is needed for them, and none exists.
+The full-image scan in `LayoutDetector` tagged a detection with
+`__boff_<profession>` as its *item type*, a row hint on a detection tuple that
+never became an item name. The scan was removed on 2026-09-27, and nothing
+produces the tag any more, so no filter is needed for it and none exists.
 
 ### 2.6 Trainer UI — display, and deliberate availability
 

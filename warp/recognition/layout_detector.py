@@ -610,7 +610,7 @@ SLOT_LABEL_ALIASES = {
     'science consoles': 'Science Consoles', 'science': 'Science Consoles',
     'tactical consoles': 'Tactical Consoles', 'tactical': 'Tactical Consoles',
     'hangar': 'Hangar', 'hangars': 'Hangar',
-    # Traits (used by full scan OCR)
+    # Trait section labels (read by _ocr_section_labels)
     'personal space traits': 'Personal Space Traits',
     'personal traits':       'Personal Space Traits',
     'starship traits':       'Starship Traits',
@@ -704,102 +704,7 @@ def is_slot_label_text(text_lower: str) -> bool:
         for w in words)
 
 
-# ── Full-scan constants ───────────────────────────────────────────────────────
-_SCAN_CONF_MIN  = 0.45   # min ML confidence to keep a sliding-window detection
-_SCAN_NMS_IOU   = 0.50   # IoU threshold for greedy NMS
-_SCAN_ROW_GAP   = 0.50   # fraction of icon_est: max Y gap within a row
-
-# Sanity caps for FullScan output. FullScan is a fallback for cases where the
-# dedicated panel detectors (boff_marker, trait_grid, equipment row scan)
-# failed. When it produces output well beyond any realistic STO panel
-# capacity, that's a strong sign the input is not a recognisable game panel
-# (e.g. a cropped UI fragment, a non-game image, or a panel the dedicated
-# detectors should have handled). Better to bail than to ship hundreds of
-# spurious crops to the icon matcher.
-#
-# Per-slot cap: 25 covers the largest realistic slot (BOFFS max=20 per
-# profession category) with margin. Personal Traits cap at 10, Devices at 6.
-# Per-build totals: derived from SLOT_ORDER `max` sums + boff_marker
-# geometric cap (6 seats × 4 abilities = 24 for BOFF panels).
-_FULLSCAN_MAX_PER_SLOT = 25
-_FULLSCAN_MAX_TOTAL: dict[str, int] = {
-    'SPACE':         44,
-    'SPACE_EQ':      44,
-    'GROUND':        15,
-    'GROUND_EQ':     15,
-    'SPACE_TRAITS':  27,
-    'GROUND_TRAITS': 20,
-    'TRAITS':        47,  # mixed = space (27) + ground (20)
-    'BOFFS':         24,
-    'SPACE_BOFFS':   24,
-    'GROUND_BOFFS':  24,
-    'SPEC':           2,
-    'SPECIALIZATIONS': 2,
-    'SPACE_MIXED':   97,
-    'GROUND_MIXED':  61,
-}
-_FULLSCAN_DEFAULT_TOTAL = 100
-
-# Equipment item type → slot name (avoids circular import from warp_importer)
-_EQ_TYPE_TO_SLOT: dict[str, str] = {
-    'Ship Fore Weapon': 'Fore Weapons', 'Ship Weapon': 'Fore Weapons',
-    'Experimental Weapon': 'Experimental',
-    'Ship Aft Weapon': 'Aft Weapons',
-    'Ship Deflector Dish': 'Deflector', 'Ship Secondary Deflector': 'Sec-Def',
-    'Impulse Engine': 'Engines',
-    'Warp Engine': 'Warp Core', 'Singularity Engine': 'Warp Core',
-    'Ship Shields': 'Shield',
-    'Ship Device': 'Devices',
-    'Ship Engineering Console': 'Engineering Consoles',
-    'Ship Science Console': 'Science Consoles',
-    'Ship Tactical Console': 'Tactical Consoles',
-    'Universal Console': 'Universal Consoles',
-    'Hangar Bay': 'Hangars',
-    'Ground Weapon': 'Weapons',
-    'Body Armor': 'Body Armor', 'EV Suit': 'EV Suit',
-    'Personal Shield': 'Personal Shield',
-    'Kit': 'Kit', 'Kit Module': 'Kit Modules',
-    'Ground Device': 'Ground Devices',
-}
-
-# Valid equipment types per slot (mirrors warp_importer.SLOT_VALID_TYPES)
-_SCAN_SLOT_VALID_TYPES: dict[str, frozenset] = {
-    'Fore Weapons':           frozenset({'Ship Fore Weapon', 'Ship Weapon', 'Experimental Weapon'}),
-    'Aft Weapons':            frozenset({'Ship Aft Weapon',  'Ship Weapon', 'Experimental Weapon'}),
-    'Experimental':           frozenset({'Experimental Weapon'}),
-    'Deflector':              frozenset({'Ship Deflector Dish', 'Ship Secondary Deflector'}),
-    'Sec-Def':                frozenset({'Ship Secondary Deflector'}),
-    'Engines':                frozenset({'Impulse Engine'}),
-    'Warp Core':              frozenset({'Warp Engine', 'Singularity Engine'}),
-    'Shield':                 frozenset({'Ship Shields'}),
-    'Devices':                frozenset({'Ship Device'}),
-    'Engineering Consoles':   frozenset({'Ship Engineering Console', 'Universal Console'}),
-    'Science Consoles':       frozenset({'Ship Science Console',     'Universal Console'}),
-    'Tactical Consoles':      frozenset({'Ship Tactical Console',    'Universal Console'}),
-    'Universal Consoles':     frozenset({'Universal Console', 'Ship Tactical Console',
-                                         'Ship Engineering Console', 'Ship Science Console'}),
-    'Hangars':                frozenset({'Hangar Bay'}),
-    'Weapons':                frozenset({'Ground Weapon'}),
-    'Kit Modules':            frozenset({'Kit Module'}),
-    'Kit':                    frozenset({'Kit'}),
-    'Body Armor':             frozenset({'Body Armor'}),
-    'EV Suit':                frozenset({'EV Suit'}),
-    'Personal Shield':        frozenset({'Personal Shield'}),
-    'Ground Devices':         frozenset({'Ground Device'}),
-}
-
-# Trait category key → marker string used in type scoring
-_TRAIT_KEY_TO_MARKER: dict[tuple, str] = {
-    ('space',  'personal'):   '__trait_space_personal',
-    ('space',  'starship'):   '__trait_space_starship',
-    ('space',  'rep'):        '__trait_space_rep',
-    ('space',  'active_rep'): '__trait_space_active_rep',
-    ('ground', 'personal'):   '__trait_ground_personal',
-    ('ground', 'rep'):        '__trait_ground_rep',
-    ('ground', 'active_rep'): '__trait_ground_active_rep',
-}
-
-# Slot name → trait marker (reverse of above + starship)
+# Trait slot name → type marker
 _TRAIT_SLOT_MARKER: dict[str, str] = {
     'Personal Space Traits':  '__trait_space_personal',
     'Starship Traits':        '__trait_space_starship',
@@ -817,115 +722,6 @@ _SPACE_TRAIT_SLOTS = frozenset({
 _GROUND_TRAIT_SLOTS = frozenset({
     'Personal Ground Traits', 'Ground Reputation', 'Active Ground Rep',
 })
-
-_BOFF_SLOT_NAMES = frozenset({
-    'Boff Tactical', 'Boff Engineering', 'Boff Science',
-    'Boff Intelligence', 'Boff Command', 'Boff Pilot', 'Boff Miracle Worker', 'Boff Temporal',
-})
-
-_FULL_SCAN_SLOT_NAMES = (
-    list(SPACE_SLOT_ORDER_STANDARD)
-    + ['Hangars', 'Experimental', 'Sec-Def']
-    + list(GROUND_SLOT_ORDER)
-    + ['Personal Space Traits', 'Starship Traits', 'Space Reputation', 'Active Space Rep',
-       'Personal Ground Traits', 'Ground Reputation', 'Active Ground Rep']
-    + sorted(_BOFF_SLOT_NAMES)
-)
-
-
-def _iou_1d(a0: int, a1: int, b0: int, b1: int) -> float:
-    inter = max(0, min(a1, b1) - max(a0, b0))
-    union = max(a1, b1) - min(a0, b0)
-    return inter / union if union > 0 else 0.0
-
-
-def _nms_boxes(dets: list, iou_thr: float = _SCAN_NMS_IOU) -> list:
-    """Greedy NMS. dets = [(x,y,w,h,name,conf,...), ...]. Returns filtered list."""
-    kept = []
-    for det in sorted(dets, key=lambda d: -d[5]):
-        x, y, w, h = det[:4]
-        dominated = any(
-            _iou_1d(x, x+w, k[0], k[0]+k[2]) * _iou_1d(y, y+h, k[1], k[1]+k[3]) > iou_thr
-            for k in kept
-        )
-        if not dominated:
-            kept.append(det)
-    return kept
-
-
-def _cluster_rows_by_y(dets: list, icon_est: int) -> list[list]:
-    """Group detections into rows by Y proximity (gap < icon_est * _SCAN_ROW_GAP)."""
-    gap = icon_est * _SCAN_ROW_GAP
-    rows: list[list] = []
-    for det in sorted(dets, key=lambda d: d[1]):
-        for row in rows:
-            if abs(det[1] - row[0][1]) <= gap:
-                row.append(det)
-                break
-        else:
-            rows.append([det])
-    return rows
-
-
-def _get_item_type(item_name: str, eq_cache: dict, trait_cache: dict,
-                   starship_traits: dict, boff_cache: dict) -> str:
-    """Return type marker for item_name from any of the caches."""
-    for cat_items in (eq_cache or {}).values():
-        entry = cat_items.get(item_name)
-        if entry is not None:
-            return entry.get('type', '') if isinstance(entry, dict) else ''
-    for (env, cat), marker in _TRAIT_KEY_TO_MARKER.items():
-        if env == 'space' and cat == 'starship':
-            if item_name in (starship_traits or {}):
-                return marker
-        else:
-            if item_name in (trait_cache or {}).get(env, {}).get(cat, {}):
-                return marker
-    for env in ('space', 'ground'):
-        for prof_name, rank_lists in (boff_cache or {}).get(env, {}).items():
-            if not isinstance(rank_lists, list):
-                continue
-            for rank_dict in rank_lists:
-                if isinstance(rank_dict, dict) and item_name in rank_dict:
-                    return f'__boff_{prof_name.lower()}'
-    return ''
-
-
-def _score_row_for_slot(row_types: list[str], slot_name: str,
-                        ocr_labels: dict, row_cx: float, row_cy: float,
-                        icon_est: int) -> float:
-    """Score how well a row of icon types fits a slot (0–1)."""
-    if not row_types:
-        return 0.0
-
-    if slot_name in _TRAIT_SLOT_MARKER:
-        needed = _TRAIT_SLOT_MARKER[slot_name]
-        type_score = sum(1 for t in row_types if t == needed) / len(row_types)
-    elif slot_name in _BOFF_SLOT_NAMES:
-        # 'Boff Tactical' → 'tactical', 'Boff Miracle Worker' → 'miracle worker'
-        prof_key = slot_name.split(' ', 1)[1].lower()
-        exact = sum(1 for t in row_types if t == f'__boff_{prof_key}')
-        generic = sum(1 for t in row_types if t.startswith('__boff') and t != f'__boff_{prof_key}')
-        type_score = (exact + 0.2 * generic) / len(row_types)
-    else:
-        valid = _SCAN_SLOT_VALID_TYPES.get(slot_name)
-        if not valid:
-            return 0.0
-        type_score = sum(1 for t in row_types if t in valid) / len(row_types)
-
-    if type_score < 0.1:
-        return 0.0
-
-    ocr_score = 0.0
-    if slot_name in ocr_labels:
-        ocx, ocy = ocr_labels[slot_name]
-        dist = ((ocx - row_cx) ** 2 + (ocy - row_cy) ** 2) ** 0.5
-        if dist <= icon_est * 3:
-            ocr_score = 1.0
-        elif dist <= icon_est * 7:
-            ocr_score = 0.5
-
-    return 0.65 * type_score + 0.35 * ocr_score
 
 
 class LayoutDetector:
@@ -1133,10 +929,6 @@ class LayoutDetector:
             marker = self._detect_boffs_via_markers(img)
             if marker:
                 return marker
-            if icon_matcher is not None and app_cache is not None:
-                full = self._detect_via_full_scan(img, build_type, icon_matcher, app_cache)
-                if full and len(full) >= 2:
-                    return full
             # No structural fallback. The legacy `_detect_boffs` brightness/
             # V-profile path produced false positives on ~140 STO_screens
             # that had no real BOFF panel — it was masking gaps in marker
@@ -1169,7 +961,7 @@ class LayoutDetector:
                         _slog.info(f'  [{slot}] bbox={b}')
                 return ground
 
-        # MIXED detection chain: learned → OCR-anchored → full_scan → fallback
+        # MIXED detection chain: geom/pixel → OCR-anchored → learned → boffs/traits only
         if build_type in ('SPACE_MIXED', 'GROUND_MIXED'):
             marker_boffs = self._detect_boffs_via_markers(img)
 
@@ -1297,15 +1089,6 @@ class LayoutDetector:
                            f'{len(learned)} slot groups')
                 return _merge_traits(learned)
 
-            if icon_matcher is not None and app_cache is not None:
-                full = self._detect_via_full_scan(img, build_type, icon_matcher, app_cache)
-                if full and len(full) >= 3:
-                    has_boff = any(k.startswith('Boff ') for k in full)
-                    if not has_boff and marker_boffs:
-                        full.update(marker_boffs)
-                        _slog.info(f'LayoutDetector: MIXED merged → {len(full)} slot groups total')
-                    return _merge_traits(full)
-
             # All EQ strategies failed. BOFF/trait detection is independent of
             # EQ — user may have pasted a MIXED screen with partial content.
             # Emit whatever boffs/traits we found rather than dropping them.
@@ -1319,7 +1102,7 @@ class LayoutDetector:
                     f'{sum(1 for k in merged if k.startswith("Boff "))} boff seats, '
                     f'{sum(1 for k in merged if not k.startswith("Boff "))} trait groups')
                 return merged
-            # Fall through to standard strategies if both OCR-anchored and full scan fail
+            # Fall through to standard strategies if every MIXED strategy failed
 
         # Strategy 1: pixel analysis backed by eq_geometry. On 38 GT screens
         # geom delivers pixel-perfect grid (max panel_right Δ=7 px, max dx
@@ -3199,7 +2982,7 @@ class LayoutDetector:
         if not seps or seps[-1] < h - 40: seps = seps + [h]
         return sorted(seps)
 
-    # ── Full scan (MIXED screens) ────────────────────────────────────────────────
+    # ── Section labels (MIXED screens) ───────────────────────────────────────────
 
     def _ocr_section_labels(self, img) -> dict[str, tuple[float, float]]:
         """Run full-image OCR, return {slot_name: (center_x, center_y)} for each found label.
@@ -3298,136 +3081,6 @@ class LayoutDetector:
                 best_text_len[slot] = tlen
         self._ocr_labels_cache[key] = labels
         return labels
-
-    def _detect_via_full_scan(self, img: np.ndarray, build_type: str,
-                               icon_matcher, app_cache) -> dict[str, list[tuple]]:
-        """Full-image detection for MIXED screens: OCR labels + dense icon scan + fusion.
-
-        Phase 1 — OCR: find slot label positions across the full image.
-        Phase 2 — Dense scan: sliding window + EfficientNet classify every patch.
-        Phase 3 — NMS + row clustering + per-row slot scoring.
-        Phase 4 — Output dict {slot_name: [(x,y,w,h), ...]} like other strategies.
-        """
-        from collections import Counter
-        h, w = img.shape[:2]
-        icon_est = max(32, int(h * 0.060))
-        stride   = max(8, icon_est // 2)
-
-        eq_cache        = getattr(app_cache, 'equipment',      {}) or {}
-        trait_cache     = getattr(app_cache, 'traits',         {}) or {}
-        starship_traits = getattr(app_cache, 'starship_traits',{}) or {}
-        boff_cache      = getattr(app_cache, 'boff_abilities', {}) or {}
-
-        # Phase 1: OCR section labels
-        ocr_labels = self._ocr_section_labels(img)
-        _slog.info(f'LayoutDetector FullScan: OCR labels → {list(ocr_labels.keys())}')
-
-        # Phase 2: Sliding window
-        raw_dets = []
-        for y in range(0, h - icon_est + 1, stride):
-            for x in range(0, w - icon_est + 1, stride):
-                patch = img[y:y+icon_est, x:x+icon_est]
-                if float(patch.std()) < 12.0:  # skip uniform background
-                    continue
-                name, conf = icon_matcher.classify_patch(patch)
-                if conf >= _SCAN_CONF_MIN and name:
-                    raw_dets.append((x, y, icon_est, icon_est, name, conf))
-
-        if not raw_dets:
-            _slog.info('LayoutDetector FullScan: no detections — scan failed')
-            return {}
-
-        dets = _nms_boxes(raw_dets)
-        _slog.info(f'LayoutDetector FullScan: {len(raw_dets)} raw → {len(dets)} after NMS')
-
-        # Enrich detections with item type (computed once, reused across scoring).
-        # For unrecognised patches in BOFF screens, try color classification as fallback.
-        _is_boff_screen = build_type in ('BOFFS', 'SPACE_BOFFS', 'GROUND_BOFFS')
-        enriched = []
-        for det in dets:
-            itype = _get_item_type(det[4], eq_cache, trait_cache, starship_traits, boff_cache)
-            if not itype and _is_boff_screen:
-                x, y, bw, bh = det[:4]
-                crop = img[y:y+bh, x:x+bw]
-                if crop.size > 0:
-                    prof = self._classify_boff_profession(crop)
-                    if prof:
-                        itype = f'__boff_{prof}'
-            enriched.append(det + (itype,))
-        # each entry: (x, y, w, h, name, conf, item_type)
-
-        # Phase 3: Cluster into rows
-        rows = _cluster_rows_by_y(enriched, icon_est)
-        _slog.info(f'LayoutDetector FullScan: {len(rows)} rows')
-
-        # Phase 4: Score each row against candidate slot names
-        result: dict[str, list] = {}
-        used_slots: set[str] = set()
-
-        # Only consider slot names relevant to this build type
-        boff_slots = sorted(_BOFF_SLOT_NAMES)
-        if 'SPACE' in build_type or build_type in ('BOFFS',):
-            candidates = (
-                list(SPACE_SLOT_ORDER_STANDARD) + ['Hangars', 'Experimental', 'Sec-Def']
-                + ['Personal Space Traits', 'Starship Traits', 'Space Reputation', 'Active Space Rep']
-                + boff_slots
-            )
-        else:
-            candidates = (
-                list(GROUND_SLOT_ORDER)
-                + ['Personal Ground Traits', 'Ground Reputation', 'Active Ground Rep']
-                + boff_slots
-            )
-
-        for row in sorted(rows, key=lambda r: min(it[1] for it in r)):
-            row_types = [it[6] for it in row]
-            row_cx    = sum(it[0] + it[2] / 2 for it in row) / len(row)
-            row_cy    = sum(it[1] + it[3] / 2 for it in row) / len(row)
-
-            best_slot, best_score = '', 0.0
-            for slot_name in candidates:
-                score = _score_row_for_slot(row_types, slot_name, ocr_labels,
-                                            row_cx, row_cy, icon_est)
-                if score > best_score:
-                    best_score = score
-                    best_slot  = slot_name
-
-            if not best_slot or best_score < 0.30:
-                continue
-
-            # Multi-row slots (traits, boffs) — allow multiple rows per slot
-            is_multi = best_slot in _TRAIT_SLOT_MARKER or best_slot in _BOFF_SLOT_NAMES
-            if best_slot in used_slots and not is_multi:
-                continue  # single-row slot already filled
-            used_slots.add(best_slot)
-
-            bboxes = [(it[0], it[1], it[2], it[3]) for it in sorted(row, key=lambda it: it[0])]
-            result.setdefault(best_slot, []).extend(bboxes)
-
-        # Sanity guard — drop slot groups exceeding the realistic per-slot cap,
-        # then bail entirely if the (post-drop) total still exceeds the
-        # per-build-type cap. Either signal means FullScan latched onto noise
-        # rather than real icons.
-        dropped = [(s, len(b)) for s, b in result.items()
-                   if len(b) > _FULLSCAN_MAX_PER_SLOT]
-        if dropped:
-            for s, _ in dropped:
-                del result[s]
-            _slog.warning(
-                f'LayoutDetector FullScan: dropped slot-group(s) over '
-                f'{_FULLSCAN_MAX_PER_SLOT}-bbox cap: {dropped} '
-                f'(likely false positives — dedicated detector should have '
-                f'handled this panel)')
-        total_cap = _FULLSCAN_MAX_TOTAL.get(build_type, _FULLSCAN_DEFAULT_TOTAL)
-        total = sum(len(v) for v in result.values())
-        if total > total_cap:
-            _slog.warning(
-                f'LayoutDetector FullScan: {total} bboxes exceeds {build_type} '
-                f'cap {total_cap} — discarding all FullScan output')
-            return {}
-
-        _slog.info(f'LayoutDetector FullScan: {len(result)} slots → {list(result.keys())}')
-        return result
 
     # ── OCR-anchored MIXED detection ─────────────────────────────────────────────
 

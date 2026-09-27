@@ -30,7 +30,8 @@ embedding fights them for the cores. So before a window starts, `sto-warp`
 sets `OPENBLAS_NUM_THREADS=1` and logs `CPU: numpy BLAS limited to one
 thread`. Measured 2026-09-27 on the shipped matcher: one icon match took
 47.9 ms by default and 9.1 ms with one BLAS thread. The whole recognition of
-a screenshot that falls back to the full scan dropped from 98.8 s to 33.2 s,
+a screenshot that fell back to the full-image scan (since removed) dropped
+from 98.8 s to 33.2 s,
 and four ordinary screenshots from 43.7 s to 36.0 s, with identical results
 in both cases. OpenBLAS reads the variable once, when numpy loads, which is
 why it is set before the windows import anything. A value you set yourself is

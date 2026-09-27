@@ -66,9 +66,10 @@ _LEGACY_SPEC_CODE_MAP = {
     'L': 'MW',   # Miracle Worker
 }
 
-# Legacy profession-keyed names emitted by _detect_via_full_scan and
-# pre-marker detectors. `Universal` is omitted because a profession-keyed
-# Universal slot would itself be Unknown (caller goes content-based).
+# Legacy profession-keyed names emitted by pre-marker detectors and by the
+# full-image scan (removed 2026-09-27); stored data still carries them.
+# `Universal` is omitted because a profession-keyed Universal slot would
+# itself be Unknown (caller goes content-based).
 _LEGACY_PROFESSIONS = frozenset({
     'Tactical', 'Engineering', 'Science',
 })

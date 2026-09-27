@@ -110,7 +110,7 @@ internals of each area, the canonical references are:
 |---------------------------------------------------------------------------|---------------------------------------------------------------------------------|
 | [`docs/SYNC_ARCHITECTURE.md`](docs/SYNC_ARCHITECTURE.md)                  | Cold-start splash, periodic refresh, TTLs, marker file, all 7 data sources      |
 | [`docs/ML_PIPELINE.md`](docs/ML_PIPELINE.md)                              | Local + community training, model delivery, HF backend boundary                 |
-| [`docs/warp_ml_roadmap.md`](docs/warp_ml_roadmap.md)                      | Layout-detector strategies, full-scan pipeline, current status                  |
+| [`docs/warp_ml_roadmap.md`](docs/warp_ml_roadmap.md)                      | Layout-detector strategies, current status                                      |
 | [`docs/BOFF_DETECTION.md`](docs/BOFF_DETECTION.md)                        | BOFF panel detection — colour markers + classifier                              |
 | [`docs/TRAIT_DETECTION.md`](docs/TRAIT_DETECTION.md)                      | Trait grid detection — structure-first, ML probe per section                    |
 | [`docs/EQ_DETECTION.md`](docs/EQ_DETECTION.md)                            | Equipment panel detection — geometry vs slot profile, row labelling, tier recovery |

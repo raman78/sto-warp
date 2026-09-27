@@ -1920,7 +1920,7 @@ class WarpImporter:
                                f'likely tooltip overlay, not BOFFS panel)')
                 else:
                     build_type = _ocr_bt  # SPACE_BOFFS preferred over generic BOFFS
-                    _slog.info(f'WarpImporter: upgraded SPACE → {build_type} (dedicated BOFFS screen, full scan only)')
+                    _slog.info(f'WarpImporter: upgraded SPACE → {build_type} (dedicated BOFFS screen)')
             elif build_type == 'SPACE' and _ocr_bt == 'GROUND_BOFFS':
                 build_type = 'GROUND_BOFFS'
                 _slog.info('WarpImporter: upgraded SPACE → GROUND_BOFFS (OCR detected ground boff screen)')

@@ -21,8 +21,8 @@ def _hide_gpu() -> None:
     `gpu=False` and every model loads with `map_location='cpu'`. EasyOCR's
     recogniser still builds its DataLoader with `pin_memory=True`, and on a
     CUDA build of torch pinning host memory opens a CUDA context. When a game
-    holds the card's memory that fails, the read returns no text at all, and
-    the layout falls back to a two-minute full scan that finds no equipment
+    held the card's memory that failed, the read returned no text at all, and
+    the layout fell back to a two-minute full scan that found no equipment
     (measured 2026-09-25 with 7.9 of 8 GB taken). Hiding the card makes
     pinning a no-op. GPU training (`python -m warp.trainer.embedder_trainer`)
     is a separate process and keeps it. A value set by the user is respected.
@@ -51,9 +51,9 @@ def _single_thread_blas() -> None:
     product the OpenBLAS threads keep spinning on the cores, and the next
     convolution fights them for CPU. Measured 2026-09-27 on the shipped
     `classify_patch`: 47.9 ms per call by default, 9.1 ms with one BLAS
-    thread. Whole recognition of one screenshot that reaches the full scan:
-    98.8 s → 33.2 s; four that do not: 43.7 s → 36.0 s. Results identical
-    item for item in both runs.
+    thread. Whole recognition of one screenshot that reached the full-image
+    scan (since removed): 98.8 s → 33.2 s; four that did not: 43.7 s →
+    36.0 s. Results identical item for item in both runs.
 
     OpenBLAS reads the variable when numpy loads it, so this must run before
     anything imports numpy; before the GUI modules are imported is early
