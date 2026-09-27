@@ -2712,8 +2712,18 @@ class LayoutDetector:
         cell_states: list[str] = []
         for j in range(max_icons):
             x2 = panel_right - j * cell_w
-            x1 = max(0, x2 - int(cell_w * 0.85))
-            if x1 >= x2 or x1 < 0:
+            x1 = x2 - int(cell_w * 0.85)
+            if x1 < 0:
+                # The screenshot ends inside this position, so it cannot be
+                # judged: the frame test would read whatever sliver is left —
+                # on image-c8be3f34ec234254.png the panel's edge and the next
+                # icon's border — as a cell. Rows are right-justified, so every
+                # position past this one is further off the image too. This
+                # check used to follow a clamp to 0 and could never fire.
+                _slog.info(f'LayoutDetector: row [{slot_name}] stops at position '
+                           f'{j + 1}: its window starts {-x1} px left of the image')
+                break
+            if x1 >= x2:
                 break
             if panel_x_start is not None and x1 < panel_x_start - 2:
                 break

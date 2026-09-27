@@ -273,6 +273,21 @@ number of cells it walked is recorded as `last_row_cell_counts`. Rows are
 right-justified, so the missing cells are always a left prefix and stopping
 is the whole answer.
 
+It also stops where the screenshot does. A position whose window starts
+left of the image cannot be judged: the band test has nothing to compare
+with, and the frame test alone reads whatever sliver is left. On
+`image-c8be3f34ec234254.png`, cropped at the panel's left edge, the sixth
+position's window began 2 px off the image and held only the panel's edge
+and the fifth icon's border, so a five-cell Fore Weapons row counted six.
+The walk now ends there and logs `row [slot] stops at position N: its window
+starts K px left of the image`. The guard had always been in the code, but
+after a clamp to 0, so it never fired. Raising the frame test's bar for this
+case was tried and rejected: confirmed empty and inactive cells carry only
+5.7% and 7.7% edges at the median, the same range as the sliver (3.8%) and
+the gap outline (4.1-7.5%), so no bar separates them. Across the 109
+annotated space screenshots this was the only one with a position off the
+image, and no confirmed box touches the left edge.
+
 #### When the measurement is allowed to reach the boxes
 
 A changed profile has to be re-projected or the measurement is a number in
