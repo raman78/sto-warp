@@ -131,7 +131,7 @@ def _fit_panel(cells):
     Every ship has Deflector, Engines, Warp Core and Shield (Sec-Def on some)
     as one-cell rows directly under Fore Weapons, and at least Aft Weapons,
     Devices and a console row under them. So the panel is: one row, a run of
-    one-cell rows, then 3..8 more rows. A trait grid never fits — the game
+    one-cell rows, then 3..8 more rows (two rows above an ambiguous run). A trait grid never fits — the game
     draws the frame of every empty trait slot — and a side list fails the
     rule that the run starts on the second row.
     """
@@ -146,7 +146,13 @@ def _fit_panel(cells):
             j += 1
         run, below = j - i, len(cells) - j
         if i >= 1 and SINGLES[0] <= run <= SINGLES[1] and below >= 3:
-            cand = (i - 1, run, j + min(below, 8))
+            # A run of 4 or 5 is exactly Deflector..Shield, so Fore is the
+            # row above it. A run of 3 or 6 may be one short or long because
+            # something covered a row — a weapon tooltip over the Deflector
+            # row made it read five cells and hid Fore one row further up —
+            # so one more row is kept above, for the content to name.
+            top = i - 1 if run in (4, 5) else max(0, i - 2)
+            cand = (top, run, j + min(below, 8))
             if best is None or ((run in (4, 5), cand[2] - cand[0])
                                 > (best[1] in (4, 5), best[2] - best[0])):
                 best = cand

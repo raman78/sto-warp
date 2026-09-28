@@ -763,6 +763,9 @@ class WarpWindow(QMainWindow):
                f'boff_ab={report.n_boff_abilities}')
         if report.unmatched_items:
             msg += f'  ·  {report.unmatched_items} unmatched'
+        if report.unsettled_items:
+            msg += (f'  ·  {report.unsettled_items} left out — equipment rows whose type '
+                    f'is a guess or Unknown; settle them in Fast Correction')
         if violations:
             msg += f'  ·  ⚠ SETS schema: {len(violations)} warnings'
             self._offer_schema_issue(violations, report)

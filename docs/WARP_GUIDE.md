@@ -413,6 +413,13 @@ SETS build → /path/to/build.json  ·  ship=Fleet Heavy Cruiser
             eq=24  traits=11  boff_ab=12  ·  3 unmatched
 ```
 
+If some equipment rows were only guessed or are Unknown (see
+[Equipment rows marked (guess) or Unknown](#equipment-rows-marked-guess-or-unknown)),
+their items are **not** written, and the summary says so — *"4 left out —
+equipment rows whose type is a guess or Unknown"*. Open the screenshot in
+Fast Correction Mode, settle those rows, and send the result back to export
+them.
+
 #### The file is checked before it is written
 
 SETS is quiet about builds it does not like: an item name it cannot place is
@@ -814,12 +821,11 @@ the wrong slot. Do not accept such a screenshot as it stands. Run
 Auto-Detect again, and if the line comes back, the log has the details. The
 line clears when you open another screenshot or detect again.
 
-The line also tells you when a row of the equipment panel could not be
-named — *"2 row(s) of the equipment panel could not be named (rows 8-9 from
-the top) and have no boxes yet"*. WARP would rather leave a row out than put
-its items in the wrong slot, so those icons have no boxes. Add them as
-described in [Adding a missing bounding box](#adding-a-missing-bounding-box);
-once the row has boxes the line no longer mentions it.
+The line also tells you when WARP could not be sure what a row of the
+equipment panel is — usually on a screenshot cut so that the row labels are
+missing: *"Equipment rows whose type could not be read for certain: 2 guessed
+(Devices, Universal Consoles); 1 Unknown…"*. Those groups are marked in the
+list; see [Equipment rows marked (guess) or Unknown](#equipment-rows-marked-guess-or-unknown).
 
 **Starting Auto-Detect while one is running** stops the earlier run. Only
 the newest one reports back: its progress bar keeps moving and its results
@@ -1069,6 +1075,39 @@ Science #1* becomes just *Boff Science*.
 > **Tip:** This is most useful for Universal seats, where WARP has to guess
 > the profession from the abilities it recognises. If the guess was wrong,
 > a single right-click fixes the whole seat.
+
+### Equipment rows marked (guess) or Unknown
+
+WARP names each row of the equipment panel from its label. When the labels
+are missing — a screenshot cropped to the icons, say — it works the row out
+from the panel's shape and from what is in it. Most rows come out certain.
+When they do not, WARP does not quietly pick one:
+
+- **"Devices (guess)"** — the items fit that row best, but not certainly.
+- **"Unknown"** (and *Unknown #2*, …) — nothing fits.
+
+On the canvas, the cells of these rows are outlined in faint blue, so you
+can see which part of the panel WARP was unsure about.
+
+Their items **cannot be accepted** yet — not with Enter, not by auto-accept,
+not from the picker. An accepted item is stored, and shared, together with
+its slot, and a guessed slot is only a guess. Settle the row first:
+
+1. **Right-click** the group heading.
+2. For a guess, pick **Confirm type: <slot>** if it is right, or open
+   **Change Group Type** and choose the right row. For Unknown, pick from
+   **Choose Group Type**. The menu lists only rows this panel does not
+   already have.
+3. When the type changes, the items are **recognised again** against that
+   row's items. The heading turns into the plain slot name, and the items can
+   be reviewed and accepted as usual.
+
+**Mark Done** stays greyed out while any such group is open; its tooltip
+names them. The same happens in Fast Correction Mode, and the SETS export
+from WARP leaves these items out until they are settled (the export message
+says how many).
+
+If a whole row is not equipment at all, remove its boxes as described below.
 
 ### Removing a wrong bounding box
 

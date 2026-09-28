@@ -142,6 +142,9 @@ class WriteReport:
     n_boff_abilities:   int = 0
     overflow_consoles:  int = 0
     unmatched_items:    int = 0
+    # Items in an equipment row whose type is a guess or Unknown — left out
+    # of the build until the row is settled (WARP CORE / Fast Correction).
+    unsettled_items:    int = 0
 
 
 def build_from_result(result: ImportResult, cache=None) -> tuple[dict, WriteReport]:
@@ -305,6 +308,13 @@ def _write_equipment_and_traits(
 
     for ri in items:
         if not ri.name or ri.name in VIRTUAL_ITEM_NAMES:
+            continue
+
+        # An equipment row whose type is only a guess, or Unknown, is not
+        # written: SETS would place the item in a slot nobody confirmed. It
+        # is counted, so the export says what it left out.
+        if getattr(ri, 'row_guess', ''):
+            report.unsettled_items += 1
             continue
 
         # Ship Name/Type/Tier and specialisations are already surfaced via

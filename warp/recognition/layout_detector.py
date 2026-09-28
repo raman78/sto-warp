@@ -771,11 +771,12 @@ class LayoutDetector:
         # cells out of the row, and sizing it by a guessed profile draws boxes
         # on bare panel. Reset per detect() call.
         self.last_row_cell_counts: dict[str, int] = {}
-        # Equipment rows no name could be given, that hold at least one item:
-        # {'row': position from the top (1-based), 'cy', 'filled', and the row's
-        # area 'x0'/'x1'/'y0'/'y1'}. They get no
-        # boxes, so the importer tells the user to add them. Reset per detect().
-        self.last_unnamed_rows: list[dict] = []
+        # Equipment rows named by a guess, or called Unknown, for the user to
+        # settle: {slot key: 'guess' | 'unknown'}. Reset per detect() call.
+        self.last_row_guesses: dict[str, str] = {}
+        # The space equipment grid the last _get_eq_geometry call returned —
+        # what WARP CORE draws its grid from on rows still to be settled.
+        self.last_eq_geometry: EQGeometry | None = None
 
     def _img_key(self, img: np.ndarray) -> str:
         """A key for per-image caches that survives repeated `detect()` calls.
@@ -805,7 +806,8 @@ class LayoutDetector:
         matcher = getattr(self, '_stack_matcher', None)
         key = (self._img_key(img), matcher is not None)
         if key in self._eq_geom_cache:
-            return self._eq_geom_cache[key]
+            self.last_eq_geometry = self._eq_geom_cache[key]
+            return self.last_eq_geometry
         try:
             geom = detect_eq_geometry(
                 img, ocr_tokens=getattr(self, '_ocr_tokens', None))
@@ -823,6 +825,7 @@ class LayoutDetector:
                 _slog.warning(f'LayoutDetector: detect_eq_stack crashed: {e}')
                 geom = None
         self._eq_geom_cache[key] = geom
+        self.last_eq_geometry = geom
         if geom is not None:
             _slog.info(
                 f'LayoutDetector: eq_geometry mode={geom.mode} '
@@ -927,7 +930,7 @@ class LayoutDetector:
         self.last_row_pixel_counts = {}
         self.last_trait_icon_counts = {}
         self.last_row_cell_counts = {}
-        self.last_unnamed_rows = []
+        self.last_row_guesses = {}
         if build_type in ('TRAITS', 'SPACE_TRAITS', 'GROUND_TRAITS'):
             # Strategy 0: structure-driven trait grid detector with ML probe.
             # Multi-panel grid lock + multi-chain row extraction + per-group
@@ -2820,6 +2823,9 @@ class LayoutDetector:
         if geom is None or not geom.row_cys:
             return self._detect_via_pixel_analysis_legacy(img, slot_order, profile)
 
+        # Guesses describe this call's result; a second pass in the same
+        # detect() must not number the same row 'Unknown #2'.
+        self.last_row_guesses = {}
         panel_x_start = geom.panel_x_start
         panel_right   = geom.panel_right
         cell_w  = max(20, int(round(geom.final_dx)))
@@ -2857,44 +2863,21 @@ class LayoutDetector:
                     f'{name!r} from the profile sequence between the '
                     f'anchored rows around it')
         _unnamed = [cy for cy in geom.row_cys if cy not in filled]
+        # Rows the labels, the panel's shape and the profile left unnamed are
+        # named from what is in them where that is certain, and otherwise
+        # guessed or called Unknown — never dropped: a dropped row is items
+        # the user never sees. Guessed and Unknown rows are sized by the cells
+        # the game drew (the profile says nothing about a row it cannot even
+        # name) and flagged in last_row_guesses for the user to settle.
+        _cells_override: dict[int, int] = {}
         if _unnamed:
-            # Said out loud rather than skipped quietly: an unnamed row is a
-            # slot the user will have to draw by hand, and the count is how
-            # anyone learns the sequence and the anchors disagree.
             _slog.info(
                 f'LayoutDetector: {len(_unnamed)} row(s) left unnamed at '
                 f'cy={_unnamed} — the profile sequence does not fit the gaps '
                 f'between the OCR-anchored rows')
-            # Those holding an item are the ones the user must add by hand.
-            # A row is known to be a panel row if it lies above the last named
-            # one, or within the rows every ship draws after that slot
-            # (space_eq_rows: under Aft always Devices and three console rows).
-            # Past that a stack can run on into whatever sits under the panel
-            # — four such rows on the 109 annotated screenshots held another
-            # panel's icons — and asking for those would ask for rows that do
-            # not exist. With no row named at all, every row is reported.
-            _named_i = [i for i, cy in enumerate(geom.row_cys) if cy in filled]
-            if _named_i:
-                _last = max(_named_i)
-                _slot = filled[geom.row_cys[_last]]
-                _after = (_SPACE_ROWS.ROWS[_SPACE_ROWS.INDEX[_slot] + 1:]
-                          if _slot in _SPACE_ROWS.INDEX else ())
-                _limit = _last + sum(1 for r in _after if not r.optional)
-            else:
-                _limit = len(geom.row_cys)
-            self.last_unnamed_rows = []
-            for i, cy in enumerate(geom.row_cys):
-                if cy not in _unnamed or i > _limit:
-                    continue
-                _, _states = self._count_icons_in_row(
-                    img, max(0, cy - icon_h // 2), min(h, cy + icon_h // 2),
-                    panel_right, cell_w, 'unnamed row', panel_x_start=panel_x_start)
-                n_filled = sum(1 for st in _states if st == 'active')
-                if n_filled:
-                    self.last_unnamed_rows.append({
-                        'row': i + 1, 'cy': cy, 'filled': n_filled,
-                        'y0': cy - icon_h // 2, 'y1': cy + icon_h // 2,
-                        'x0': panel_x_start, 'x1': panel_right})
+            self._name_rows_by_content(
+                img, geom, filled, _unnamed, _cells_override,
+                panel_right, panel_x_start, cell_w, icon_w, icon_h)
 
         result: dict = {}
         for i, cy in enumerate(geom.row_cys):
@@ -2906,14 +2889,20 @@ class LayoutDetector:
             pixel_count, _cell_states = self._count_icons_in_row(
                 img, y_top, y_bot, panel_right, cell_w, slot_name,
                 panel_x_start=panel_x_start)
-            # Record before the profile decides what to emit: a row the
-            # profile counts as 0 is skipped below, and its measurement is
-            # exactly the evidence that the profile is missing a bonus.
-            self.last_row_pixel_counts[slot_name] = max(
-                self.last_row_pixel_counts.get(slot_name, 0), pixel_count)
-            self.last_row_cell_counts[slot_name] = max(
-                self.last_row_cell_counts.get(slot_name, 0), len(_cell_states))
-            profile_count = profile.get(slot_name, SLOT_DEFAULT_COUNTS.get(slot_name, 1))
+            if cy in _cells_override:
+                # A guessed or Unknown row: sized by its cells, and kept out of
+                # the measurements the tier is inferred from — a guessed
+                # 'Devices' row must not raise a ship's upgrade level.
+                profile_count = _cells_override[cy]
+            else:
+                # Record before the profile decides what to emit: a row the
+                # profile counts as 0 is skipped below, and its measurement is
+                # exactly the evidence that the profile is missing a bonus.
+                self.last_row_pixel_counts[slot_name] = max(
+                    self.last_row_pixel_counts.get(slot_name, 0), pixel_count)
+                self.last_row_cell_counts[slot_name] = max(
+                    self.last_row_cell_counts.get(slot_name, 0), len(_cell_states))
+                profile_count = profile.get(slot_name, SLOT_DEFAULT_COUNTS.get(slot_name, 1))
             # ShipDB profile already includes tier bonuses (T6-X +1 Universal,
             # T6-X2 +1 Device, etc.) via warp_importer. Trust profile_count;
             # pixel_count is logged only for sanity-check / regression diag.
@@ -2958,6 +2947,90 @@ class LayoutDetector:
             bboxes.reverse()
             result[slot_name] = bboxes
         return result
+
+    def _name_rows_by_content(self, img, geom, filled: dict, unnamed: list,
+                              cells_override: dict, panel_right, panel_x_start,
+                              cell_w, icon_w, icon_h) -> None:
+        """Name, guess or call Unknown each unnamed equipment row, in place.
+
+        Runs of unnamed rows are taken top to bottom; each is scored against
+        the arrangements space_eq_rows allows between its named neighbours
+        (eq_row_naming.name_run), reading the items with the matcher when
+        detect() was given one. Certain names join *filled* as if OCR had
+        read them; guesses and Unknowns join it too, sized through
+        *cells_override* and recorded in last_row_guesses. Rows past the
+        panel's bottom are left out.
+        """
+        from warp.recognition.eq_row_naming import name_run
+        h = img.shape[0]
+        rows = list(geom.row_cys)
+        eq_cache = getattr(self, '_stack_eq_cache', None) or {}
+        matcher = getattr(self, '_stack_matcher', None)
+        allowed = {r.slot: set(eq_cache.get(r.key, {})) for r in _SPACE_ROWS.ROWS}
+        candidates = set().union(*allowed.values()) if allowed else set()
+        used = {s for s in filled.values() if s in _SPACE_ROWS.INDEX}
+        n_unknown = sum(1 for k in self.last_row_guesses if k.startswith('Unknown'))
+
+        runs: list[list[int]] = []
+        for i, cy in enumerate(rows):
+            if cy in unnamed:
+                if runs and runs[-1][-1] == i - 1:
+                    runs[-1].append(i)
+                else:
+                    runs.append([i])
+        for run in runs:
+            prev = filled.get(rows[run[0] - 1]) if run[0] > 0 else None
+            nxt = filled.get(rows[run[-1] + 1]) if run[-1] + 1 < len(rows) else None
+            items, states_all = [], []
+            for i in run:
+                cy = rows[i]
+                _, states = self._count_icons_in_row(
+                    img, max(0, cy - icon_h // 2), min(h, cy + icon_h // 2),
+                    panel_right, cell_w, f'row {i + 1}', panel_x_start=panel_x_start)
+                states_all.append(states)
+                names = []
+                if matcher is not None and candidates:
+                    for j, st in enumerate(states):
+                        if st != 'active':
+                            continue
+                        bx = int(round(panel_right - (j + 1) * geom.final_dx)) + 1
+                        by = max(0, cy - icon_h // 2)
+                        crop = img[by:by + icon_h, max(0, bx):bx + icon_w]
+                        if crop.size == 0:
+                            continue
+                        try:
+                            name, conf, _t, _s = matcher.match(crop, candidate_names=candidates)
+                        except Exception as e:
+                            _slog.warning(f'LayoutDetector: row {i + 1} cell match failed: {e}')
+                            continue
+                        if name and not name.startswith('__') and conf >= 0.40:
+                            names.append(name)
+                items.append(names)
+            outcome = name_run(items, prev if prev in _SPACE_ROWS.INDEX else None,
+                               nxt if nxt in _SPACE_ROWS.INDEX else None,
+                               used, allowed, open_end=nxt is None)
+            for i, states, (kind, slot) in zip(run, states_all, outcome):
+                cy = rows[i]
+                if kind == 'outside':
+                    _slog.info(f'LayoutDetector: row {i + 1} left out — past the '
+                               f'panel\'s bottom, nothing in it fits a row that can follow')
+                    continue
+                if kind == 'name':
+                    filled[cy] = slot
+                    used.add(slot)
+                    _slog.info(f'LayoutDetector: row {i + 1} named {slot!r} from what is in it')
+                    continue
+                if kind == 'guess':
+                    key = slot
+                    used.add(slot)
+                else:
+                    n_unknown += 1
+                    key = 'Unknown' if n_unknown == 1 else f'Unknown #{n_unknown}'
+                filled[cy] = key
+                cells_override[cy] = len(states)
+                self.last_row_guesses[key] = kind
+                _slog.info(f'LayoutDetector: row {i + 1} → {key!r} ({kind}) — '
+                           f'{len(states)} cell(s), for the user to confirm or change')
 
     def _detect_via_pixel_analysis_legacy(self, img, slot_order, profile):
         """Brightness/row-separator fallback used when OCR-anchored geometry

@@ -315,6 +315,30 @@ def group_items_by_seat(items):
 _META_SLOTS: tuple[str, ...] = ('Ship Type', 'Ship Tier')
 
 
+def place_unknown_groups(labels: list[str], min_y) -> list[str]:
+    """Move each 'Unknown' equipment group to where its row sits on the panel.
+
+    An Unknown group has no slot, so no canonical position: left alone it
+    sorts to the end of the list, below the Bridge Officers, far from the
+    rows around it. It goes right after the last equipment (or Unknown)
+    group above it on the screenshot, or before the first equipment group
+    when nothing is above. *min_y* gives a label's topmost box y.
+    """
+    from warp.recognition.space_eq_rows import INDEX
+    unknown = sorted((l for l in labels if l.startswith('Unknown')), key=min_y)
+    out = [l for l in labels if not l.startswith('Unknown')]
+    for u in unknown:
+        uy = min_y(u)
+        above = [i for i, l in enumerate(out)
+                 if (l in INDEX or l.startswith('Unknown')) and min_y(l) < uy]
+        if above:
+            out.insert(max(above) + 1, u)
+        else:
+            eq = [i for i, l in enumerate(out) if l in INDEX]
+            out.insert(min(eq) if eq else len(out), u)
+    return out
+
+
 def order_items_for_display(
     items,
     canonical_slots: list[str],
@@ -385,6 +409,11 @@ def order_items_for_display(
         _emit(label)
     for label in sorted(by_label):
         _emit(label)
+    if any(l.startswith('Unknown') for l, _ in ordered):
+        top = {l: min((_bbox_xy(it)[0] for it in g), default=1_000_000_000)
+               for l, g in ordered}
+        by = dict(ordered)
+        ordered = [(l, by[l]) for l in place_unknown_groups([l for l, _ in ordered], top.get)]
     return ordered
 
 

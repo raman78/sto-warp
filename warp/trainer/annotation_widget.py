@@ -295,20 +295,26 @@ class AnnotationWidget(QWidget):
             painter.fillRect(self.rect(), QColor("#1a1a1a")); painter.setPen(QColor("#888888")); painter.drawText(self.rect(), Qt.AlignmentFlag.AlignCenter, "No image loaded\nOpen a folder to start")
             return
 
-        # EQ geometry overlay — 6×N grid in faint blue, drawn below bboxes.
-        # Disabled by default; re-enable for visual diagnostics of detector grid alignment.
-        # if self._eq_geom is not None and getattr(self._eq_geom, 'row_cys', None):
-        #     geom = self._eq_geom
-        #     dx_f = float(geom.final_dx)
-        #     cell_w = max(1, int(round(dx_f)))
-        #     ph = max(1, int(round(geom.row_pitch * 0.85)))
-        #     pen = QPen(QColor(80, 160, 255, 180), 1, Qt.PenStyle.SolidLine)
-        #     painter.setPen(pen); painter.setBrush(Qt.BrushStyle.NoBrush)
-        #     for cy in geom.row_cys:
-        #         y_top = cy - ph // 2
-        #         for j in range(6):
-        #             bx = int(round(geom.panel_right - (j + 1) * dx_f)) + 1
-        #             painter.drawRect(self._img_to_screen_rect((bx, y_top, cell_w, ph)))
+        # EQ grid — only on rows whose type is still a guess or Unknown, so
+        # the user sees where WARP was unsure and which cells it read. Faint
+        # blue, below the boxes; the rest of the panel is left clean.
+        if self._eq_geom is not None and getattr(self._eq_geom, 'row_cys', None):
+            geom = self._eq_geom
+            dx_f = float(geom.final_dx)
+            cell_w = max(1, int(round(dx_f)))
+            ph = max(1, int(round(geom.row_pitch * 0.85)))
+            unsettled_cys = [
+                ri['bbox'][1] + ri['bbox'][3] / 2 for ri in self._review_items
+                if ri.get('row_guess') and ri.get('bbox')]
+            pen = QPen(QColor(80, 160, 255, 180), 1, Qt.PenStyle.SolidLine)
+            painter.setPen(pen); painter.setBrush(Qt.BrushStyle.NoBrush)
+            for cy in geom.row_cys:
+                if not any(abs(cy - u) <= geom.row_pitch / 2 for u in unsettled_cys):
+                    continue
+                y_top = cy - ph // 2
+                for j in range(6):
+                    bx = int(round(geom.panel_right - (j + 1) * dx_f)) + 1
+                    painter.drawRect(self._img_to_screen_rect((bx, y_top, cell_w, ph)))
 
         # Skill-tree overlay — green (ON) / red (OFF), same as WARP's canvas.
         for (sx, sy, sw, sh, on) in self._skill_boxes:

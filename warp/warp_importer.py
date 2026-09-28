@@ -1358,18 +1358,29 @@ class RecognisedItem:
     # match_origin=='user' so it's visually distinct from autonomous
     # detection that just happened to use a generic session example.
     match_origin: str  = ''
+    # How sure the detector is of the equipment row this item sits in: ''
+    # when the row was named (label, panel shape, profile or its content),
+    # 'guess' when its type is a guess the user has to confirm or change,
+    # 'unknown' when no row type fits (slot 'Unknown', 'Unknown #2', …).
+    row_guess:    str  = ''
 
 
-def _row_ranges(rows: list[int]) -> str:
-    """'row 3', 'rows 1-2, 4-12' — positions from the top, runs collapsed."""
-    runs: list[list[int]] = []
-    for r in sorted(rows):
-        if runs and r == runs[-1][-1] + 1:
-            runs[-1].append(r)
-        else:
-            runs.append([r])
-    parts = [str(g[0]) if len(g) == 1 else f'{g[0]}-{g[-1]}' for g in runs]
-    return ('row ' if len(rows) == 1 else 'rows ') + ', '.join(parts)
+def _row_guess_message(guesses) -> str:
+    """The line WARP CORE shows for equipment rows whose type is a guess or
+    Unknown ('' when there are none). *guesses* is
+    LayoutDetector.last_row_guesses: {slot key: 'guess' | 'unknown'}."""
+    if not isinstance(guesses, dict) or not guesses:
+        return ''
+    guessed = [k for k, v in guesses.items() if v == 'guess']
+    unknown = [k for k, v in guesses.items() if v == 'unknown']
+    parts = []
+    if guessed:
+        parts.append(f'{len(guessed)} guessed ({", ".join(guessed)})')
+    if unknown:
+        parts.append(f'{len(unknown)} Unknown')
+    return (f'Equipment rows whose type could not be read for certain: '
+            f'{"; ".join(parts)}. In WARP CORE, right-click each such group to '
+            f'confirm or change its type; Mark Done waits until they are settled.')
 
 
 @dataclass
@@ -2538,16 +2549,11 @@ class WarpImporter:
                     _slog.info(f'WarpImporter: refined profile from pixel counts: '
                                f'{dict((k,v) for k,v in profile.items() if v)}')
 
-        # Equipment rows that hold items but could not be named get no boxes.
-        # Say so where the user looks — once they draw boxes there (merged
-        # back as confirmed), the row is no longer missing and this goes quiet.
-        _missing = self._unnamed_rows_without_boxes(layout)
-        if _missing:
-            result.errors.append(
-                f'{len(_missing)} row(s) of the equipment panel could not be named '
-                f'({_row_ranges([r["row"] for r in _missing])} from the top) and have '
-                f'no boxes yet. Add them in WARP CORE: Alt+drag over each icon, and '
-                f'check the slot it suggests.')
+        # Equipment rows the detector could only guess, or not type at all,
+        # carry boxes but not a settled slot. Say so where the user looks.
+        _msg = _row_guess_message(getattr(self._get_layout(), 'last_row_guesses', None))
+        if _msg:
+            result.errors.append(_msg)
 
         matcher = self._get_matcher()
 
@@ -2579,11 +2585,30 @@ class WarpImporter:
                 })
                 # Add them to profile so they are not skipped by max_count limit
                 profile[key] = 4
+        # Equipment rows no type fits come as 'Unknown' groups; like seat
+        # keys they are not in any slot order, so they join here, sized by
+        # the boxes the detector drew.
+        for key in layout.keys():
+            if key.startswith('Unknown') and key not in seen_seat_keys:
+                slot_defs_to_process.append({
+                    'name': key, 'key': '', 'mandatory': False,
+                    'max': len(layout[key]), 'weapon': False, 'exp': False})
 
         # Build per-slot candidate sets restricted by SLOT_VALID_TYPES.
         # This prevents template matching from picking items of the wrong type
         # (e.g. a shield icon matching the Warp Core slot at conf=1.00).
         slot_candidates = self._build_slot_candidates(slot_defs_to_process, build_type)
+        # An Unknown row may be any equipment row, so its items are read
+        # against all of them — what they turn out to be is what tells the
+        # user which row it is.
+        _eq_union = set().union(*(slot_candidates.get(d['name']) or set()
+                                  for d in SPACE_SLOT_ORDER))
+        for sd in slot_defs_to_process:
+            if sd['name'].startswith('Unknown'):
+                slot_candidates[sd['name']] = set(_eq_union)
+        _row_guesses = getattr(self._get_layout(), 'last_row_guesses', None)
+        if not isinstance(_row_guesses, dict):   # a detector that never measured
+            _row_guesses = {}
 
         # Count total bboxes upfront for granular progress reporting.
         total_bboxes = sum(
@@ -2984,6 +3009,7 @@ class WarpImporter:
                     src          = getattr(matcher, '_last_match_src', '') or '',
                     variant      = getattr(matcher, '_last_match_variant', '') or '',
                     match_origin = getattr(matcher, '_last_match_origin', '') or '',
+                    row_guess    = _row_guesses.get(slot_name, ''),
                 )
                 result.items.append(_new_item)
                 # Capture U-seat items for post-pass refinement (skip virtuals).
@@ -3656,22 +3682,6 @@ class WarpImporter:
         except Exception as e:
             _slog.debug(f'WarpImporter: _load_confirmed_profile error: {e}')
             return {}
-
-    def _unnamed_rows_without_boxes(self, layout: dict) -> list[dict]:
-        """Equipment rows the detector could not name that hold items and that
-        no box of *layout* covers yet (see LayoutDetector.last_unnamed_rows)."""
-        rows = getattr(self._get_layout(), 'last_unnamed_rows', None)
-        if not isinstance(rows, list):     # a detector that never measured
-            return []
-        boxes = [b for bs in (layout or {}).values() for b in bs if b and len(b) >= 4]
-        out = []
-        for r in rows:
-            covered = any(r['y0'] <= b[1] + b[3] / 2 <= r['y1']
-                          and r['x0'] - 5 <= b[0] + b[2] / 2 <= r['x1'] + 5
-                          for b in boxes)
-            if not covered:
-                out.append(r)
-        return out
 
     def _build_slot_candidates(self, slot_defs: list,
                                 build_type: str = '') -> dict[str, set[str]]:

@@ -982,6 +982,9 @@ class WarpCoreWindow(QMainWindow):
                 'variant':     getattr(it, 'variant', '') or '',
                 'seat_key':    getattr(it, 'seat_key', '') or '',
                 'slot_index':  int(getattr(it, 'slot_index', -1) if getattr(it, 'slot_index', None) is not None else -1),
+                # A guessed or Unknown equipment row stays unsettled in Fast
+                # Correction too, so it is confirmed there before it counts.
+                'row_guess':   getattr(it, 'row_guess', '') or '',
             })
         return out
 
@@ -2371,6 +2374,7 @@ class WarpCoreWindow(QMainWindow):
         # For confirmed NON_ICON_SLOT items with empty name (e.g. Ship Type confirmed
         # before OCR finished), re-run OCR now so the name is filled in.
         self._ocr_empty_non_icon_items()
+        self._refresh_group_headings()
         self._refresh_mark_done_btn()
 
     # ── Review list (5-column QTreeWidget) helpers ─────────────────────
@@ -2624,6 +2628,10 @@ class WarpCoreWindow(QMainWindow):
 
         # --- group header: BOFF type-change menu ---
         group_label = item.data(0, Qt.ItemDataRole.UserRole) or ''
+        if self._is_eq_group(group_label):
+            if not self._is_current_locked():
+                self._show_eq_group_menu(item, group_label, pos)
+            return
         if not group_label.startswith('Boff'):
             return
         if self._is_current_locked():
@@ -2738,6 +2746,117 @@ class WarpCoreWindow(QMainWindow):
         self._review_list.setCurrentRow(row)
         self._name_edit.setText(dlg.chosen)
         self._on_accept()
+
+    # ── Equipment group type: confirm a guess, or choose/change the type ──
+    #
+    # A row the detector could only guess, or not type at all
+    # (RecognisedItem.row_guess), is shown as "<slot> (guess)" or "Unknown"
+    # and its items cannot be accepted until the user settles the row here.
+
+    @staticmethod
+    def _is_eq_group(label: str) -> bool:
+        from warp.recognition import space_eq_rows as _eq_rows
+        return label in _eq_rows.INDEX or label.startswith('Unknown')
+
+    def _refresh_group_headings(self) -> None:
+        """Show '(guess)' on equipment groups whose type is still a guess."""
+        rl = self._review_list
+        for key, parent in list(rl._slot_parents.items()):
+            if not self._is_eq_group(key):
+                continue            # BOFF / trait headings keep their own labels
+            rows = rl.child_rows_of(parent)
+            guessed = any(self._recognition_items[r].get('row_guess') == 'guess'
+                          for r in rows if r < len(self._recognition_items))
+            text = f'{_pretty_slot(key)} (guess)' if guessed else (
+                key if key.startswith('Unknown') else _pretty_slot(key))
+            if parent.text(0) != text:
+                parent.setText(0, text)
+
+    def _show_eq_group_menu(self, item, group_label: str, pos) -> None:
+        from warp.recognition import space_eq_rows as _eq_rows
+        rows = self._review_list.child_rows_of(item)
+        guessed = any(self._recognition_items[r].get('row_guess') == 'guess'
+                      for r in rows if r < len(self._recognition_items))
+        own = set(rows)
+        used = {ri.get('slot', '') for i, ri in enumerate(self._recognition_items)
+                if i not in own}
+        menu = QMenu(self)
+        act_confirm = None
+        if guessed:
+            act_confirm = menu.addAction(f'Confirm type: {group_label}')
+        sub = menu.addMenu('Change Group Type' if not group_label.startswith('Unknown')
+                           else 'Choose Group Type')
+        for slot in _eq_rows.SLOTS:
+            if slot == group_label or slot in used:
+                continue
+            act = sub.addAction(slot)
+            act.setData(slot)
+        chosen = menu.exec(self._review_list.viewport().mapToGlobal(pos))
+        if chosen is None:
+            return
+        if chosen is act_confirm:
+            self._settle_eq_group(item, group_label, group_label)
+        elif chosen.data():
+            self._settle_eq_group(item, group_label, chosen.data())
+
+    def _settle_eq_group(self, parent_item, old_label: str, new_label: str) -> None:
+        """Settle an equipment row's type. Confirming a guess keeps its items;
+        a different type rematches them against that slot's items and moves
+        them to its group. Either way the row stops being a guess, and its
+        items can be accepted."""
+        from warp.recognition.icon_matcher import SETSIconMatcher
+        from warp.debug import log as _sl
+        rows = self._review_list.child_rows_of(parent_item)
+        if not rows:
+            return
+        _sl.info(f'settle_eq_group: {old_label!r} → {new_label!r} ({len(rows)} items)')
+        if new_label == old_label:
+            for row in rows:
+                if row < len(self._recognition_items):
+                    self._recognition_items[row]['row_guess'] = ''
+        else:
+            candidates = set(self._build_search_candidates(new_label))
+            img = None
+            for row in rows:
+                if row >= len(self._recognition_items):
+                    continue
+                ri = self._recognition_items[row]
+                crop = ri.get('crop_bgr')
+                if crop is None and self._current_idx >= 0 and ri.get('bbox'):
+                    import cv2
+                    if img is None:
+                        img = cv2.imread(str(self._screenshots[self._current_idx]))
+                    if img is not None:
+                        x, y, w, h = ri['bbox']
+                        crop = img[y:y + h, x:x + w].copy()
+                        ri['crop_bgr'] = crop
+                name, conf, thumb = '', 0.0, None
+                if crop is not None and candidates:
+                    try:
+                        _n, _c, _t, _u = SETSIconMatcher(self._sets).match(
+                            crop, candidate_names=candidates)
+                        if _c >= 0.40:
+                            name, conf, thumb = _n, _c, _t
+                    except Exception as e:
+                        _sl.warning(f'settle_eq_group rematch failed row {row}: {e}')
+                ri.update(name=name, conf=conf, thumb=thumb, slot=new_label,
+                          state='pending', auto_confirmed=False,
+                          cross_check_failed=False, row_guess='',
+                          _group_label=new_label)
+                litem = self._review_list.item(row)
+                if litem:
+                    self._populate_review_item(
+                        litem, name, new_label, conf, confirmed=False,
+                        cross_check_failed=False, auto_confirmed=False,
+                        conflict_disk_name='', group_label=new_label)
+                    self._review_list.reparent_item(litem, new_label, _pretty_slot(new_label))
+            self._resort_parents_canonical()
+        self._refresh_group_headings()
+        self._ann_widget.set_review_items(self._recognition_items)
+        self._refresh_mark_done_btn()
+        self.statusBar().showMessage(
+            f'Group type confirmed: {new_label}' if new_label == old_label
+            else f'Group changed: {old_label} → {new_label} ({len(rows)} items rematched)')
 
     def _change_boff_group_type(self, parent_item, old_label: str, new_label: str):
         """Change all items in a BOFF group to a new group type and rematch."""
@@ -3503,6 +3622,9 @@ class WarpCoreWindow(QMainWindow):
             if s not in seen:
                 slot_order.append(s)
                 seen.add(s)
+        # Unknown equipment groups go where their rows are, not to the end.
+        from warp.recognition.boff_keys import place_unknown_groups
+        slot_order = place_unknown_groups(slot_order, lambda k: _child_min_yx(k)[0])
 
         rl.reorder_parents(slot_order)
         self._resync_recognition_with_visual()
@@ -4650,6 +4772,7 @@ class WarpCoreWindow(QMainWindow):
                 )
                 continue
             if ri.get('state') != 'pending': continue
+            if ri.get('row_guess'): continue   # its row's type is not settled yet
             slot = ri.get('slot', '')
             conf = ri.get('conf', 0.0)
             if conf < threshold: continue
@@ -4769,6 +4892,21 @@ class WarpCoreWindow(QMainWindow):
                 'Accept blocked: screenshot is marked Done — '
                 'press ↩ Back to Edit to modify.', 6000)
             return
+        # An item in an equipment row whose type is a guess, or Unknown, is
+        # not confirmed until the row is: a confirmed item goes into the
+        # training data and the upload queue with its slot, and a guessed
+        # slot that turns out wrong would be filed there as fact.
+        _row = self._review_list.currentRow()
+        if 0 <= _row < len(self._recognition_items):
+            _rg = self._recognition_items[_row].get('row_guess', '')
+            if _rg:
+                self.statusBar().showMessage(
+                    "Accept blocked: this row's type is "
+                    + ('a guess' if _rg == 'guess' else 'Unknown')
+                    + ' — right-click its group to '
+                    + ('confirm or change the type' if _rg == 'guess' else 'choose its type')
+                    + ' first.', 8000)
+                return
         slot, name = self._current_editor_value()
         # NON_ICON_SLOTS guard: if the user clicks Accept while the Ship
         # Type / Tier editor is empty (combo was blanked because OCR
@@ -5606,9 +5744,14 @@ class WarpCoreWindow(QMainWindow):
         )
         if pending:
             self._btn_done.setEnabled(False)
-            self._btn_done.setToolTip(
-                f'Mark Done blocked: {pending} item(s) still not '
-                f'confirmed — confirm them first.')
+            _unsettled = sorted({ri.get('_group_label') or ri.get('slot', '')
+                                 for ri in self._recognition_items if ri.get('row_guess')})
+            _tip = (f'Mark Done blocked: {pending} item(s) still not '
+                    f'confirmed — confirm them first.')
+            if _unsettled:
+                _tip += (f' Group type still to confirm or choose: {", ".join(_unsettled)} '
+                         f'(right-click the group).')
+            self._btn_done.setToolTip(_tip)
             suffix = f'{self._MARK_DONE_TAIL_SEP}{pending} to confirm'
         else:
             self._btn_done.setEnabled(True)

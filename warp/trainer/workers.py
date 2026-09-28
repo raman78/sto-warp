@@ -324,12 +324,12 @@ class RecognitionWorker(QThread):
             result = importer._process_image(img, str(self._path),
                                               skip_bboxes=self._skip_bboxes or None)
             _slog.info(f'RecognitionWorker: pipeline done — {len(result.items)} items found')
-            # Capture EQ geometry from the layout detector's per-image cache so
-            # the canvas can overlay the 6×N grid that detection actually used.
-            try:
-                self.eq_geom = importer._get_layout()._eq_geom_cache.get(id(img))
-            except Exception:
-                self.eq_geom = None
+            # The EQ grid detection used, for the canvas to draw on rows whose
+            # type is still to be settled. Read from the detector's last
+            # answer: its cache is keyed on pixel content (and whether a
+            # matcher was at hand), and the `id(img)` lookup that used to be
+            # here found nothing from 2026-08-31 on.
+            self.eq_geom = getattr(importer._get_layout(), 'last_eq_geometry', None)
             self.errors = list(result.errors)
             # Only a matched ship's profile says which rows it lacks; the
             # fallback for an unidentified ship is a guess (every optional row
@@ -386,7 +386,10 @@ class RecognitionWorker(QThread):
                           # by `order_items_for_display` to sort group children
                           # in detection order instead of falling back to name.
                           'slot_index': getattr(ri, 'slot_index', 0) or 0,
-                          'src': getattr(ri, 'src', '')})
+                          'src': getattr(ri, 'src', ''),
+                          # '' / 'guess' / 'unknown' — how sure the detector is of
+                          # the equipment row this item sits in (see eq_row_naming).
+                          'row_guess': getattr(ri, 'row_guess', '') or ''})
         # Summary table: per-stage scores + Δ vs previous run for this image.
         try:
             _log_match_summary(self._path.name, getattr(importer, 'match_log', []))

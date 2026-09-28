@@ -227,25 +227,63 @@ panel's slot sequence is known too, so a run of unnamed rows between two
 anchored ones can be filled from the slots that lie between those anchors.
 `fill_unanchored_rows` does this **only when the count is unambiguous**: a run
 of two unnamed rows is filled only if exactly two expected slots sit between
-its neighbours. When the numbers disagree the rows stay unnamed, deliberately —
-an unnamed row costs the user one manual box, a wrongly named one silently
-writes an item into the wrong slot.
+its neighbours. When the numbers disagree the profile cannot name the run, and
+a wrong name would silently write an item into the wrong slot.
 
-That box is asked for, not left for the user to notice. The pixel analysis
-records every unnamed row that holds an item (`last_unnamed_rows`), and the
-importer turns the ones no box covers into a line in `ImportResult.errors`,
-which WARP CORE shows under the review list: *"4 row(s) of the equipment
-panel could not be named (rows 8-11 from the top) and have no boxes yet…"*.
-Once the user draws boxes there they come back merged as confirmed, cover
-the row, and the line goes quiet. Only rows known to belong to the panel are
-reported: those above the last named row, and those within the rows every
-ship draws after it (`space_eq_rows`: under Aft Weapons always Devices and
-three console rows). Past that a label-less stack can run on into whatever
-sits under the panel — on the 109 annotated screenshots four such rows held
-another panel's icons — and asking for them would ask for rows that do not
-exist. With OCR off, seven of the 109 screenshots raise the line.
+**Naming a row from what is in it — or guessing, and saying so.** Such a run
+goes to `eq_row_naming.name_run` (`LayoutDetector._name_rows_by_content`). The
+slots that can sit there are those between the run's named neighbours in
+`space_eq_rows.ROWS`, not already used on the panel, and every mandatory one
+among them — except, with no named row above the run, the mandatory rows
+above the arrangement's own first row: the panel's top may be cut or
+covered, and requiring Fore there once shifted a whole panel by one row and
+turned Engines, Warp Core and Shield, read at 97-100%, into Unknown. Each
+arrangement of them is scored by the items the matcher reads
+in the run's filled cells — a cell whose item could not sit in the row the
+arrangement gives it counts against it, "could sit" coming straight from the
+cargo groups. Each row then comes out one of four ways:
 
-When the user draws such a box, WARP CORE suggests its slot from the rows
+| Outcome | When | What the user sees |
+|---|---|---|
+| named | one arrangement fits best and leaves at most 10% of the read cells out of place, or every best one agrees on the row | an ordinary group |
+| guessed | an arrangement fits, but not certainly — ties go to the one with fewer optional rows, most ships lacking them | *"Devices (guess)"* |
+| Unknown | no arrangement exists, or most of the row's items cannot sit in the slot the best one gives it | *"Unknown"*, *"Unknown #2"*… |
+| outside | at the panel's open bottom, a trailing row the best arrangement leaves out; leaving a row out costs its items, so a real last row is kept and another panel's icons are not | no boxes |
+
+A guessed or Unknown row keeps its boxes — one per cell the game drew, not
+the profile's count, which says nothing about a row nobody can name — and its
+items carry `RecognisedItem.row_guess` ('guess' / 'unknown'). Its
+measurements stay out of `last_row_pixel_counts`, so a guessed Devices row
+cannot raise a ship's upgrade tier. The importer puts a line in
+`ImportResult.errors` naming the guessed and Unknown groups, which WARP CORE
+shows under the review list.
+
+In WARP CORE — and so in Fast Correction, the same review panel — such a
+group's items cannot be accepted, by hand or by auto-accept, until the user
+right-clicks the group and confirms the guessed type or chooses another
+(`WarpCoreWindow._settle_eq_group`, which rematches the items against the
+chosen slot). A confirmed item goes into the training data and the upload
+queue with its slot, so a guessed slot confirmed item by item would be filed
+as fact. Mark Done waits for the same reason, and its tooltip names the
+groups still open. The grid of such a row is drawn on the canvas, and only
+of such rows, so the user sees where WARP was unsure. The SETS export leaves
+their items out and says how many (`WriteReport.unsettled_items`).
+
+Measured 2026-09-28 over the 109 annotated space screenshots (55 SPACE_EQ,
+54 SPACE_MIXED; 3230 confirmed equipment boxes), counting boxes whose slot
+matches the annotation. With OCR switched off, so every row has to be named
+without its label: 3093 boxes found; 3059 in rows named with certainty and
+right, 3 named with certainty and wrong; 28 in guessed rows, 20 of them
+right (the 8 wrong ones all on one screenshot); 3 in Unknown rows. The 3
+certain-and-wrong boxes are wrong with OCR on as well, so they do not come
+from naming by content. Also with OCR off, 101 boxes land where no item was
+annotated; 34 of them on one screenshot whose panel the stack places
+wrongly (none of its 33 items found), and two more screenshots get no
+equipment boxes at all. With OCR on
+no row is guessed or Unknown — the labels name them all — and 3215 boxes
+are right, 14 land where nothing was annotated.
+
+When the user draws a missing box, WARP CORE suggests its slot from the rows
 around it (`WarpCoreWindow._suggest_slot_from_position`). It walks the same
 order, from `space_eq_rows`, skipping rows the identified ship lacks — only
 an identified one: the fallback profile for an unknown ship sets every
@@ -531,7 +569,12 @@ Fore Weapons. No other panel has that shape.
    rows, then 3-8 more rows (`_fit_panel`). Rows outside that are trimmed. A
    trait grid never fits — the game draws the frame of every empty trait
    slot, so its rows are full — and a side list fails the rule that the run
-   starts on the second row.
+   starts on the second row. A run of 4 or 5 is exactly Deflector..Shield,
+   so Fore is the row above it; a run of 3 or 6 may be off by one because
+   something covered a row, so two rows are kept above it. On
+   `Hirogen Predator.png` with OCR off, a weapon tooltip over the Deflector
+   row made it read five cells; trimming to one row above the run cut Fore
+   Weapons off the panel.
 
 ### Naming the rows
 
@@ -559,8 +602,8 @@ emission — is unchanged.
   scored too, and where several share the best score only the rows they all
   agree on are named. A row left unnamed is logged with the reason
   (`eq_stack: N row(s) under Aft Weapons left unnamed — …`) and is handled
-  like any row whose label OCR missed — reported to the user if it holds an
-  item (§2, "When OCR does not deliver the label").
+  like any row whose label OCR missed: named from its content, guessed or
+  called Unknown (§2, "When OCR does not deliver the label").
 
 The importer hands the matcher to `detect()` for `SPACE` builds for this
 alone (`_needs_matcher`); nothing else in the space chain uses it.
@@ -608,6 +651,8 @@ exist.
 | `mode=MATH_FALLBACK` | no single-slot icon right edge found; `panel_right` extrapolated | `detect_eq_geometry` |
 | `eq_stack: no equipment panel found without labels` | no labels, and no stack of cells with the equipment panel's shape — a cropped fragment, or no panel at all | §6 |
 | `eq_stack: N row(s) under Aft Weapons left unnamed — …` | the rows' items fit no single arrangement; the reason is in the line | §6, `_content_anchors` |
+| `row N → 'X' (guess)` / `row N → 'Unknown' (unknown)` | nothing established the row's type; it is shown to the user to settle | §2, `eq_row_naming` |
+| `row N left out — past the panel's bottom` | a label-less stack ran on under the panel; the row's items fit nothing that can follow | §2, `eq_row_naming` |
 
 ## Measured baseline
 

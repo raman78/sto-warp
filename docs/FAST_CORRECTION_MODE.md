@@ -215,6 +215,15 @@ All generic review-panel UI features carry over unchanged into FC:
 These are not gated by mode — the same code paths execute in both
 normal training and FC.
 
+- **Equipment rows whose type is a guess or Unknown**
+  (`RecognisedItem.row_guess`, see `docs/EQ_DETECTION.md` §2). The entry
+  seed (`set_fast_correction_mode` → the items WARP hands over) carries the
+  flag, so such groups stay marked in FC. Their items cannot be accepted until
+  the group's type is confirmed or chosen from its right-click menu
+  (`WarpCoreWindow._settle_eq_group`), which also keeps Mark Done — and so
+  Send this to WARP — blocked until they are settled. Send this to WARP builds
+  from confirmed annotations only, so what reaches SETS is always settled.
+
 ---
 
 ## 5½. Bbox dedup and removal — IoU matching (1.0.18)
