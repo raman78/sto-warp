@@ -141,3 +141,73 @@ def test_everything_current_downloads_nothing(models_dir, spy_updater, monkeypat
     updater._bg_check()
 
     assert calls == []
+
+
+# ── Models path per input size ────────────────────────────────────────────
+#
+# The 128 set is published under `models/in128/`; `models/` keeps the last
+# 224 set for clients that hardcode 224 (a 128 model fed 224 loses ~24
+# points in the embedder, measured 2026-09-28). This client asks for 128 and
+# downloads the icon models from the path the backend's answer names.
+
+@pytest.fixture
+def hub(monkeypatch, tmp_path):
+    asked: list[str] = []
+
+    def _dl(repo_id, filename, repo_type):
+        asked.append(filename)
+        p = tmp_path / 'hub' / filename.replace('/', '__')
+        p.parent.mkdir(exist_ok=True)
+        p.write_bytes(b'x')
+        return str(p)
+
+    import huggingface_hub
+    monkeypatch.setattr(huggingface_hub, 'hf_hub_download', _dl)
+    return asked
+
+
+def test_the_version_check_asks_for_the_128_set(monkeypatch):
+    seen = {}
+
+    class _Resp:
+        def raise_for_status(self):
+            pass
+
+        def json(self):
+            return {'available': False}
+
+    def _get(url, params=None, **kw):
+        seen['params'] = params
+        return _Resp()
+
+    import requests
+    monkeypatch.setattr(requests, 'get', _get)
+    ModelUpdater()._fetch_remote_version()
+
+    assert seen['params'] == {'input': 128}
+
+
+def test_icon_models_come_from_the_path_the_version_names(models_dir, hub):
+    ok = ModelUpdater()._download_model(models_dir, {'models_path': 'models/in128'})
+
+    assert ok
+    assert 'models/in128/icon_classifier.pt' in hub
+    assert 'models/in128/embedding_index.npz' in hub
+    assert 'models/in128/model_version.json' in hub
+    # Nothing that does not depend on the input size moves.
+    assert 'models/screen_classifier.pt' in hub
+    assert 'models/community_anchors.json' in hub
+    assert not any(f.startswith('models/in128/screen') for f in hub)
+
+
+def test_a_backend_without_the_field_means_the_legacy_set(models_dir, hub):
+    ModelUpdater()._download_model(models_dir, {})
+
+    assert 'models/icon_classifier.pt' in hub
+    assert not any('/in128/' in f for f in hub)
+
+
+@pytest.mark.parametrize('bad', ['models/../secrets', 'elsewhere', '/models/x', 'modelsx'])
+def test_a_path_outside_models_is_refused(models_dir, hub, bad):
+    assert ModelUpdater()._download_model(models_dir, {'models_path': bad}) is False
+    assert hub == []

@@ -76,6 +76,21 @@ _EMBEDDER_FILES = [
     ('models/embedding_index.npz',     'embedding_index.npz'),
 ]
 _REQUIRED_FULL     = ('icon_classifier.pt', 'label_map.json')
+
+# The icon models are published per input size: `models/` holds the 224 set
+# and stops changing once 128 is published under `models/in128/`. Clients that
+# hardcode 224 keep reading `models/`; a 128 model fed 224 loses about 24
+# points in the embedder (measured 2026-09-28). This client feeds each model
+# the size its meta declares, so it asks for the 128 set, and the backend
+# answers with the path its version describes — the 224 set until a 128 one
+# exists. Only these files move; everything else stays under `models/`.
+_MODEL_INPUT_SIZE = 128
+_LEGACY_MODELS_PATH = 'models'
+_SIZED_FILES = frozenset({
+    'icon_classifier.pt', 'label_map.json', 'icon_classifier_meta.json',
+    'model_version.json', 'icon_embedder.pt', 'embedder_label_map.json',
+    'icon_embedder_meta.json', 'embedding_index.npz',
+})
 _REQUIRED_EMBEDDER = ('icon_embedder.pt', 'embedder_label_map.json', 'embedding_index.npz')
 
 # Weights that mean nothing without their label map, and must never be
@@ -92,8 +107,24 @@ _REQUIRED_EMBEDDER = ('icon_embedder.pt', 'embedder_label_map.json', 'embedding_
 # So the pair is installed together or not at all. The partner is not in
 # `_REQUIRED_FULL`, because a missing screen classifier must not abort the
 # icon model's download — it is optional as a *pair*, not file by file.
-_PAIRED_FILES = {
-    'screen_classifier.pt': 'screen_classifier_labels.json',
+#
+# The icon models are paired with their meta file for a different reason: it
+# declares `input_size`, and the matcher resizes every crop to it. Weights
+# trained on 128 read through a previous 224 meta still answer, only worse,
+# and nothing reports it.
+#
+# The embedder is a set of four, not a pair. In the full download every one of
+# its files is optional on its own, so new weights could land beside the
+# previous run's gallery: vectors from two models compared as if they were
+# one, every match wrong and nothing to say so. Each file waits for the
+# others. (The icon classifier and its label map need no entry for that: both
+# are in `_REQUIRED_FULL`, so either one missing aborts the whole download.)
+_EMBEDDER_SET = ('icon_embedder.pt', 'embedding_index.npz',
+                 'embedder_label_map.json', 'icon_embedder_meta.json')
+_PAIRED_FILES: dict[str, tuple[str, ...]] = {
+    'screen_classifier.pt': ('screen_classifier_labels.json',),
+    'icon_classifier.pt':   ('icon_classifier_meta.json',),
+    **{name: tuple(n for n in _EMBEDDER_SET if n != name) for name in _EMBEDDER_SET},
 }
 
 
@@ -316,6 +347,7 @@ class ModelUpdater:
             import requests
             resp = requests.get(
                 f'{_BACKEND_URL}/model/version',
+                params={'input': _MODEL_INPUT_SIZE},
                 headers={'User-Agent': 'WARP/0.4.0'},
                 timeout=(config.MODEL_CONNECT_TIMEOUT, config.MODEL_READ_TIMEOUT),
             )
@@ -353,6 +385,16 @@ class ModelUpdater:
             return False
 
         hf_repo = 'sets-sto/warp-knowledge'
+        # Which published set the version describes. A backend that predates
+        # the field serves the legacy set only.
+        models_path = remote_meta.get('models_path') or _LEGACY_MODELS_PATH
+        if not (models_path == _LEGACY_MODELS_PATH
+                or (models_path.startswith(_LEGACY_MODELS_PATH + '/')
+                    and '..' not in models_path)):
+            log.warning(f'ModelUpdater: backend named models_path={models_path!r}, '
+                        f'which is not a models folder — not downloading; the '
+                        f'current model stays')
+            return False
         models_dir.mkdir(parents=True, exist_ok=True)
         tmp_files: list[tuple[Path, Path]] = []  # (tmp_path, final_path)
 
@@ -360,6 +402,8 @@ class ModelUpdater:
         total = len(files)
         n_classes = remote_meta.get('n_classes', '?')
         for idx, (hf_path, local_name) in enumerate(files):
+            if local_name in _SIZED_FILES:
+                hf_path = f'{models_path}/{local_name}'
             if on_progress:
                 on_progress(
                     f'Downloading ML model ({n_classes} classes): {local_name}',
@@ -407,16 +451,17 @@ class ModelUpdater:
         set that agrees with itself, and the next check retries.
         """
         got = {dst.name for _src, dst in tmp_files}
-        withheld = {name for name, partner in _PAIRED_FILES.items()
-                    if name in got and partner not in got}
+        missing = {name: [p for p in partners if p not in got]
+                   for name, partners in _PAIRED_FILES.items() if name in got}
+        withheld = {name for name, gone in missing.items() if gone}
         if not withheld:
             return tmp_files
         for name in sorted(withheld):
             log.warning(
-                f'ModelUpdater: {name} downloaded but {_PAIRED_FILES[name]} '
-                f'did not — not installing it, because weights read through '
-                f'the wrong label map name every class wrongly. Keeping the '
-                f'current pair; the next check retries.')
+                f'ModelUpdater: {name} downloaded but {", ".join(missing[name])} '
+                f'did not — not installing it, because a model file read '
+                f'through another run\'s companion answers wrongly with nothing '
+                f'to show for it. Keeping the current set; the next check retries.')
         return [(src, dst) for src, dst in tmp_files if dst.name not in withheld]
 
     def _ensure_screen_classifier(self, models_dir: Path) -> None:

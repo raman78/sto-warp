@@ -199,7 +199,7 @@ override.
 | Workflow | When | Fails the job on |
 |---|---|---|
 | `merge_staging.yml` | every 2 h | any merger crashing |
-| `train_central_model.yml` | hourly | training error, or a collapsed model |
+| `train_central_model.yml` | every 6 h | training error, or a collapsed model |
 | `train_metric_model.yml` | daily 00:45 UTC | as above |
 | `audit_pipeline_movement.yml` | daily 07:00 UTC | a movement breach |
 | `audit_staging_health.yml` | monthly | staging health breach |

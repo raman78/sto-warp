@@ -240,7 +240,7 @@ A GitHub Actions workflow runs `admin_train.py` on a schedule:
 # .github/workflows/train_central_model.yml  (sets-warp-backend repo)
 on:
   schedule:
-    - cron: '0 * * * *'   # every hour
+    - cron: '0 */6 * * *'   # every 6 hours
   workflow_dispatch:       # manual trigger
 ```
 
@@ -277,17 +277,20 @@ For each screen type class:
 File: `sets-warp-backend/admin_train.py` — `train()`
 
 ```
-1. Download previous icon_classifier.pt from HF warp-knowledge (for fine-tuning)
-2. Download all winning crops from staging via snapshot_download per install_id
-   (bulk folder download — far fewer HTTP round-trips than per-file)
+1. Download the previous icon_classifier.pt for fine-tuning — from
+   models/in128/, or models/ while no 128 model has been published
+2. Clone data/crops from sets-sto/sto-icon-dataset over git (one operation;
+   the per-file REST path is rate-limited)
 3. Stratified train/val split
-4. Build EfficientNet-B0, replace head for n_classes
+4. Build EfficientNet-B0 for 128x128 input, replace head for n_classes
 5. Load previous backbone weights (classifier.* keys stripped)
    LR = 3e-4 × 0.3 when fine-tuning, 3e-4 from scratch
-6. Train with focal loss + cosine annealing + early stopping
-7. Save: icon_classifier.pt, label_map.json, icon_classifier_meta.json,
-         model_version.json, training_manifest.json
-8. Upload all files to sets-sto/warp-knowledge/models/
+6. Train with class-weighted cross-entropy + cosine annealing + early
+   stopping, inside a 270-min budget (no epoch started that cannot finish)
+7. Save: icon_classifier.pt, label_map.json, icon_classifier_meta.json
+         (with input_size), model_version.json, training_manifest.json
+8. Upload the icon files to sets-sto/warp-knowledge/models/in128/, the
+   screen classifier to models/
 ```
 
 `training_manifest.json` records the set of crop SHAs used in this run —
@@ -336,6 +339,8 @@ in the same `create_commit`, so the two are never separable on HuggingFace.
 | Rule | Where | What it prevents |
 |---|---|---|
 | Weights are not installed unless their label map arrived in the same download | `ModelUpdater._drop_unpaired`, driven by `_PAIRED_FILES` | New weights read through the previous run's names |
+| The icon classifier is not installed without its meta file | same | Weights trained at 128 read at the previous meta's 224 |
+| The four embedder files install together or not at all | same, `_EMBEDDER_SET` | New weights compared against the previous run's gallery — in the full download each embedder file is otherwise optional on its own |
 | The "download if missing" check tests both files, not just the `.pt` | `ModelUpdater._ensure_screen_classifier` | A partial download becoming permanent, since the old guard saw the `.pt` and returned |
 | No label map means the model is refused, not guessed | `ScreenTypeClassifier._load` | Confidently wrong screen types |
 | A label count that disagrees with the head size refuses the model | `ScreenTypeClassifier._load` | An answer the client cannot name |
@@ -547,8 +552,8 @@ Fired by `SyncCoordinator` as the `model` step of every refresh cycle
 ```
 1. Check rate limit: skip if last check was < 15 min ago
    (_CHECK_INTERVAL_HOURS = 0.25 in model_updater.py)
-2. GET https://sets-sto-warp-backend.hf.space/model/version
-   → returns {available, trained_at, n_classes, val_acc,
+2. GET https://sets-sto-warp-backend.hf.space/model/version?input=128
+   → returns {available, trained_at, n_classes, val_acc, models_path,
               embedder_trained_at, embedder_n_classes, embedder_recall, ...}
 3. Compare remote trained_at vs local model_version.json trained_at:
      remote > local  → download and install new model (_MODEL_FILES)
@@ -557,11 +562,26 @@ Fired by `SyncCoordinator` as the `model` step of every refresh cycle
     trained_at (_embedder_is_outdated):
      remote > local  → download _EMBEDDER_FILES only
      otherwise       → skip (local is current)
-4. Download the selected file list from HF via hf_hub_download
+4. Download the selected file list from HF via hf_hub_download — the icon
+   model files from `models_path` (models/in128, or models before a 128
+   set exists), everything else from models/
 5. Copy files to the models dir atomically
 6. Call SETSIconMatcher.reset_ml_session() to reload immediately
 7. Save check timestamp to model_version_remote_cache.json
 ```
+
+**Icon models per input size (2026-09-28).** The models train at 128 px
+and are published under `models/in128/`; `models/` keeps the last 224 px
+set. The client asks `/model/version?input=128` and downloads the icon files
+from the `models_path` in the answer, so it takes the 224 set until a 128
+one exists and never mixes the two. The matcher then feeds each model the
+size its meta file declares (`model_input_size`, 224 for a meta without the
+field; a meta declaring an impossible size refuses the model). Clients older
+than this hardcode 224 and keep reading `models/`: measured on 1 564
+held-out crops, a 128 model fed 224 drops the embedder from 96.9 % to
+72.6 % top-1, while fed 128 it matches the 224 model. Cropped pictures on HF
+are untouched — both sides resize each crop to 64x64 and then to the model
+size at run time.
 
 **Demotion guard.** The download is only installed if the remote
 `trained_at` is **strictly later** than the local one. A tier-down or
@@ -570,7 +590,7 @@ in the same check — see the `1.0.10` Changelog entry on tier corrections
 for the user-visible symptom this prevents.
 
 **Two clocks, not one.** The softmax classifier
-(`train_central_model.yml`, hourly, only retrains once ≥ 10 new crops have
+(`train_central_model.yml`, every 6 h, only retrains once ≥ 10 new crops have
 been merged) and the ArcFace embedder (`train_metric_model.yml`, daily)
 are published by independent workflows, so their `trained_at` stamps drift
 apart. The embedder is the primary matcher (priority 0 in
@@ -768,10 +788,11 @@ rejected upstream. What changes is that they can no longer answer a query.
 | `sets-sto/sto-icon-dataset` | `staging/<install_id>/crops/` | Icon crop PNGs (64×64) + Ship Type/Tier text crops |
 | `sets-sto/sto-icon-dataset` | `staging/<install_id>/annotations.jsonl` | Label records (icon + text; includes `ml_name` for text slots) |
 | `sets-sto/sto-icon-dataset` | `staging/<install_id>/screen_types/<TYPE>/` | Screen type PNGs |
-| `sets-sto/warp-knowledge` | `models/` | Trained .pt files, label_map.json, model_version.json |
+| `sets-sto/warp-knowledge` | `models/in128/` | Icon classifier + embedder trained at 128 px, their label maps and meta, model_version.json |
+| `sets-sto/warp-knowledge` | `models/` | Screen classifier, anchors; and the last 224 px icon set, kept for clients that hardcode 224 and no longer written |
 | `sets-sto/warp-knowledge` | `models/ship_type_corrections.json` | OCR correction map: `{raw_ocr: corrected_name}` |
 | `sets-sto/warp-knowledge` | `knowledge.json` | pHash → item_name community overrides, and `votes`: every name each hash was voted for |
-| `sets-sto/warp-knowledge` | `models/training_manifest.json` | SHA set from last training run |
+| `sets-sto/warp-knowledge` | `models/in128/training_manifest.json` | SHA set from last training run |
 
 ---
 

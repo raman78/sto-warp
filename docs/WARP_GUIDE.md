@@ -1423,7 +1423,7 @@ whatever type it had before.
 
 ### Model update
 
-A new model is trained hourly on GitHub Actions using all community crops. Your installation
+A new model is trained every 6 hours on GitHub Actions using all community crops. Your installation
 checks for updates **every 15 minutes** (rate-limit cache; uses `requests` with 5 s connect /
 60 s read timeouts to survive Render free-tier cold-starts) and downloads the new
 `icon_classifier.pt` automatically if a newer version is available.

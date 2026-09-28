@@ -122,6 +122,33 @@ KNOWLEDGE_UNVERIFIED_CONF = 0.74
 # above this is refused and recognition falls back to the classifier.
 GALLERY_COLLAPSED_SIM = 0.5
 
+# Side of the square picture the ML models take. The trainers publish it as
+# `input_size` in icon_classifier_meta.json and icon_embedder_meta.json, and
+# it must match what the model was trained on: a network trained on 128 and
+# fed 224 still answers, just worse, with nothing to say so. 224 was the only
+# size ever published before the field was read, so it is the value for a
+# meta file that predates it.
+DEFAULT_ML_INPUT_SIZE = 224
+
+
+def model_input_size(meta_path: Path) -> int:
+    """The input size a model's meta file declares, or 224 when it declares none.
+
+    A value that is present but unusable raises ValueError, so the caller
+    refuses the model instead of guessing a size for it.
+    """
+    try:
+        meta = json.loads(meta_path.read_text(encoding='utf-8'))
+    except FileNotFoundError:
+        return DEFAULT_ML_INPUT_SIZE
+    except (OSError, ValueError) as e:
+        raise ValueError(f'{meta_path.name} is unreadable ({e})') from None
+    size = meta.get('input_size', DEFAULT_ML_INPUT_SIZE)
+    if not isinstance(size, int) or isinstance(size, bool) or not 32 <= size <= 1024:
+        raise ValueError(f'{meta_path.name} declares input_size={size!r}, '
+                         f'which no model here was trained on')
+    return size
+
 
 def gallery_spread(embeddings: np.ndarray, sample: int = 800) -> float:
     """Mean cosine similarity between random pairs of gallery rows.
@@ -353,6 +380,7 @@ class SETSIconMatcher:
         # the embedder model and _gallery_* hold the k-NN search index. When
         # _ml_kind=='classifier' (legacy softmax), _gallery_* stay None.
         self._ml_kind: str = ''        # 'embedder' | 'classifier' | ''
+        self._ml_input_size = DEFAULT_ML_INPUT_SIZE  # set by _get_ml_session
         self._gallery_emb = None       # np.ndarray (N, D) float32, L2-normed
         self._gallery_lbl = None       # np.ndarray (N,) int32 — indices into _label_map
         # True for gallery rows enrolled from wiki art rather than from a
@@ -1090,7 +1118,7 @@ class SETSIconMatcher:
         # Metric-learning path: model is an Embedder, _gallery_* hold the k-NN index.
         if self._ml_kind == 'embedder':
             return self._classify_ml_embed(crop64, candidate_names)
-        rgb = cv2.cvtColor(cv2.resize(crop64, (224, 224)), cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(cv2.resize(crop64, (self._ml_input_size, self._ml_input_size)), cv2.COLOR_BGR2RGB)
         inp = rgb.astype(np.float32) / 255.0
         # ImageNet normalization (same as T.Normalize in admin_train.py)
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
@@ -1173,7 +1201,9 @@ class SETSIconMatcher:
             emb_path = models_dir / 'icon_embedder.pt'
             import hashlib
             digest = hashlib.sha256(emb_path.read_bytes()).hexdigest()[:16]
-            fingerprint = f'{digest}-{self._gallery_emb.shape[1]}'
+            # The input size is part of it: the same weights read at another
+            # size produce other vectors.
+            fingerprint = f'{digest}-{self._gallery_emb.shape[1]}-{self._ml_input_size}'
             cache_path = models_dir / 'art_index.npz'
             cached: dict[str, np.ndarray] = {}
             if cache_path.exists():
@@ -1260,7 +1290,7 @@ class SETSIconMatcher:
         import cv2
         try:
             import torch
-            rgb = cv2.cvtColor(cv2.resize(crop64, (224, 224)), cv2.COLOR_BGR2RGB)
+            rgb = cv2.cvtColor(cv2.resize(crop64, (self._ml_input_size, self._ml_input_size)), cv2.COLOR_BGR2RGB)
             inp = rgb.astype(np.float32) / 255.0
             mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
             std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -1294,7 +1324,7 @@ class SETSIconMatcher:
         self._last_embed_raw_sims = None
         if self._gallery_emb is None or self._gallery_lbl is None:
             return '', 0.0
-        rgb = cv2.cvtColor(cv2.resize(crop64, (224, 224)), cv2.COLOR_BGR2RGB)
+        rgb = cv2.cvtColor(cv2.resize(crop64, (self._ml_input_size, self._ml_input_size)), cv2.COLOR_BGR2RGB)
         inp = rgb.astype(np.float32) / 255.0
         mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
         std  = np.array([0.229, 0.224, 0.225], dtype=np.float32)
@@ -1399,6 +1429,7 @@ class SETSIconMatcher:
                         f'above {GALLERY_COLLAPSED_SIM}). The published model is '
                         f'broken; the next update should replace it')
                 embed_dim = int(gallery['embeddings'].shape[1])
+                input_size = model_input_size(models_dir / 'icon_embedder_meta.json')
                 backbone = efficientnet_b0(weights=None)
                 in_features = backbone.classifier[1].in_features
                 backbone.classifier = nn.Identity()
@@ -1418,13 +1449,15 @@ class SETSIconMatcher:
                 model.eval()
                 self._ml_session = model
                 self._ml_kind = 'embedder'
+                self._ml_input_size = input_size
                 self._gallery_emb = gallery['embeddings'].astype(np.float32)
                 self._gallery_lbl = gallery['labels'].astype(np.int32)
                 self._gallery_is_art = np.zeros(len(self._gallery_lbl), dtype=bool)
                 self._enroll_wiki_art(models_dir)
                 log.info(f'WARP: metric-learning embedder loaded '
                          f'({len(self._label_map)} classes, '
-                         f'gallery={len(self._gallery_emb)}, dim={embed_dim})')
+                         f'gallery={len(self._gallery_emb)}, dim={embed_dim}, '
+                         f'input {input_size})')
                 return self._ml_session
             except Exception as e:
                 # Once per matcher: without this, a refused embedder and no
@@ -1445,6 +1478,7 @@ class SETSIconMatcher:
                     raw = json.load(f)
                 self._label_map = {int(k): v for k, v in raw.items()}
                 n_classes = len(self._label_map)
+                input_size = model_input_size(models_dir / 'icon_classifier_meta.json')
                 model = efficientnet_b0(weights=None)
                 in_features = model.classifier[1].in_features
                 model.classifier[1] = nn.Linear(in_features, n_classes)
@@ -1453,7 +1487,9 @@ class SETSIconMatcher:
                 model.eval()
                 self._ml_session = model
                 self._ml_kind = 'classifier'
-                log.info(f'WARP: local PyTorch icon classifier loaded ({n_classes} classes)')
+                self._ml_input_size = input_size
+                log.info(f'WARP: local PyTorch icon classifier loaded '
+                         f'({n_classes} classes, input {input_size})')
                 return self._ml_session
             except Exception as e:
                 log.warning(f'WARP: local .pt load failed: {e}')
@@ -1471,6 +1507,8 @@ class SETSIconMatcher:
                     raw = json.load(f)
                     self._label_map = {int(k): v for k, v in raw.items()}
                 self._ml_kind = 'classifier'
+                # Legacy export, published before input_size existed.
+                self._ml_input_size = DEFAULT_ML_INPUT_SIZE
                 log.info('WARP: HuggingFace ONNX icon classifier loaded')
                 return self._ml_session
             except Exception as e:

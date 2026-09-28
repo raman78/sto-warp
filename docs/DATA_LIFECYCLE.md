@@ -84,10 +84,10 @@ admin scripts, HF-token handling) see the backend's
 │   `Test Item Name` before they reach data/.                             │
 └─────────────┼────────────────────────────────────────────────────────────┘
               │
-              │  GitHub Actions — train_central_model.yml, cron `0 * * * *`
+              │  GitHub Actions — train_central_model.yml, cron `0 */6 * * *`
               ▼
 ┌──────────────────────────────────────────────────────────────────────────┐
-│   CENTRAL TRAINING  (every hour, 60 min hard cap, CPU runner)            │
+│   CENTRAL TRAINING  (every 6 h, 330 min cap, CPU runner, 128 px)         │
 │                                                                          │
 │   admin_train.py reads ONLY data/  (never staging/)                      │
 │       1. Stratified train/val split on promoted crops                    │
@@ -102,10 +102,11 @@ admin scripts, HF-token handling) see the backend's
 ┌──────────────────────────────────────────────────────────────────────────┐
 │         HuggingFace — sets-sto/warp-knowledge  (DELIVERY)                │
 │                                                                          │
-│   models/icon_classifier.pt        models/icon_embedder.pt               │
-│   models/screen_classifier.pt      models/embedding_index.npz            │
-│   models/label_map.json            models/embedder_label_map.json        │
-│   models/model_version.json        models/ship_type_corrections.json     │
+│   models/in128/icon_classifier.pt  models/in128/icon_embedder.pt         │
+│   models/in128/label_map.json      models/in128/embedding_index.npz      │
+│   models/in128/model_version.json  models/in128/embedder_label_map.json  │
+│   models/screen_classifier.pt      models/ship_type_corrections.json     │
+│   (models/icon_* = last 224 set, kept for clients that hardcode 224)     │
 │   knowledge.json                   models/community_anchors.json         │
 │                                                                          │
 │   contributions/<date>/<uuid>.{png,json}  ← raw pHash votes (not         │

@@ -10,8 +10,23 @@ details live in the git history.
 
 ## [Unreleased]
 
+### Changed
+
+- **Ready for icon models that train in half the time.** The community icon
+  models are moving to smaller pictures, which lets each training run finish
+  properly instead of being cut short, with the same accuracy. This version
+  reads the picture size each model was trained on and downloads the new
+  models from their own folder. Older versions keep the current models, which
+  still work but stop receiving updates, so update to keep getting newer
+  ones.
+
 ### Fixed
 
+- **A model update can no longer leave the icon matcher half-updated.** If
+  one of the matcher's files failed to download while the others arrived,
+  the new files were installed next to old ones and icons were matched
+  against the wrong pictures without any warning. Now its files are
+  installed together or not at all, and the next check tries again.
 - **No more "skipping invalid annotation (empty name)" for every ship name
   on each sync.** WARP CORE kept a picture of your ship's name, which it
   never shares, and the sync then turned each one down. Those pictures are

@@ -358,7 +358,7 @@ without prior assumptions about section position.
 ## Remaining failure modes
 
 - **Tiny `iw=14` panels** (e.g. image1/10/png): patches are too small
-  for the 224×224 EfficientNet input to recognise. `__empty__` returns
+  for the EfficientNet input to recognise. `__empty__` returns
   → groups vote-fail → dropped.
 - **CC drops on heavily cropped panels** (e.g. some 2024-12-12
   captures with `n_ccs=14`): structure intact but coverage degrades.

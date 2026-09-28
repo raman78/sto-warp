@@ -55,24 +55,36 @@ def test_labels_without_weights_are_kept(tmp_path):
 
 
 def test_unrelated_files_are_untouched(tmp_path):
-    got = _pairs(tmp_path, 'icon_classifier.pt', 'label_map.json')
+    got = _pairs(tmp_path, 'ship_type_corrections.json', 'label_map.json')
+    assert ModelUpdater._drop_unpaired(got) == got
+
+
+def test_classifier_weights_without_their_meta_are_withheld(tmp_path):
+    """The meta declares the input size the matcher resizes crops to.
+    Weights trained at 128 read through a previous 224 meta answer worse
+    and nothing says so. (The embedder's meta is covered by the set tests.)"""
+    weights, meta = 'icon_classifier.pt', 'icon_classifier_meta.json'
+    assert ModelUpdater._drop_unpaired(_pairs(tmp_path, weights)) == []
+    got = _pairs(tmp_path, weights, meta)
     assert ModelUpdater._drop_unpaired(got) == got
 
 
 def test_withholding_weights_does_not_drop_the_rest_of_the_download(tmp_path):
     """A missing screen-classifier label map must not cost the icon model."""
-    got = _pairs(tmp_path, 'icon_classifier.pt', 'label_map.json', PT)
+    got = _pairs(tmp_path, 'icon_classifier.pt', 'label_map.json',
+                 'icon_classifier_meta.json', PT)
     kept = [dst.name for _src, dst in ModelUpdater._drop_unpaired(got)]
-    assert kept == ['icon_classifier.pt', 'label_map.json']
+    assert kept == ['icon_classifier.pt', 'label_map.json', 'icon_classifier_meta.json']
 
 
 def test_the_pairing_names_a_file_the_updater_downloads(tmp_path):
     """Guard against the table naming something no download produces."""
     from warp.trainer.model_updater import _MODEL_FILES
     locals_ = {local for _hf, local in _MODEL_FILES}
-    for name, partner in _PAIRED_FILES.items():
+    for name, partners in _PAIRED_FILES.items():
         assert name in locals_
-        assert partner in locals_
+        for partner in partners:
+            assert partner in locals_
 
 
 # ── _ensure_screen_classifier ─────────────────────────────────────────────
@@ -138,3 +150,23 @@ def test_only_the_missing_half_is_fetched(tmp_path, fake_hub):
     ModelUpdater()._ensure_screen_classifier(models)
     assert fake_hub['asked'] == [LABELS]
     assert (models / LABELS).exists()
+
+
+EMBEDDER = ('icon_embedder.pt', 'embedding_index.npz',
+            'embedder_label_map.json', 'icon_embedder_meta.json')
+
+
+@pytest.mark.parametrize('lost', EMBEDDER)
+def test_the_embedder_set_is_installed_whole_or_not_at_all(tmp_path, lost):
+    """New weights beside the previous gallery compare vectors from two
+    models as if they were one. In the full download each embedder file is
+    optional on its own, so one lost file must hold back the other three."""
+    got = _pairs(tmp_path, 'icon_classifier.pt', 'label_map.json',
+                 'icon_classifier_meta.json', *(n for n in EMBEDDER if n != lost))
+    kept = [dst.name for _src, dst in ModelUpdater._drop_unpaired(got)]
+    assert kept == ['icon_classifier.pt', 'label_map.json', 'icon_classifier_meta.json']
+
+
+def test_the_whole_embedder_set_is_installed(tmp_path):
+    got = _pairs(tmp_path, *EMBEDDER)
+    assert ModelUpdater._drop_unpaired(got) == got
