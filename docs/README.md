@@ -22,7 +22,7 @@ written for people who read or change the code.
 | Doc | Scope |
 |---|---|
 | [`DATA_LIFECYCLE.md`](DATA_LIFECYCLE.md) | One confirmation's journey: client → staging → merge → model → client |
-| [`SYNC_ARCHITECTURE.md`](SYNC_ARCHITECTURE.md) | The seven refresh phases, their TTLs and freshness rules |
+| [`SYNC_ARCHITECTURE.md`](SYNC_ARCHITECTURE.md) | The seven refresh phases, their TTLs and freshness rules; the recognition warm-up at start; the launcher's two status lines |
 | [`CARGO_DATA_PLAN.md`](CARGO_DATA_PLAN.md) | Where item/ship reference data comes from, how it is cached, and how a row maps back to its wiki page |
 | [`SETS_FORMAT_CONTRACT.md`](SETS_FORMAT_CONTRACT.md) | The build-JSON format SETS reads: how it is frozen, validated on export, and watched for upstream drift |
 

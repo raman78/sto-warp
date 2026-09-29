@@ -357,6 +357,15 @@ When wired into `warp/recognition/layout_detector.py`:
    inactive predictions as a known weakness (see "Slot content
    classification").
 
+The projected seat boxes are final. `LayoutDetector.detect` ends by passing
+every layout through `drop_boxes_on_text`, which moves a slot off a band of
+OCR text; BOFF seats are exempt, because their boxes come from the marker
+under each seat and there is no heading between seats to overshoot into. OCR
+did once read a seat's four yellow Engineering icons as the word `rrrb`, and
+the rule moved correct boxes onto the officer's name bar — see "A slot never
+sits on a label" in `TRAIT_DETECTION.md` for the rule, the case and the
+measurement behind the exemption.
+
 ## Failure modes still in play
 
 - All GT seats covered on the 36-screen GT set (177/177 = 100%).

@@ -320,46 +320,145 @@ Each step is wrapped in `try/except` so an upstream 5xx never aborts
 the next step. Failures log at WARNING and the cycle proceeds; the
 next 60 min tick retries naturally.
 
-**`warm` — the recognition warm-up (2026-09-29).** The first Auto-Detect in
-a fresh process used to pay for loading that every later one reuses — the
-OCR networks, the wiki icon index, the embedder, the user's and the
-community's confirmed crops and their stacked copy: about 13 s of a 19.6 s
-first run. `SETSIconMatcher.warm_up` does it at start instead, in the
-background — and not only here: `SyncCoordinator.start` also runs it on its
-own thread alongside the first cycle, because this step comes last, 4 to 11
-s into the cycle (measured in the maintainer's logs, 2026-09-29), and the
-button stayed live and silently queuing until then. The warm-up needs no
-network. The cycle's `seed` and `warm` take the same lock and wait for it;
-`seed` re-reads the community crops if `community` changed them (it keys on
-the annotations file's mtime), and `warm` then rebuilds only what changed.
-Two warm-ups can therefore overlap, which is why "warming" is a count, not a
-flag. Measured on the same
-screenshot: the warm-up takes ~9.5 s and the first recognition after it
-7.4 s. On later cycles it costs well under a second, because everything is
-keyed on content and already built; if a cycle downloaded new icons, a new
-model or new crops, the changed part is rebuilt here, not at the next click.
+### Recognition warm-up (`warm`)
 
-While it runs, **Auto-Detect Slots is greyed out** in both WARP and WARP
-CORE, and each tool's own status line — the progress line inside its tab,
-not the launcher's message line below (`ProgressStrip`) — shows a bar: *Preparing recognition — icon library (2/6) 16%*.
-The warm-up reports before each of its parts (text reader, icon library,
-models, confirmed crops when WARP CORE is present, community crops, crop
-index) and once more at the end; the bar advances by parts, not by time,
-because the parts' shares of the total differ from machine to machine. The
-end is reported also when the warm-up fails, so the button always comes back.
-It comes back to what the tool would otherwise show — a screenshot marked
-Done keeps it disabled. The tool's "Ready." line is withdrawn meanwhile.
-The grey-out came after a first version (d346676) that left the button live:
-a click then queued silently behind the warm-up for several seconds under a
-status bar saying "Ready.". That queueing remains as the safety net — a
-recognition that does start during a warm-up (the Results view's rerun,
-say) waits on the same lock the warm-up holds (`_PREP_LOCK` in
-`icon_matcher.py`), so the work is still done once. The launcher always holds WARP CORE,
-so the user's own crops are seeded; WARP drops them before it matches
-(the WARP-vs-CORE rule), and that drop takes the same lock, so a warm-up
-still seeding cannot put them back. A standalone WARP CORE starts the same
-warm-up, with the same bar, on a thread half a second after its window opens; the standalone
-WARP window (`sto-warp gui`) has no sync cycle and does no warm-up.
+**Why it exists.** The first Auto-Detect in a fresh process used to pay for
+loading that every later recognition reuses: about 13 s of a 19.6 s first run
+on `image-cda05d5238072b99.png` (2026-09-29). `SETSIconMatcher.warm_up` does
+that loading at start, in the background, so the first click only
+recognises. Measured on the same screenshot: warm-up ~9.5 s, first
+recognition after it 7.4 s. The per-part costs are in `ML_PIPELINE.md` §6,
+"What one match costs".
+
+**What it loads, in order.** Each part is what the first recognition would
+otherwise build itself, and each is kept in class-level state that later
+matchers reuse:
+
+| # | Part (log / bar name) | What is built | Rebuilt when |
+|---|---|---|---|
+| 1 | `ocr` / text reader | the EasyOCR reader (`text_extractor.shared_reader`) | never, per process |
+| 2 | `icon index` / icon library | wiki icon index (`SETSIconMatcher._index_cache`) | any icon PNG's name, size or mtime, or the cargo names, changed |
+| 3 | `models` / models | classifier + embedder (`_get_ml_session`) | a new model was installed |
+| 4 | `own crops` / confirmed crops | the user's confirmed crops as session examples — only where WARP CORE runs | after `reset_ml_session` |
+| 5 | `community crops` | the approved community crops | the mirror's annotations file changed |
+| 6 | `session stack` / crop index | the stacked arrays the session matcher scores against (`_sess_stack`) | the session examples changed |
+
+A failing part logs a warning and the rest still run; the cost of a failure
+is only the head start.
+
+**When it runs.** Four entry points, all calling the same function:
+
+| Entry point | When | User's crops |
+|---|---|---|
+| `SyncCoordinator.start` | launcher start, on its own thread, alongside the first cycle | yes |
+| `_RefreshWorker.run`, step `warm` | end of every cycle, after `seed` | yes |
+| `SyncCoordinator.arm_periodic_only` | after the cold-start splash, which has no warm-up phase | yes |
+| `WarpCoreWindow._start_recognition_warm_up` | standalone WARP CORE, 500 ms after the window opens | yes |
+
+The standalone WARP window (`sto-warp gui`) has no warm-up.
+
+The start-up thread exists because the cycle's own `warm` step is its last:
+4 to 11 s into the cycle in the maintainer's logs (2026-09-29), after the
+network steps and a ~3 s community seed, and until it started the button was
+live and a click queued silently. The warm-up needs no network, so nothing
+makes it wait for the downloads. Putting it first in the cycle instead was
+rejected: the cycle is sequential, so the upload of the user's corrections —
+deliberately first, see the comment above `upload` in `_RefreshWorker.run` —
+would have waited ~10 s behind it.
+
+The cycle's `warm` step then picks up what the cycle changed. Usually that
+is nothing and it takes well under a second. When the cycle installed a new
+model or new pictures, the affected parts are rebuilt there rather than at
+the next click. Observed 2026-09-29: a cycle that downloaded a new model
+(which ends in a hard `reset_ml_session`) and 20 icons took 4.2 s in `warm`.
+
+**Concurrency.** Every builder above, and `reset_ml_session`, takes one
+re-entrant lock, `_PREP_LOCK` in `icon_matcher.py`, and `warm_up` holds it
+throughout. So:
+
+- a recognition started during a warm-up waits for it rather than building
+  the same state a second time;
+- the cycle's `seed` and `warm` wait for the start-up warm-up; `seed`
+  re-reads the community crops if `community` changed the mirror (it keys on
+  the annotations file's mtime);
+- WARP's drop of the user's crops (the WARP-vs-CORE rule — WARP calls
+  `reset_ml_session(keep_origins={'user', 'community'})` before it matches)
+  cannot be undone by a warm-up that is still seeding them.
+
+The start-up warm-up and the cycle's `warm` can overlap, so "a warm-up is
+running" is a count, not a flag (`SETSIconMatcher.is_warming`); the first to
+finish must not clear it for the other.
+
+**What the user sees.** While a warm-up runs, **Auto-Detect Slots is greyed
+out** in WARP and WARP CORE, with the tooltip "Available once recognition is
+prepared.", and each tool's progress line shows
+`Preparing recognition — icon library (2/6)  16%`. The layout of those lines
+is described under "Status lines" below.
+
+- `warm_up(progress=...)` reports `(done, total, part)` before each part and
+  once more with `done == total` at the end. The bar advances by parts, not
+  by time: the parts' shares differ from machine to machine, and a count is
+  never wrong.
+- The end report is sent from a `finally`, so it arrives when the warm-up
+  fails too; otherwise the button would stay grey for the session.
+- Every enable of the button goes through one method per window
+  (`WarpWindow._set_rerun_enabled`, `WarpCoreWindow._set_auto_detect_enabled`),
+  which remembers what the window asked for meanwhile. At the end the
+  button returns to that state: opening a folder during the warm-up enables
+  it only once the warm-up ends, and a screenshot marked Done stays locked.
+- The grey-out replaced a first version (d346676) that left the button live
+  under a status line reading "Ready.". The lock above remains the safety
+  net for any recognition that still starts meanwhile. In WARP CORE,
+  `RecognitionWorker` (`warp/trainer/workers.py`) then shows
+  "Preparing recognition…" while it waits. WARP's rerun from the Results
+  view is not greyed out, and WARP's own `RecognitionWorker`
+  (`warp/gui/warp_window.py`) waits without saying why.
+
+**In the log** (detection channel):
+
+```
+WARP: recognition warmed up in 9.8s (ocr 2.6s, icon index 1.1s, models 0.1s,
+      own crops 1.6s, community crops 3.0s, session stack 1.5s)
+WARP: warm-up step 'models' failed: <error> — the first recognition will do
+      it instead
+RecognitionWorker: waiting for the recognition warm-up to finish
+```
+
+### Status lines
+
+In the launcher each tool tab has two status lines, one job each:
+
+```
+┌ WARP / WARP CORE tab ────────────────────────────────────────────┐
+│ ...                                                              │
+│ [████████░░░░  [1/3] image.png · OCR…  40%            ] [Cancel] │ ← tool
+└──────────────────────────────────────────────────────────────────┘
+ Recognition done — 12 item(s).          12 not yet shared [Refresh]  ← launcher
+```
+
+- **The tool's line holds only progress.** `ProgressStrip`
+  (`warp/gui/progress_bar.py`) holds the tool's two bars: the detection
+  run's `StatusProgressBar` and the warm-up's `RecognitionPrepBar`. It is a
+  permanent status-bar widget with stretch, so while shown it takes the
+  whole line. Qt paints the status message only in the space permanent
+  widgets leave, so the message is not visible there (checked offscreen).
+  A run's own text is written inside its bar by
+  `StatusProgressBar.mirror_messages`, so the windows keep calling
+  `showMessage` unchanged. In the launcher the strip stays on while idle
+  (`set_keep_visible(True)`), empty and at a bar's height, so the tab does not
+  shift at every run.
+- **The launcher's line holds every message.** `LauncherWindow._route_tool_status`
+  forwards each tool's status messages there, alongside the sync steps; the
+  newest wins. A run's progress text is not forwarded, because it is already
+  inside the bar. A message the tool clears (a timed one expiring) is
+  cleared below only if it is still the one showing. WARP CORE's
+  "N not yet shared" count moves to this line too.
+- **Refresh is a permanent widget.** Qt hides *normal* status-bar widgets
+  while a message shows, and this line nearly always shows one, so as a
+  normal widget the button was gone from the first "Starting sync…" on.
+- **Standalone, a window has one line.** The strip shows only while one of
+  its bars does, covering the message while something runs; when the run
+  ends the message is back.
 
 ### The daily request budget
 
@@ -507,6 +606,8 @@ specifically so this is visible without enabling debug logging):
 
 ```
 SyncCoordinator: cycle start (force=False)
+SyncCoordinator: step=upload — confirmed-crop HuggingFace upload
+HF Sync: nothing new to upload
 SyncCoordinator: step=cargo — equipment/trait/ship JSONs
 cargo.refresh: equipment.json fresh (3h old, TTL 24h) — skipped
 cargo.refresh: traits.json unchanged (HTTP 304)
@@ -526,7 +627,8 @@ SyncCoordinator: step=equiv — admin-curated icon equivalence
 WARPSync: icon-equivalence fresh (3.2h old, TTL 24h) — reused 42 classes from cache
 SyncCoordinator: step=seed — icon matcher community seed
 SETSIconMatcher: seed mtime unchanged — skipped
-SyncCoordinator: step=upload — confirmed-crop HuggingFace upload
+SyncCoordinator: step=warm — recognition warm-up
+WARP: recognition warmed up in …s (ocr …s, icon index …s, …)
 SyncCoordinator: cycle done
 ```
 
