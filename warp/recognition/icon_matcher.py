@@ -373,6 +373,7 @@ class SETSIconMatcher:
         # per query is no better; the cast alone is 64 ms.
         self._tmpl_mat58 = None        # np.ndarray (N, 58*58*3) float32
         self._tmpl_mat64 = None        # np.ndarray (N, 64*64*3) float32
+        self._index_rows_by_name: dict[str, 'np.ndarray'] = {}
         self._ml_session  = None
         self._ml_disabled = False      # True after first failed download attempt
         self._label_map: dict[int, str] = {}
@@ -591,8 +592,14 @@ class SETSIconMatcher:
                      else TEMPLATE_THRESHOLD * 0.7)
         weak_embed = ml_conf < TEMPLATE_HIST_WEAK_EMBED_THRESHOLD
         hist_w     = TEMPLATE_HIST_WEIGHT_WEAK_EMBED if weak_embed else HIST_WEIGHT
-        tm_all = self._template_scores(crop64)
-        for i, entry in enumerate(self._index):
+        # Only the icons this slot allows are scored: every other row was
+        # skipped by the name test below before its score was ever read, so
+        # computing it was the whole cost of the stage and none of its result.
+        tm_rows = (self._index_rows_for(candidate_names)
+                   if candidate_names is not None else None)
+        tm_all = self._template_scores(crop64, tm_rows)
+        for i in (tm_rows if tm_rows is not None else range(len(self._index))):
+            entry = self._index[i]
             if candidate_names is not None and entry['name'] not in candidate_names:
                 continue
             tm_score = float(tm_all[i])
@@ -758,6 +765,12 @@ class SETSIconMatcher:
             self._last_match_variant = entry.get('variant', '') or ''
             thumb = self._bgr_to_qimage(entry.get('orig'))
         else:
+            if tm_rows is not None and name in self._index_rows_by_name:
+                # A winner outside the slot's names (none is expected) gets its
+                # pictures scored now, so the thumbnail is chosen as before.
+                own = self._index_rows_by_name[name]
+                if not np.isfinite(tm_all[own]).all():
+                    tm_all[own] = self._template_scores(crop64, own)[own]
             thumb = self._thumb_for_name(name, tm_all)
         return name, score, thumb, (src == 'session')
 
@@ -847,34 +860,114 @@ class SETSIconMatcher:
         self._last_match_variant = self._index[best].get('variant', '') or ''
         return self._bgr_to_qimage(self._index[best].get('orig'))
 
+    # The wiki icon index, shared by every matcher: (key, index, mat58, mat64,
+    # rows by name). See `_build_index`.
+    _index_cache: tuple | None = None
+
+    # Stacked copy of the session examples, rebuilt when the list changes.
+    # (entries it was built from, templates uint8 (N, 12288), centred-template
+    # norms (N,), normalised histograms (N, 288), name -> row indices)
+    _sess_stack: tuple | None = None
+    _SESS_CHUNK = 2048
+
+    @classmethod
+    def _session_stack(cls):
+        """The session examples as arrays, rebuilt whenever the list changed.
+
+        Checked by the identity of every entry, not by length or a counter:
+        an example replaced in place, removed or reseeded is a different dict,
+        so the stack can never answer for examples that are no longer there.
+        The entries are held, not their ids, so an id cannot be reused by a
+        new entry while the stack still claims it.
+        """
+        import cv2
+        examples = cls._session_examples
+        st = cls._sess_stack
+        if (st is not None and len(st[0]) == len(examples)
+                and all(a is b for a, b in zip(st[0], examples))):
+            return st
+        expected = tuple(HIST_BINS)
+        keep = [e for e in examples if e['hist_hsv'].shape == expected]
+        n = len(keep)
+        u8 = np.empty((n, MATCH_SIZE * MATCH_SIZE * 3), np.uint8)
+        norms = np.empty(n, np.float32)
+        hists = np.empty((n, expected[0] * expected[1]), np.float32)
+        by_name: dict[str, list[int]] = {}
+        for i, e in enumerate(keep):
+            t = e['tmpl64']
+            u8[i] = t.ravel()
+            tf = t.astype(np.float32)
+            norms[i] = np.linalg.norm(tf - tf.reshape(-1, 3).mean(axis=0))
+            h = e['hist_hsv'].astype(np.float32).ravel()
+            h = h - h.mean()
+            hn = float(np.linalg.norm(h))
+            hists[i] = h / hn if hn else 0.0
+            by_name.setdefault(e['name'], []).append(i)
+        st = (list(examples), keep, u8, norms, hists,
+              {k: np.asarray(v, np.int64) for k, v in by_name.items()})
+        cls._sess_stack = st
+        return st
+
     def _best_session_match(
         self,
         crop64: np.ndarray,
         q_hist: np.ndarray,
         candidate_names: set[str] | None,
     ) -> tuple[str, float, dict | None]:
-        """Return (name, score, entry) for the best session example match."""
-        import cv2
-        expected_shape = tuple(HIST_BINS)
-        sess_name  = ''
-        sess_score = 0.0
-        sess_entry = None
-        for entry in self._session_examples:
-            if candidate_names is not None and entry['name'] not in candidate_names:
-                continue
-            if entry['hist_hsv'].shape != expected_shape:
-                continue
-            res      = cv2.matchTemplate(crop64, entry['tmpl64'],
-                                         cv2.TM_CCOEFF_NORMED)
-            tm_score = float(res.max())
-            h_score  = max(0.0, float(cv2.compareHist(
-                q_hist, entry['hist_hsv'], cv2.HISTCMP_CORREL)))
-            combined = tm_score * (1.0 - HIST_WEIGHT) + h_score * HIST_WEIGHT
-            if combined > sess_score:
-                sess_score = combined
-                sess_name  = entry['name']
-                sess_entry = entry
-        return sess_name, sess_score, sess_entry
+        """Return (name, score, entry) for the best session example match.
+
+        The same score as one `cv2.matchTemplate` (TM_CCOEFF_NORMED) plus one
+        `cv2.compareHist` (HISTCMP_CORREL) per example, computed as two matrix
+        products instead of a loop that made ~5000 OpenCV calls per crop.
+
+        TM_CCOEFF_NORMED centres both images per channel; because the query is
+        centred, its dot product with the *uncentred* template equals the one
+        with the centred template, so the templates are kept as their raw bytes
+        plus one norm each. Edge cases follow OpenCV as measured: a flat
+        template scores 1, a flat query 0; a flat histogram on either side
+        correlates 1. Ties go to the earliest example, as the loop's strict `>`
+        did.
+        """
+        _all, keep, u8, norms, hists, by_name = self._session_stack()
+        if not keep:
+            return '', 0.0, None
+        if candidate_names is None:
+            idx = np.arange(len(keep))
+        else:
+            parts = [by_name[n] for n in candidate_names if n in by_name]
+            if not parts:
+                return '', 0.0, None
+            idx = np.sort(np.concatenate(parts))
+
+        q = crop64.astype(np.float32)
+        q = q - q.reshape(-1, 3).mean(axis=0)
+        q = q.ravel()
+        qn = float(np.linalg.norm(q))
+        dots = np.empty(len(idx), np.float32)
+        for a in range(0, len(idx), self._SESS_CHUNK):
+            rows = idx[a:a + self._SESS_CHUNK]
+            dots[a:a + len(rows)] = u8[rows].astype(np.float32) @ q
+        tn = norms[idx]
+        with np.errstate(divide='ignore', invalid='ignore'):
+            tm = np.where(tn == 0, 1.0,
+                          np.where(qn == 0, 0.0, dots / (qn * tn)))
+
+        h = q_hist.astype(np.float32).ravel()
+        h = h - h.mean()
+        hn = float(np.linalg.norm(h))
+        hrows = hists[idx]
+        flat_rows = ~hrows.any(axis=1)
+        if hn:
+            corr = hrows @ (h / hn)
+            corr = np.where(flat_rows, 1.0, corr)
+        else:
+            corr = np.ones(len(idx), np.float32)
+        combined = tm * (1.0 - HIST_WEIGHT) + np.maximum(0.0, corr) * HIST_WEIGHT
+        best = int(np.argmax(combined))
+        if not combined[best] > 0.0:
+            return '', 0.0, None
+        entry = keep[int(idx[best])]
+        return entry['name'], float(combined[best]), entry
 
     def classify_patch(self, patch_bgr: np.ndarray) -> tuple[str, float]:
         """Classify a single BGR patch using ML only (fast path for dense scanning)."""
@@ -902,7 +995,15 @@ class SETSIconMatcher:
         n = float(np.linalg.norm(v))
         return v / n if n else v
 
-    def _template_scores(self, crop64: 'np.ndarray') -> 'np.ndarray':
+    def _index_rows_for(self, names) -> 'np.ndarray':
+        """Index rows whose item name is in `names`, in index order."""
+        parts = [self._index_rows_by_name[n] for n in names
+                 if n in self._index_rows_by_name]
+        if not parts:
+            return np.empty(0, np.int64)
+        return np.sort(np.concatenate(parts))
+
+    def _template_scores(self, crop64: 'np.ndarray', rows=None) -> 'np.ndarray':
         """Best TM_CCOEFF_NORMED score of every indexed icon, in index order.
 
         Replaces a loop of `cv2.matchTemplate` calls — one per icon per scale,
@@ -920,16 +1021,26 @@ class SETSIconMatcher:
         """
         if self._tmpl_mat58 is None or self._tmpl_mat64 is None:
             return np.zeros(len(self._index), dtype=np.float32)
+        if rows is not None:
+            # Scores for these rows only; every other row reads -inf, which
+            # any threshold or max skips exactly as a filtered-out row was.
+            out = np.full(len(self._index), -np.inf, dtype=np.float32)
+            if len(rows):
+                m58, m64 = self._tmpl_mat58[rows], self._tmpl_mat64[rows]
+                out[rows] = self._score_rows(crop64, m58, m64)
+            return out
+        return self._score_rows(crop64, self._tmpl_mat58, self._tmpl_mat64)
+
+    def _score_rows(self, crop64, mat58, mat64) -> 'np.ndarray':
         s = _TEMPLATE_SLIDE_SIZE
         span = MATCH_SIZE - s + 1
         windows = np.stack(
             [self._tm_vector(crop64[dy:dy + s, dx:dx + s])
              for dy in range(span) for dx in range(span)],
             axis=1,
-        ).astype(self._tmpl_mat58.dtype)
-        slid = (self._tmpl_mat58 @ windows).max(axis=1).astype(np.float32)
-        exact = (self._tmpl_mat64 @
-                 self._tm_vector(crop64).astype(self._tmpl_mat64.dtype)
+        ).astype(mat58.dtype)
+        slid = (mat58 @ windows).max(axis=1).astype(np.float32)
+        exact = (mat64 @ self._tm_vector(crop64).astype(mat64.dtype)
                  ).astype(np.float32)
         return np.maximum(slid, exact)
 
@@ -959,6 +1070,25 @@ class SETSIconMatcher:
                         'era-variant art will not be folded')
             known_names = set()
 
+        # Every WarpImporter makes a new matcher, so the index was rebuilt —
+        # 4400 PNGs read and ~400 MB of matrices — on every recognition. It
+        # depends only on the PNGs and the cargo names, so it is kept keyed
+        # on exactly those: each file's name, size and mtime, and a digest of
+        # the names. New or changed art, or a cargo refresh that renames
+        # anything, is a different key and a fresh build.
+        import hashlib
+        pngs = sorted(images_dir.glob('*.png'))
+        key = (str(images_dir.resolve()),
+               tuple((p.name, *(lambda st: (st.st_size, st.st_mtime_ns))(p.stat()))
+                     for p in pngs),
+               hashlib.sha256('\n'.join(sorted(known_names)).encode()).hexdigest())
+        cached = SETSIconMatcher._index_cache
+        if cached is not None and cached[0] == key:
+            (_k, self._index, self._tmpl_mat58, self._tmpl_mat64,
+             self._index_rows_by_name) = cached
+            log.debug(f'WARP: icon index reused ({len(self._index)} icons)')
+            return
+
         count = 0
         folded = 0
         # Allocate the template matrices up front and write each icon straight
@@ -971,7 +1101,6 @@ class SETSIconMatcher:
         # Lirpa' score identically — and the winner among them is decided by
         # whichever comes first, so an unsorted glob made that depend on the
         # filesystem.
-        pngs = sorted(images_dir.glob('*.png'))
         _d58 = _TEMPLATE_SLIDE_SIZE * _TEMPLATE_SLIDE_SIZE * 3
         _d64 = MATCH_SIZE * MATCH_SIZE * 3
         mat58 = np.empty((len(pngs), _d58), dtype=np.float32)
@@ -1012,6 +1141,13 @@ class SETSIconMatcher:
         # skipped, so `count` is the number of rows written.
         self._tmpl_mat58 = mat58[:count] if count else None
         self._tmpl_mat64 = mat64[:count] if count else None
+        by_name: dict[str, list[int]] = {}
+        for i, entry in enumerate(self._index):
+            by_name.setdefault(entry['name'], []).append(i)
+        self._index_rows_by_name = {n: np.asarray(v, np.int64)
+                                    for n, v in by_name.items()}
+        SETSIconMatcher._index_cache = (key, self._index, self._tmpl_mat58,
+                                        self._tmpl_mat64, self._index_rows_by_name)
 
         log.info(f'WARP: indexed {count} icons from {images_dir}'
                  + (f' ({folded} era-variant folded onto their item)'

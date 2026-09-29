@@ -781,6 +781,69 @@ rejected upstream. What changes is that they can no longer answer a query.
 
 ---
 
+### What one match costs, and why it is computed as it is (2026-09-29)
+
+Two of the stages above compare pixels: the wiki templates (stage 2) and the
+session examples (stage 5, confirmed crops — the user's own and the
+community's). Both score with TM_CCOEFF_NORMED plus a colour-histogram
+correlation. Neither calls `cv2.matchTemplate` per picture any more, and the
+answers are the same as when they did.
+
+**Why the scores can be matrix products.** TM_CCOEFF_NORMED centres each
+colour channel of both pictures on its own mean and divides by both norms.
+For two pictures of the same size that is one number: the dot product of the
+two centred, normalised pixel vectors. `_tm_vector` builds such a vector.
+Because the query is centred, its product with the template's *raw* bytes
+equals its product with the centred template, so a template only needs its
+bytes and one norm. The histogram correlation is likewise a dot product of
+centred, normalised histograms.
+
+**Session examples** (`_best_session_match`). All examples are held once as
+one uint8 array plus a norm and a histogram row each (`_session_stack`), and
+a crop is scored against the slot's allowed names in one product. The stack
+is rebuilt whenever the pool changes, detected by the identity of every entry
+— an example added, removed or replaced in place is a different dict — never
+by the list's length. OpenCV's edge cases are reproduced as measured: a flat
+template scores 1.00 (which is why `add_session_example` refuses flat crops),
+a flat query 0.00, a flat histogram on either side correlates 1. Ties go to
+the earliest example, as the loop's strict `>` did.
+
+Before this, each crop made one OpenCV call per example: ~5 000 per crop with
+a slot restriction, all 22 000 without one (a panel whose rows are named from
+their content). On `image-cda05d5238072b99.png` that loop was 38.7 s of a
+47.8 s recognition.
+
+**Wiki templates** (`_template_scores`). Only the icons the slot allows are
+scored (`_index_rows_for`); every other row reads `-inf`. The caller skipped
+those rows by name before reading their score, so computing it had been the
+whole cost of the stage and none of its result. The one other reader, the
+thumbnail choice for the winner, gets the winner's own rows scored on demand
+if they were not.
+
+**The icon index** (`_build_index`) is built once per content and shared by
+every matcher (`_index_cache`). A new `WarpImporter` makes a new matcher for
+every recognition, so the 4 400 PNGs were read and ~400 MB of matrices built
+each time. The key is exactly what the index depends on: each PNG's name,
+size and mtime, and a digest of cargo's item names (era-variant folding reads
+them). New art, rewritten art and a cargo refresh that renames anything each
+make a new key and a fresh build.
+
+**Measured** on the shipped `WarpImporter` (WARP CORE path, GPU hidden, one
+BLAS thread, as the windows start), steady state, second recognition in the
+process, on an otherwise idle machine: `image-cda05d5238072b99.png` 50.2 s →
+8.2 s; 12 confirmed screenshots (3 each of SPACE_MIXED, SPACE_EQ, TRAITS,
+BOFFS) 94.2 s → 45.0 s in total. All 506 recognised items of those 12 —
+slot, name, box and confidence — are identical before and after; the session stage alone was checked on 806 crops, 804 identical and 2
+differing only in which of two near-identical examples won, at a score
+difference of 6·10⁻⁸ (same name, score and origin). `tests/test_matcher_vectorised.py`
+compares every path against OpenCV computed in the test. The price is the
+session stack, about 300 MB of memory beside the examples themselves.
+
+The first recognition in a process still pays the one-off costs, about 13 s
+of a 19.6 s first run on the same screenshot: reading the community crops
+(3.9 s) and the user's confirmed crops (1.75 s), loading OCR (~2.8 s), the
+session stack (~1.7 s), the models (~1.5 s) and the icon index (1.2 s).
+
 ## 7. Data stored on HuggingFace
 
 | Repo | Path | Contents |
