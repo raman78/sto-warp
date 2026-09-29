@@ -8,6 +8,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.42] — 2026-09-29
+
+### Changed
+
+- **Recognition is much faster.** Each slot is compared against all the
+  confirmed pictures at once instead of one picture at a time, so a
+  screenshot is recognised in a fraction of the time it used to take. The
+  results are the same as before.
+- **Recognition is prepared in the background at start.** Everything
+  recognition needs is loaded as soon as the program opens, alongside the
+  sync, so the first Auto-Detect no longer has to load it first. A
+  "Preparing recognition" progress bar shows how far it has got, and
+  **Auto-Detect Slots** and **Rerun Recognition** are greyed out until it
+  finishes. Before, a click at that moment seemed to do nothing for
+  several seconds.
+- **Clearer status lines in the launcher.** The line inside each tab now
+  shows only progress: a full-width bar with its description inside. All
+  messages, from the sync and from both tools, appear on the launcher's
+  line below, together with the "not yet shared" count.
+
+### Fixed
+
+- **The Refresh button stays visible.** It disappeared behind the first
+  status message and stayed hidden almost all the time.
+- **Some item pictures are no longer downloaded at every sync.** The
+  Temporal Operative kit module icons were published in two versions and
+  were swapped back and forth on every sync; the version seen in-game is
+  now kept.
+
 ## [1.0.41] — 2026-09-29
 
 ### Added
