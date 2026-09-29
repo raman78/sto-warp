@@ -87,6 +87,19 @@ def drop_boxes_on_text(result: dict, ocr_tokens: list[dict] | None,
     slots they sit on. Measured on that screenshot: the four headings run
     74-132 px against a 27 px slot, and every in-icon mark 28-46 px, so a 2x
     cut separates them with room on both sides.
+
+    **BOFF seats are left alone.** Their boxes are not projected along a row
+    that can run past its section: `boff_marker` places each seat's four
+    slots from the profession-coloured bar under that seat, and the panel
+    has no heading between seats to run into. What the rule can do there is
+    only harm. On `image-cda05d5238072b99.png` the reader took the third
+    seat's four yellow Engineering icons for a word — `'rrrb'`, 68 px wide at
+    y=108-132, exactly the icon row — and the seat's correctly placed boxes
+    at y=109 were moved onto the name bar below. Measured 2026-09-29 over the
+    92 screenshots with confirmed BOFF boxes (the importer's own OCR and
+    layout call): the rule touched BOFF boxes on exactly one, that one. A
+    confidence cut would not separate the misreading either — `'rrrb'` scored
+    0.13, the same as the real officer name beside it.
     """
     if not ocr_tokens or not result:
         return result
@@ -271,6 +284,10 @@ def drop_boxes_on_text(result: dict, ocr_tokens: list[dict] | None,
         row = []
         for box in boxes:
             y, h = box[1], box[3]
+            if slot.startswith('Boff'):
+                # Placed from the seat's marker, not projected; see above.
+                row.append(('keep', box, [], 0))
+                continue
             bands = _bands_for(box)
             hit = _band_at(y + h // 2, bands)
             if hit is None or hit[2] == 'own':

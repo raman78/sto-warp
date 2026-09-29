@@ -264,8 +264,20 @@ Implementation:
 
 Whatever chain produced the layout, `LayoutDetector.detect` finishes by
 handing it to `drop_boxes_on_text`. The rule it enforces is simple to state
-and applies to every panel, not just traits: **where the game writes, there
-is no slot.**
+and applies to every panel but one, not just traits: **where the game writes,
+there is no slot.**
+
+The exception is the BOFF seats. Their boxes are not projected along a row
+that can run past its section — each seat's four slots are placed from the
+profession-coloured marker under that seat (see `BOFF_DETECTION.md`), and
+there is no heading between seats to run into. The rule could only harm
+them, and did: on `image-cda05d5238072b99.png` the reader took a seat's four
+yellow Engineering icons for the word `rrrb`, lying exactly on the icon row,
+and the correctly placed boxes were moved down onto the officer's name bar.
+Over the 92 screenshots with confirmed BOFF boxes (2026-09-29) that was the
+only time the rule touched a BOFF box. Nor would a confidence cut have told
+the misreading apart: it scored 0.13, the same as the real officer name
+beside it.
 
 It matters because a projected row can overshoot. When the profile says a
 character has 11 personal space traits and the screen shows 10, the eleventh

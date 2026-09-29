@@ -149,6 +149,29 @@ def test_a_row_on_a_divider_is_moved_below_it():
     assert y > 405
 
 
+def test_a_boff_seat_is_never_moved_off_its_icons():
+    """image-cda05d5238072b99.png: the reader took a seat's four yellow
+    Engineering icons for a word, 'rrrb', lying exactly on the icon row. The
+    seat's boxes come from its profession marker and were right; moving them
+    below the "word" put them on the officer's name bar."""
+    seat = [(333, 109, 14, 19), (348, 109, 14, 19),
+            (363, 109, 14, 19), (378, 109, 14, 19)]
+    out = drop_boxes_on_text({'Boff Seat L[E]_130': list(seat)},
+                             [tok('rrrb', 330, 108, 398, 132)],
+                             with_icon(333, 135, 60, 19))
+    assert out['Boff Seat L[E]_130'] == seat
+
+
+def test_the_same_word_still_moves_a_trait_row():
+    """The exclusion is for BOFF seats only: a trait row under the same
+    band is still moved, as before."""
+    row = [(333, 109, 14, 19), (348, 109, 14, 19),
+           (363, 109, 14, 19), (378, 109, 14, 19)]
+    out = drop_boxes_on_text({'Personal Space Traits': list(row)},
+                             [tok('rrrb', 330, 108, 398, 132)], blank())
+    assert out['Personal Space Traits'] != row
+
+
 def test_a_row_with_nowhere_to_go_is_dropped():
     boxes = _row(450) + [(692, 500, 27, 36)]
     out = drop_boxes_on_text({'Starship Traits': boxes},
