@@ -349,3 +349,12 @@ def test_the_refresh_button_survives_a_message(launcher, qapp):
     launcher.statusBar().showMessage('Sync complete.')
     qapp.processEvents()
     assert launcher._refresh_btn.isVisible()
+
+
+def test_warp_greys_the_results_rerun_out_too(warp_win):
+    """The other way to start a recognition in WARP; it used to wait silently."""
+    btn = warp_win._results._rerun_btn
+    warp_win.set_recognition_prep(0, 5, 'ocr')
+    assert not btn.isEnabled() and 'prepared' in btn.toolTip()
+    warp_win.set_recognition_prep(5, 5, '')
+    assert btn.isEnabled() and 'overrides' in btn.toolTip()

@@ -47,10 +47,26 @@ source. Three properties matter:
 - **Additive and optional** — an unreachable overlay skips the group and
   leaves the run green. Those pictures stay missing, which is the state
   that predates the second source; nothing else changes.
-- **Same target directory** — `_local_path` keys on the entry's own
-  filename, so `scraped/icons/X.png` and `images/X.png` both land in
-  `icons/X.png`. A picture SETS-Data later publishes simply overwrites the
-  harvested one on the next SHA1 diff.
+- **Same target directory, overlay wins a shared name** — `_local_path`
+  keys on the entry's own filename, so `scraped/icons/X.png` and
+  `images/X.png` both land in `icons/X.png`. Where both manifests carry a
+  name, the overlay's picture is kept: `AssetSyncManager.run` reads the
+  overlay manifest first and the SETS-Data pass skips the files it covers,
+  logging `AssetSync [Item Icons]: N also in the overlay — taking the
+  overlay's picture for those`. Without an overlay manifest nothing is
+  skipped and SETS-Data supplies every picture it has.
+
+  The overlay wins because it is harvested from the wiki now, while
+  SETS-Data can keep older art under the same name. Measured 2026-09-29:
+  176 names in both, 166 byte-identical, and 10 — `Temporal Operative Kit
+  Module - …` — grey in SETS-Data but gold in the overlay, and gold in the
+  two confirmed in-game crops of one of them. Before this, both passes
+  synced every name, so each run first downloaded SETS-Data's 10 and then
+  the overlay's 10 over them. Every rewritten file changed the icon index's
+  key (`SETSIconMatcher._build_index` keys on each PNG's size and mtime), so
+  recognition rebuilt the index after every sync. The opposite fix — the
+  publisher dropping names SETS-Data has, as the cargo overlay does — was
+  rejected: it would have left the older art on every install.
 
 The names those pictures belong to are a separate concern — see
 `docs/CARGO_DATA_PLAN.md` § *Items no cargo table holds*.
@@ -408,11 +424,13 @@ is described under "Status lines" below.
   it only once the warm-up ends, and a screenshot marked Done stays locked.
 - The grey-out replaced a first version (d346676) that left the button live
   under a status line reading "Ready.". The lock above remains the safety
-  net for any recognition that still starts meanwhile. In WARP CORE,
+  net for any recognition that still starts meanwhile; in WARP CORE,
   `RecognitionWorker` (`warp/trainer/workers.py`) then shows
-  "Preparing recognition…" while it waits. WARP's rerun from the Results
-  view is not greyed out, and WARP's own `RecognitionWorker`
-  (`warp/gui/warp_window.py`) waits without saying why.
+  "Preparing recognition…" while it waits. WARP's second way to start a
+  run, **Rerun Recognition** in the Results view, is greyed out the same
+  way (`ResultsView.set_rerun_blocked`), because WARP's own
+  `RecognitionWorker` (`warp/gui/warp_window.py`) would wait without
+  saying why.
 
 **In the log** (detection channel):
 

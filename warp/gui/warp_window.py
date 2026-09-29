@@ -340,6 +340,7 @@ class WarpWindow(QMainWindow):
             sb.showMessage(self._READY_TEXT)
         self._recognition_preparing = preparing
         self._set_rerun_enabled(self._rerun_wanted)
+        self._results.set_rerun_blocked(preparing)
 
     # ── File picking ────────────────────────────────────────────────
 

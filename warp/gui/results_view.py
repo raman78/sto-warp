@@ -583,9 +583,7 @@ class ResultsView(QWidget):
         ll.addWidget(self._list, stretch=1)
         self._rerun_btn = QPushButton('Rerun Recognition', left)
         self._rerun_btn.setStyleSheet(primary_btn_style())
-        self._rerun_btn.setToolTip(
-            'Re-run recognition on the same folder, applying your per-file '
-            'screen-type overrides.')
+        self._rerun_btn.setToolTip(self._RERUN_TIP)
         self._rerun_btn.clicked.connect(self._on_rerun_clicked)
         self._rerun_btn.setVisible(False)
         ll.addWidget(self._rerun_btn)
@@ -957,6 +955,19 @@ class ResultsView(QWidget):
             for k in self._overrides
         )
         self._rerun_btn.setVisible(any_diff)
+
+    _RERUN_TIP = ('Re-run recognition on the same folder, applying your '
+                  'per-file screen-type overrides.')
+
+    def set_rerun_blocked(self, blocked: bool) -> None:
+        """Grey Rerun Recognition out while recognition is being prepared.
+
+        Same reason as WARP's Auto-Detect Slots: a run started now would only
+        wait for the warm-up, with nothing on screen saying so."""
+        self._rerun_btn.setEnabled(not blocked)
+        self._rerun_btn.setToolTip(
+            'Available once recognition is prepared.' if blocked
+            else self._RERUN_TIP)
 
     def _on_rerun_clicked(self):
         payload = {

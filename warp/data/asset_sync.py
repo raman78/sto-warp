@@ -224,12 +224,23 @@ class AssetSyncManager:
         total_updated = 0
         total_failed  = 0
 
+        # Where both sources file a picture under the same name, the overlay's
+        # is the one kept. It is harvested from the wiki now; SETS-Data can
+        # hold older art under the same name — measured 2026-09-29: ten
+        # `Temporal Operative Kit Module - …` icons, grey in SETS-Data, gold in
+        # the overlay and gold in-game. Syncing both let each pass overwrite
+        # the other on every run: twenty downloads per cycle, and every
+        # rewritten file changed the icon index's key, so recognition rebuilt
+        # it. So the overlay's manifest is read first, and SETS-Data skips the
+        # names it covers. Without an overlay manifest nothing is skipped.
+        overlay = self._overlay_tree(session, prog)
+        overlay_names = self._local_names(overlay or (), OVERLAY_GROUPS)
+
         updated, failed_n = self._sync_tree(tree, ASSET_GROUPS, GITHUB_RAW_BASE,
-                                            session, prog)
+                                            session, prog, skip=overlay_names)
         total_updated += updated
         total_failed  += failed_n
 
-        overlay = self._overlay_tree(session, prog)
         if overlay:
             updated, failed_n = self._sync_tree(overlay, OVERLAY_GROUPS,
                                                 OVERLAY_RAW_BASE, session, prog)
@@ -254,14 +265,41 @@ class AssetSyncManager:
 
     # ── Sources ────────────────────────────────────────────────────────────
 
+    def _local_names(self, tree, groups: tuple[tuple[str, str, str], ...]) -> set[Path]:
+        """The local files a manifest's groups write to."""
+        names: set[Path] = set()
+        for (_label, prefix, type_tag) in groups:
+            for e in tree:
+                path = e.get('path', '')
+                if path.startswith(prefix):
+                    lp = self._local_path(path, type_tag)
+                    if lp is not None:
+                        names.add(lp)
+        return names
+
     def _sync_tree(self, tree: list[dict], groups: tuple[tuple[str, str, str], ...],
                    raw_base: str, session: requests.Session,
-                   prog: Callable[[str, int, int], None]) -> tuple[int, int]:
-        """Bring one repository's groups up to date. Returns (updated, failed)."""
+                   prog: Callable[[str, int, int], None],
+                   skip: set[Path] = frozenset()) -> tuple[int, int]:
+        """Bring one repository's groups up to date. Returns (updated, failed).
+
+        `skip` holds local files another source owns; they are neither
+        compared nor downloaded here."""
         self._raw_base = raw_base
         total_updated = total_failed = 0
         for (label, prefix, type_tag) in groups:
-            entries = [e for e in tree if e.get('path', '').startswith(prefix)]
+            entries, owned = [], 0
+            for e in tree:
+                path = e.get('path', '')
+                if not path.startswith(prefix):
+                    continue
+                if self._local_path(path, type_tag) in skip:
+                    owned += 1
+                else:
+                    entries.append(e)
+            if owned:
+                log.info(f'AssetSync [{label}]: {owned} also in the overlay '
+                         f'— taking the overlay\'s picture for those')
             to_update = self._diff_group(entries, type_tag)
             count = len(to_update)
 

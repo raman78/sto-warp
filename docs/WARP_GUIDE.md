@@ -237,8 +237,8 @@ classified straight away, because that part does not need any of this.
 The hourly sync repeats the preparation only for what it changed, such as a
 newer model or new pictures, so the bar may appear briefly then too.
 
-Tip: **Rerun Recognition** in WARP's Preview tab is not greyed out. If you
-use it during the preparation, it starts once the preparation has finished.
+**Rerun Recognition**, which appears in WARP after you change a file's
+screen type, is greyed out during the preparation in the same way.
 
 Window geometry and tab state are persisted across runs.
 
