@@ -9,6 +9,8 @@ WARP CORE lets you review, correct, and confirm what WARP found — and feed tho
 
 1. [Preparing screenshots](#1-preparing-screenshots)
 2. [Launcher window — tabs and global controls](#2-launcher-window--tabs-and-global-controls)
+   - [The two lines at the bottom](#the-two-lines-at-the-bottom)
+   - [Preparing recognition at start](#preparing-recognition-at-start)
 3. [Using WARP — recognise a build](#3-using-warp--recognise-a-build)
    - [Force build type vs AUTO mode](#force-build-type-vs-auto-mode)
    - [Run recognition](#run-recognition)
@@ -162,37 +164,81 @@ version?" checks per launch.
 
 ### Main launcher tabs
 
-`sto-warp` opens a single launcher window with four tabs:
+`sto-warp` opens a single launcher window with three tabs:
 
 | Tab | Purpose |
 |-----|---------|
 | **WARP — Recognition** | Open one screenshot or a whole folder, run the recognition pipeline, review results, export to SETS JSON |
 | **WARP CORE — Trainer** | Review and confirm detected items so they feed back into the community model |
-| **Detection logs** | Terminal-like live tail of the current detection run; auto-clears when a fresh run starts |
 | **System logs** | Background activity (asset sync, model updates, knowledge cache, desktop integration) — separate from detection noise |
 
-A `🔄 Refresh` button in the bottom-right status bar manually re-runs the
-community sync (re-download knowledge, check for newer central models, upload
-pending confirmed crops). It is disabled while a sync is already in flight.
+Each of the two tools also has its own **Detection Logs** tab inside it,
+showing only that tool's runs — see [section 7](#7-detection-logs--system-logs-tabs).
 
-In the launcher each tab has two lines at the bottom, one job each. The upper
-line, inside the tab, holds only progress: a bar across the full width with
-its description inside ("[1/3] image.png · OCR…", or the preparation below),
-and **Cancel** at its right while a detection can be stopped; between runs it
-is empty. The lower line, the launcher's own, holds every message — the
-sync's steps and both tools' messages ("Loaded …", "Recognition done …"),
-the newest winning — and the "not yet shared" count. Opened on their own,
-WARP and WARP CORE have a single line: the bar covers the message while
-something runs, and the message is back when it ends.
+### The two lines at the bottom
 
-Right after start, WARP and WARP CORE each show a bar in their progress
-line: **Preparing recognition — … %**. WARP is loading what every
-recognition needs — the text reader, the icon library, the models, the
-confirmed crops — so that the first Auto-Detect does not have to.
-**Auto-Detect Slots is greyed out until the bar finishes** (a few seconds,
-longer on a slow disk), then becomes available again. This happens once per
-start; the hourly sync repeats it only for what has changed, which usually
-takes a moment.
+The bottom of the launcher has two lines, and each does one job:
+
+```
+┌ WARP — Recognition ──────────────────────────────────────────────┐
+│ ...                                                              │
+│ [██████████░░░░░░  [1/3] image.png · OCR…  40%       ] [Cancel]  │  ← progress
+└──────────────────────────────────────────────────────────────────┘
+ Recognition done — 12 item(s).          12 not yet shared [Refresh]  ← messages
+```
+
+- **The upper line, inside the tab, shows only progress.** When something
+  runs — recognition, screen-type classification, or the preparation
+  described below — a bar spans the whole line with its description
+  written inside it. **Cancel** sits at its right while the run can be
+  stopped. Between runs the line is empty; it stays in place, so the
+  window does not jump when a run starts or ends.
+- **The lower line, the launcher's own, shows messages.** That covers the
+  background sync ("Syncing icons and ship images…", "Sync complete.") and
+  what both tools report ("Loaded …", "Recognition done — 12 item(s)."),
+  with the newest message replacing the one before. It also holds the
+  amber "not yet shared" count (see
+  [section 9](#n-not-yet-shared-in-the-status-bar)) and the
+  **🔄 Refresh** button in the bottom-right corner.
+
+**🔄 Refresh** runs the community sync again by hand: it downloads the
+latest community knowledge, checks for a newer model and sends your pending
+confirmations. It is greyed out while a sync is already running.
+
+If WARP or WARP CORE is opened on its own rather than from the launcher, it
+has a single line: it shows the tool's messages, and a progress bar covers
+it while something runs.
+
+### Preparing recognition at start
+
+Recognition needs a lot loaded before it can start: the text reader, the
+library of item pictures, the recognition models, and the confirmed
+pictures from you and from the community that it compares against. All of
+that is loaded once and then kept for as long as the program is open.
+
+WARP loads it in the background as soon as the program starts, so your
+first **Auto-Detect Slots** only has to recognise. While it loads, each
+tool's progress line shows a bar such as
+
+```
+[█████░░░░░░░░░░░  Preparing recognition — icon library (2/6)  16%  ]
+```
+
+and **Auto-Detect Slots is greyed out** (its tooltip reads "Available once
+recognition is prepared."). The bar moves one step per part loaded, so
+steps can take different amounts of time. When it finishes, the button
+comes back. It comes back to what it would otherwise be: in WARP CORE a
+screenshot marked Done keeps it greyed out, and in WARP it needs a
+screenshot or folder to be open.
+
+This happens at every start and usually takes a few seconds. Your
+screenshots can be opened meanwhile, and their screen types are
+classified straight away, because that part does not need any of this.
+The hourly sync repeats the preparation only for what it changed, such as a
+newer model or new pictures, so the bar may appear briefly then too.
+
+Tip: **Rerun Recognition** in WARP's Preview tab is not greyed out. If you
+use it during the preparation, it starts once the preparation has finished.
 
 Window geometry and tab state are persisted across runs.
 
@@ -1364,11 +1410,13 @@ on disk.
 
 ## 7. Detection logs / System logs tabs
 
-The launcher's last two tabs surface what is happening under the hood.
+Two kinds of log show what is happening under the hood: each tool's own
+**Detection Logs** tab, and the launcher's **System logs** tab.
 
 ### Detection logs
 
-Live tail of the current recognition run — OCR results, classifier picks,
+Inside WARP and inside WARP CORE, each showing only that tool's runs. A live
+tail of the current recognition run — OCR results, classifier picks,
 layout-detector strategy choices, per-slot match scores. The view auto-scrolls
 to the newest line (vertical), but **horizontal scroll position is preserved**
 so a long line doesn't bounce the view sideways every time it appears.
@@ -1390,7 +1438,8 @@ and `Open folder`. On-disk log files (rotated):
 
 | File | Channel | Path |
 |------|---------|------|
-| `warp_detection.log` | Detection | `~/.config/warp/` |
+| `warp_detection.log` | Detection (WARP) | `~/.config/warp/` |
+| `warp_detection_core.log` | Detection (WARP CORE) | `~/.config/warp/` |
 | `warp_system.log` | System | `~/.config/warp/` |
 
 ---
@@ -1461,10 +1510,12 @@ checks for updates **every 15 minutes** (rate-limit cache; uses `requests` with 
 
 ### "N not yet shared" in the status bar
 
-A small amber note may appear at the bottom right of WARP CORE:
+A small amber note may appear in the bottom-right corner, just left of
+**🔄 Refresh** in the launcher, or at the bottom right of WARP CORE when it is
+opened on its own:
 
 ```
-│  12 not yet shared  │  [ progress ]  │
+│  12 not yet shared  │  [ Refresh ]  │
 ```
 
 It counts confirmations made on this machine that the community dataset has
@@ -1625,9 +1676,28 @@ than a correction. See [Correcting item names](#correcting-item-names).
 
 ### Recognition is slow
 
-The first run after a fresh install may take 30–60 seconds because EasyOCR initialises its language model. Subsequent runs are faster (model stays in memory while sto-warp is open).
+Loading what recognition needs happens once per start, in the background,
+while the progress line shows **Preparing recognition** (see
+[Preparing recognition at start](#preparing-recognition-at-start)). If your
+first run takes much longer than later ones, the preparation had probably
+not finished yet. On the very first start after installing, the setup
+window downloads the models and pictures first, so everything takes longer
+that once.
 
 On CPU-only hardware, the ML inference step adds 2–5 seconds per screenshot. This is normal.
+
+### Auto-Detect Slots is greyed out
+
+The button is greyed out on purpose whenever a run could not start
+properly. Hovering over it usually says why.
+
+| What you see | Why | What to do |
+|---|---|---|
+| A **Preparing recognition** bar in the progress line | Recognition is still loading at start | Wait for the bar to finish; the button comes back by itself |
+| A **Classifying** or **Detecting screen types** bar | Screen types are being worked out; recognition needs them | Wait for the bar to finish |
+| A recognition bar with **Cancel** | A recognition is already running | Wait, or press **Cancel** |
+| WARP: nothing has been opened yet | There is nothing to recognise | **Open Screenshot…** or **Open Folder…** |
+| WARP CORE: the screenshot is marked Done | Done screenshots are locked against changes | Press **↩ Back to Edit** first |
 
 ### "Duplicate bbox" warning
 
