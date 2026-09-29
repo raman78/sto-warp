@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [1.0.40] — 2026-09-29
+## [1.0.41] — 2026-09-29
 
 ### Added
 
@@ -28,7 +28,6 @@ details live in the git history.
 
 ### Changed
 
-- **Recognition is noticeably faster,** most of all on mixed screenshots.
 - **Ready for icon models that train in half the time.** The community
   icon models are moving to smaller pictures, which lets each training run
   finish properly instead of being cut short, with the same accuracy. This
@@ -51,6 +50,9 @@ details live in the git history.
   saved as a picture of a tier; older ones are removed on start, and the
   log names each affected screenshot so the tier badge can be boxed
   instead. The tier itself stays in the build.
+- **Bridge officer abilities are boxed on their icons again.** On some
+  screenshots a seat's row of ability boxes was pushed down onto the
+  officer's name and read as nonsense.
 
 ## [1.0.39] — 2026-09-26
 
