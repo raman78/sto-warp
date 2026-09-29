@@ -36,8 +36,18 @@ from urllib.parse import unquote_plus
 
 import numpy as np
 
+import threading
+
 from warp import userdata
 from warp.debug import log, syslog
+
+# One lock for everything that builds or changes the matcher's shared state:
+# the wiki icon index, the session-example pool and its stacked copy. The
+# recognition warm-up (`SETSIconMatcher.warm_up`) builds them in the
+# background at start; a recognition started meanwhile then waits for that
+# work instead of doing it a second time. Re-entrant because the warm-up
+# calls the guarded builders while holding it.
+_PREP_LOCK = threading.RLock()
 
 # ── Tunable thresholds ─────────────────────────────────────────────────────────
 MATCH_SIZE          = 64     # resize crop + template to this before matching
@@ -864,6 +874,65 @@ class SETSIconMatcher:
     # rows by name). See `_build_index`.
     _index_cache: tuple | None = None
 
+    # True while `warm_up` runs, so a recognition can say what it waits for.
+    _warming: bool = False
+
+    @classmethod
+    def is_warming(cls) -> bool:
+        return cls._warming
+
+    @classmethod
+    def warm_up(cls, training_data_dir=None) -> dict:
+        """Do the first recognition's one-off loading now, in the background.
+
+        Measured on the first recognition in a fresh process (19.6 s on
+        image-cda05d5238072b99.png), about 13 s was loading that every later
+        recognition reuses: OCR networks, the wiki icon index, the embedder
+        and its gallery, the user's and the community's confirmed crops, and
+        their stacked copy. Called at start by the launcher's sync cycle and
+        by a standalone WARP CORE, it moves that out of the first Auto-Detect.
+
+        Holds the prep lock throughout, so a recognition started meanwhile
+        waits for this rather than repeating it. `training_data_dir` is the
+        user's store: pass it only where WARP CORE runs (the WARP-vs-CORE
+        rule); WARP drops those seeds before matching, under the same lock.
+        Everything here is also what the first recognition would do itself,
+        so a failure costs nothing but the head start. Returns seconds per
+        part, for the log.
+        """
+        import time
+        parts: dict[str, float] = {}
+
+        def _step(name, fn):
+            t0 = time.monotonic()
+            try:
+                fn()
+            except Exception as e:                        # noqa: BLE001
+                log.warning(f'WARP: warm-up step {name!r} failed: {e} — '
+                            f'the first recognition will do it instead')
+            parts[name] = time.monotonic() - t0
+
+        cls._warming = True
+        try:
+            with _PREP_LOCK:
+                from warp.recognition.text_extractor import shared_reader
+                _step('ocr', shared_reader)
+                holder: list = []
+                _step('icon index', lambda: holder.append(cls()))
+                if holder:
+                    _step('models', holder[0]._get_ml_session)
+                if training_data_dir is not None and Path(training_data_dir).exists():
+                    _step('own crops',
+                          lambda: cls.seed_from_training_data(training_data_dir))
+                _step('community crops', cls.seed_from_community_crops)
+                _step('session stack', cls._session_stack)
+        finally:
+            cls._warming = False
+        log.info('WARP: recognition warmed up in '
+                 f'{sum(parts.values()):.1f}s ('
+                 + ', '.join(f'{k} {v:.1f}s' for k, v in parts.items()) + ')')
+        return parts
+
     # Stacked copy of the session examples, rebuilt when the list changes.
     # (entries it was built from, templates uint8 (N, 12288), centred-template
     # norms (N,), normalised histograms (N, 288), name -> row indices)
@@ -872,6 +941,11 @@ class SETSIconMatcher:
 
     @classmethod
     def _session_stack(cls):
+        with _PREP_LOCK:
+            return cls._session_stack_unlocked()
+
+    @classmethod
+    def _session_stack_unlocked(cls):
         """The session examples as arrays, rebuilt whenever the list changed.
 
         Checked by the identity of every entry, not by length or a counter:
@@ -1045,6 +1119,10 @@ class SETSIconMatcher:
         return np.maximum(slid, exact)
 
     def _build_index(self):
+        with _PREP_LOCK:
+            self._build_index_unlocked()
+
+    def _build_index_unlocked(self):
         """
         Load all PNG files from the SETS images directory and build
         a template + histogram index for fast matching.
@@ -1785,6 +1863,11 @@ class SETSIconMatcher:
 
     @classmethod
     def seed_from_training_data(cls, training_data_dir) -> int:
+        with _PREP_LOCK:
+            return cls._seed_from_training_data(training_data_dir)
+
+    @classmethod
+    def _seed_from_training_data(cls, training_data_dir) -> int:
         """
         Load all confirmed icon crops from annotations.json as session examples.
         Guarded by _seeded_from_training_data — runs only once per process
@@ -1895,6 +1978,11 @@ class SETSIconMatcher:
 
     @classmethod
     def seed_from_community_crops(cls, force: bool = False) -> int:
+        with _PREP_LOCK:
+            return cls._seed_from_community_crops(force)
+
+    @classmethod
+    def _seed_from_community_crops(cls, force: bool = False) -> int:
         """Seed the session-example pool from the HF-mirrored approved truth.
 
         Reads `data/annotations.jsonl` + `data/crops/<sha>.png` from
@@ -1986,6 +2074,14 @@ class SETSIconMatcher:
 
     @classmethod
     def reset_ml_session(cls, keep_origins: set[str] | None = None):
+        # Under the prep lock: WARP drops the user's training-data seeds here
+        # before it matches (the WARP-vs-CORE rule). A warm-up still seeding
+        # them would otherwise add them back after the drop.
+        with _PREP_LOCK:
+            return cls._reset_ml_session(keep_origins)
+
+    @classmethod
+    def _reset_ml_session(cls, keep_origins: set[str] | None = None):
         """
         Force reload of the ML model on next inference call.
         Called after local training completes, and by WARP's `_get_matcher`

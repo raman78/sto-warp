@@ -316,6 +316,13 @@ class RecognitionWorker(QThread):
 
         _slog.info(f'RecognitionWorker: start {self._path.name} stype={self._stype} → importer={importer_type}')
 
+        # The start-up warm-up still running means this run waits on its lock
+        # for the loading it is doing; say so rather than sit silent.
+        from warp.recognition.icon_matcher import SETSIconMatcher
+        if SETSIconMatcher.is_warming():
+            _slog.info('RecognitionWorker: waiting for the recognition warm-up to finish')
+            self.progress.emit(0, 'Preparing recognition…')
+
         try:
             importer = WarpImporter(
                 sets_app=self._sets_app, build_type=importer_type,

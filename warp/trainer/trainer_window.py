@@ -244,6 +244,10 @@ class WarpCoreWindow(QMainWindow):
             # the interval would otherwise never send anything at all. Delayed
             # rather than immediate so the window paints first.
             QTimer.singleShot(20_000, self._on_sync_timer)
+            # Standalone WARP CORE has no SyncCoordinator, whose cycle does the
+            # recognition warm-up in the launcher, so start it here. It needs
+            # no network, so it need not wait for the sync tick above.
+            QTimer.singleShot(500, self._start_recognition_warm_up)
 
 
     def showEvent(self, event):
@@ -5628,6 +5632,15 @@ class WarpCoreWindow(QMainWindow):
     def _auto_sync(self):
         """Kept as the name the older call sites use — see `_upload_now`."""
         self._upload_now()
+
+    def _start_recognition_warm_up(self):
+        """Load what the first Auto-Detect would, on a background thread."""
+        import threading
+        from warp.recognition.icon_matcher import SETSIconMatcher
+        threading.Thread(
+            target=SETSIconMatcher.warm_up,
+            args=(userdata.training_data_dir(),),
+            name='warp-recognition-warm-up', daemon=True).start()
 
     def _on_sync_timer(self):
         """Every 5 minutes: refresh community knowledge, check for a newer

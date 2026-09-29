@@ -174,10 +174,10 @@ guarantee — files stayed at their install-time revision for weeks.
                                                           │  ─ arm_periodic_only() if      │
                                                           │     the splash already ran     │
                                                           │                                │
-                                                          │  cycle: cargo → assets →       │
-                                                          │  knowledge → model →           │
-                                                          │  community → equiv →           │
-                                                          │  seed → upload → done          │
+                                                          │  cycle: upload → cargo →       │
+                                                          │  assets → knowledge → model →  │
+                                                          │  community → equiv → seed →    │
+                                                          │  warm → done                   │
                                                           │                                │
                                                           │  QTimer 60 min → repeat        │
                                                           └────────────────────────────────┘
@@ -304,6 +304,7 @@ def run(self):
     self.step.emit('community'); CommunityCropsClient().fetch()
     self.step.emit('equiv');     sync_client._download_icon_equivalence_bg(force=…)
     self.step.emit('seed');      SETSIconMatcher.seed_from_community_crops()
+    self.step.emit('warm');      SETSIconMatcher.warm_up(userdata.training_data_dir())
     #                            then wait, bounded, on the upload worker
     self.step.emit('done')
 ```
@@ -311,6 +312,27 @@ def run(self):
 Each step is wrapped in `try/except` so an upstream 5xx never aborts
 the next step. Failures log at WARNING and the cycle proceeds; the
 next 60 min tick retries naturally.
+
+**`warm` — the recognition warm-up (2026-09-29).** The first Auto-Detect in
+a fresh process used to pay for loading that every later one reuses — the
+OCR networks, the wiki icon index, the embedder, the user's and the
+community's confirmed crops and their stacked copy: about 13 s of a 19.6 s
+first run. `SETSIconMatcher.warm_up` does it here instead, in the background,
+and the status bar reads *Preparing recognition…*. Measured on the same
+screenshot: the warm-up takes ~9.5 s and the first recognition after it
+7.4 s. On later cycles it costs well under a second, because everything is
+keyed on content and already built; if a cycle downloaded new icons, a new
+model or new crops, the changed part is rebuilt here, not at the next click.
+
+Auto-Detect is never disabled. A recognition started during the warm-up
+waits on the same lock the warm-up holds (`_PREP_LOCK` in
+`icon_matcher.py`), so the work is done once, and its progress reads
+*Preparing recognition…* while it waits. The launcher always holds WARP CORE,
+so the user's own crops are seeded; WARP drops them before it matches
+(the WARP-vs-CORE rule), and that drop takes the same lock, so a warm-up
+still seeding cannot put them back. A standalone WARP CORE starts the same
+warm-up on a thread half a second after its window opens; the standalone
+WARP window (`sto-warp gui`) has no sync cycle and does no warm-up.
 
 ### The daily request budget
 

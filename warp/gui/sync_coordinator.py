@@ -148,6 +148,21 @@ class _RefreshWorker(QThread):
             log.warning(f'SyncCoordinator: community seed failed: {e}')
         if _interrupted(): return
 
+        # Recognition warm-up: the first Auto-Detect's one-off loading (OCR,
+        # icon index, models, confirmed crops, their stacked copy — ~13 s)
+        # done now instead. The launcher always holds WARP CORE, so the user's
+        # own crops are seeded too; WARP drops them before it matches. Cheap
+        # on later cycles: everything is keyed on content and already built.
+        self.step.emit('warm')
+        log.info('SyncCoordinator: step=warm — recognition warm-up')
+        try:
+            from warp import userdata
+            from warp.recognition.icon_matcher import SETSIconMatcher
+            SETSIconMatcher.warm_up(userdata.training_data_dir())
+        except Exception as e:
+            log.warning(f'SyncCoordinator: recognition warm-up failed: {e}')
+        if _interrupted(): return
+
         # The upload itself ran at the top of the cycle; this waits for the
         # worker it started, so the status bar does not say "complete" while
         # bytes are still going out. Bounded, so a hung upload cannot block
@@ -268,6 +283,7 @@ class SyncCoordinator(QObject):
             'model':     'Checking for newer model…',
             'community': 'Fetching approved crops mirror…',
             'seed':      'Seeding matcher with community crops…',
+            'warm':      'Preparing recognition…',
             'upload':    'Uploading confirmed crops…',
             'done':      'Sync complete.',
         }

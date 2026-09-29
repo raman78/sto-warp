@@ -20,6 +20,7 @@
 
 from __future__ import annotations
 
+import threading
 import re
 import logging
 import numpy as np
@@ -100,6 +101,7 @@ SHIP_TIER_VALUES: list[str] = [
 
 
 _SHARED_READER = None
+_SHARED_READER_LOCK = threading.Lock()
 
 
 def shared_reader():
@@ -120,13 +122,21 @@ def shared_reader():
     Built on first use, never torn down: the models stay resident for the
     life of the process, which is what makes the second and later screenshots
     cheap.
+
+    Construction is locked. The recognition warm-up
+    (`SETSIconMatcher.warm_up`) builds the reader in the background at start,
+    and a recognition started meanwhile asks for it too; without the lock both
+    would see `None` and each load the networks (~2.8 s). Reading stays
+    unlocked, for the reason above.
     """
     global _SHARED_READER
     if _SHARED_READER is None:
-        import easyocr
-        from warp.recognition.ui_translations import ocr_languages
-        _SHARED_READER = easyocr.Reader(ocr_languages(), gpu=False,
-                                        verbose=False)
+        with _SHARED_READER_LOCK:
+            if _SHARED_READER is None:
+                import easyocr
+                from warp.recognition.ui_translations import ocr_languages
+                _SHARED_READER = easyocr.Reader(ocr_languages(), gpu=False,
+                                                verbose=False)
     return _SHARED_READER
 
 

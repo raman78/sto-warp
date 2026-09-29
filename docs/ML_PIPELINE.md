@@ -839,10 +839,13 @@ difference of 6·10⁻⁸ (same name, score and origin). `tests/test_matcher_vec
 compares every path against OpenCV computed in the test. The price is the
 session stack, about 300 MB of memory beside the examples themselves.
 
-The first recognition in a process still pays the one-off costs, about 13 s
-of a 19.6 s first run on the same screenshot: reading the community crops
-(3.9 s) and the user's confirmed crops (1.75 s), loading OCR (~2.8 s), the
-session stack (~1.7 s), the models (~1.5 s) and the icon index (1.2 s).
+The first recognition in a process paid the one-off costs, about 13 s of a
+19.6 s first run on the same screenshot: reading the community crops (3.9 s)
+and the user's confirmed crops (1.75 s), loading OCR (~2.8 s), the session
+stack (~1.7 s), the models (~1.5 s) and the icon index (1.2 s). They are now
+paid at start, in the background, by the `warm` step of the sync cycle
+(`SETSIconMatcher.warm_up`, see `SYNC_ARCHITECTURE.md` §4): the warm-up takes
+~9.5 s and the first recognition after it 7.4 s.
 
 ## 7. Data stored on HuggingFace
 
