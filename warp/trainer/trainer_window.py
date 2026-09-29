@@ -139,6 +139,16 @@ class WarpCoreWindow(QMainWindow):
     # Emitted by `exit_fast_correction_mode()` so the launcher can restore
     # its tab title and (optionally) switch back to the WARP tab.
     fast_correction_exited = Signal()
+    # Recognition warm-up progress (done, total, part), from the standalone
+    # warm-up thread — see `_start_recognition_warm_up`.
+    _recognition_prep_report = Signal(int, int, str)
+
+    # Auto-Detect Slots is greyed out while the recognition warm-up runs
+    # (`set_recognition_prep`); `_auto_detect_wanted` is what the rest of the
+    # window asked for meanwhile (enabled, tooltip), applied once it ends.
+    _recognition_preparing = False
+    _auto_detect_wanted = (True, 'Auto-detect icons')
+    _READY_TEXT = 'Ready — open a folder of STO screenshots to start annotating.'
 
     def __init__(self, sets_app=None, parent=None, embed: bool = False):
         super().__init__(parent)
@@ -206,7 +216,7 @@ class WarpCoreWindow(QMainWindow):
         self._setup_shortcuts()
         self._build_toolbar()
         self.setStatusBar(QStatusBar())
-        self.statusBar().showMessage('Ready — open a folder of STO screenshots to start annotating.')
+        self.statusBar().showMessage(self._READY_TEXT)
 
         # Shared status-bar progress widget — replaces the modal popups
         # the trainer used to spawn for screen-type detection and icon
@@ -216,6 +226,10 @@ class WarpCoreWindow(QMainWindow):
         self._status_progress = StatusProgressBar(self)
         self._status_progress.cancel_requested.connect(self._cancel_active_run)
         self.statusBar().addPermanentWidget(self._status_progress)
+        from warp.gui.progress_bar import RecognitionPrepBar
+        self._prep_bar = RecognitionPrepBar(self)
+        self.statusBar().addPermanentWidget(self._prep_bar)
+        self._recognition_prep_report.connect(self.set_recognition_prep)
 
         # Confirmations this machine holds that the community dataset has not
         # got. Permanent rather than a status message, because the condition
@@ -635,9 +649,36 @@ class WarpCoreWindow(QMainWindow):
         """
         for a in (self._action_open_screenshot,
                   self._action_open_folder,
-                  self._action_detect_screen_types,
-                  self._action_auto_detect):
+                  self._action_detect_screen_types):
             a.setEnabled(enabled)
+        self._set_auto_detect_enabled(enabled)
+
+    def _set_auto_detect_enabled(self, enabled: bool,
+                                 tip: str = 'Auto-detect icons') -> None:
+        """Every enable of Auto-Detect Slots goes through here, so none can
+        re-enable it while the recognition warm-up still runs."""
+        self._auto_detect_wanted = (bool(enabled), tip)
+        waiting = enabled and self._recognition_preparing
+        self._action_auto_detect.setEnabled(enabled and not waiting)
+        self._action_auto_detect.setToolTip(
+            'Available once recognition is prepared.' if waiting else tip)
+
+    def set_recognition_prep(self, done: int, total: int, part: str) -> None:
+        """Show the warm-up's progress (`SETSIconMatcher.warm_up`).
+
+        A run started now would only wait for the warm-up, silently, so
+        Auto-Detect Slots stays greyed out until the report with
+        `done == total`. The ready hint is withdrawn meanwhile, and put back
+        only if nothing else has taken the status line since.
+        """
+        preparing = self._prep_bar.report(done, total, part)
+        sb = self.statusBar()
+        if preparing and sb.currentMessage() == self._READY_TEXT:
+            sb.clearMessage()
+        elif not preparing and self._recognition_preparing and not sb.currentMessage():
+            sb.showMessage(self._READY_TEXT)
+        self._recognition_preparing = preparing
+        self._set_auto_detect_enabled(*self._auto_detect_wanted)
 
     # ── Fast Correction Mode ────────────────────────────────────────────
     def _make_fast_correction_banner(self) -> QFrame:
@@ -3785,8 +3826,7 @@ class WarpCoreWindow(QMainWindow):
             self._btn_remove_item.setToolTip(locked_tip)
             self._btn_clear_all_bboxes.setEnabled(False)
             self._btn_clear_all_bboxes.setToolTip(locked_tip)
-            self._action_auto_detect.setEnabled(False)
-            self._action_auto_detect.setToolTip(locked_tip)
+            self._set_auto_detect_enabled(False, locked_tip)
         else:
             self._btn_remove_item.setToolTip('')
             self._btn_clear_all_bboxes.setEnabled(True)
@@ -3794,8 +3834,7 @@ class WarpCoreWindow(QMainWindow):
                 'Remove every bbox on the current screenshot. A confirmation dialog '
                 'offers the option to spare bboxes already marked confirmed.'
             )
-            self._action_auto_detect.setEnabled(True)
-            self._action_auto_detect.setToolTip('Auto-detect icons')
+            self._set_auto_detect_enabled(True)
         # Send to WARP is the inverse: only enabled once the screenshot is
         # locked, since "Done" means the user has reviewed every bbox and
         # the result is safe to hand back to WARP for JSON export.
@@ -5640,6 +5679,7 @@ class WarpCoreWindow(QMainWindow):
         threading.Thread(
             target=SETSIconMatcher.warm_up,
             args=(userdata.training_data_dir(),),
+            kwargs={'progress': self._recognition_prep_report.emit},
             name='warp-recognition-warm-up', daemon=True).start()
 
     def _on_sync_timer(self):

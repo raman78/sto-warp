@@ -207,6 +207,10 @@ class LauncherWindow(QMainWindow):
 
         self._coord.busy_changed.connect(self._on_busy_changed)
         self._coord.status.connect(self._on_status)
+        # The warm-up's progress goes to both tools' own status bars, next to
+        # their Auto-Detect Slots, which each greys out until it ends.
+        self._coord.recognition_prep.connect(self._warp_win.set_recognition_prep)
+        self._coord.recognition_prep.connect(self._core_win.set_recognition_prep)
 
         # The coordinator already says when a cycle ends. `busy_changed(False)`
         # is the moment the "not yet shared" count can have changed, and in the

@@ -175,12 +175,14 @@ A `🔄 Refresh` button in the bottom-right status bar manually re-runs the
 community sync (re-download knowledge, check for newer central models, upload
 pending confirmed crops). It is disabled while a sync is already in flight.
 
-Near the end of the first sync the status bar shows **Preparing
-recognition…** for a few seconds. WARP is loading what every recognition
-needs (text reader, icon library, models, confirmed crops), so the first
-Auto-Detect does not have to. Auto-Detect stays usable meanwhile: a run
-started during this step waits for it to finish, showing the same message,
-and then continues — it never loads everything a second time.
+Once the start-up sync has fetched its updates, WARP and WARP CORE each show
+a bar in their own status line: **Preparing recognition — … %**. WARP is loading what every
+recognition needs — the text reader, the icon library, the models, the
+confirmed crops — so that the first Auto-Detect does not have to.
+**Auto-Detect Slots is greyed out until the bar finishes** (a few seconds,
+longer on a slow disk), then becomes available again. This happens once per
+start; the hourly sync repeats it only for what has changed, which usually
+takes a moment.
 
 Window geometry and tab state are persisted across runs.
 

@@ -37,6 +37,9 @@ class _RefreshWorker(QThread):
     never aborts the others. Errors are logged, not propagated."""
 
     step = Signal(str)
+    # Recognition warm-up progress: (done, total, part). Ends with
+    # done == total, also when the warm-up fails.
+    recognition_prep = Signal(int, int, str)
 
     def __init__(self, sync_client, sets_root: Path, sync_manager, force: bool):
         super().__init__()
@@ -158,7 +161,8 @@ class _RefreshWorker(QThread):
         try:
             from warp import userdata
             from warp.recognition.icon_matcher import SETSIconMatcher
-            SETSIconMatcher.warm_up(userdata.training_data_dir())
+            SETSIconMatcher.warm_up(userdata.training_data_dir(),
+                                    progress=self.recognition_prep.emit)
         except Exception as e:
             log.warning(f'SyncCoordinator: recognition warm-up failed: {e}')
         if _interrupted(): return
@@ -182,6 +186,7 @@ class _RefreshWorker(QThread):
 class SyncCoordinator(QObject):
     busy_changed = Signal(bool)
     status       = Signal(str)
+    recognition_prep = Signal(int, int, str)   # see _RefreshWorker
 
     def __init__(self, sets_app, sets_root: Path, parent=None):
         super().__init__(parent)
@@ -229,9 +234,21 @@ class SyncCoordinator(QObject):
         Used after the cold-start splash has already driven every sync
         path to completion in a foreground dialog; firing another full
         refresh on launch would just re-walk the freshly-populated
-        mirrors and spam the status bar."""
+        mirrors and spam the status bar.
+
+        The splash has no warm-up phase, though, so without one here the
+        first Auto-Detect of a first run would do all the loading itself.
+        It needs no network, so it runs on its own thread straight away."""
         self._timer.start()
         self.status.emit('Sync complete.')
+        import threading
+        from warp import userdata
+        from warp.recognition.icon_matcher import SETSIconMatcher
+        threading.Thread(
+            target=SETSIconMatcher.warm_up,
+            args=(userdata.training_data_dir(),),
+            kwargs={'progress': self.recognition_prep.emit},
+            name='warp-recognition-warm-up', daemon=True).start()
 
     def stop(self):
         """Cooperative stop — never blocks the UI thread for more than 200 ms.
@@ -264,6 +281,7 @@ class SyncCoordinator(QObject):
             self.sync_client, self._sets_root, self.sync_manager, force=force,
         )
         self._worker.step.connect(self._on_step)
+        self._worker.recognition_prep.connect(self.recognition_prep)
         self._worker.finished.connect(self._on_finished)
         self.busy_changed.emit(True)
         self.status.emit('Syncing…')

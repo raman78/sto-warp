@@ -882,7 +882,7 @@ class SETSIconMatcher:
         return cls._warming
 
     @classmethod
-    def warm_up(cls, training_data_dir=None) -> dict:
+    def warm_up(cls, training_data_dir=None, progress=None) -> dict:
         """Do the first recognition's one-off loading now, in the background.
 
         Measured on the first recognition in a fresh process (19.6 s on
@@ -899,11 +899,30 @@ class SETSIconMatcher:
         Everything here is also what the first recognition would do itself,
         so a failure costs nothing but the head start. Returns seconds per
         part, for the log.
+
+        `progress(done, total, part)` is called before each part and once
+        more with `done == total` when the warm-up ends, failed or not — the
+        windows grey Auto-Detect out until that last call, so it must come.
+        Parts are counted, not weighted by time: their shares differ from
+        machine to machine, and a count is never wrong.
         """
         import time
         parts: dict[str, float] = {}
+        own = training_data_dir is not None and Path(training_data_dir).exists()
+        total = 6 if own else 5
+        done = 0
+
+        def _report(part):
+            if progress is None:
+                return
+            try:
+                progress(done, total, part)
+            except Exception as e:                        # noqa: BLE001
+                log.debug(f'WARP: warm-up progress report failed: {e}')
 
         def _step(name, fn):
+            nonlocal done
+            _report(name)
             t0 = time.monotonic()
             try:
                 fn()
@@ -911,6 +930,7 @@ class SETSIconMatcher:
                 log.warning(f'WARP: warm-up step {name!r} failed: {e} — '
                             f'the first recognition will do it instead')
             parts[name] = time.monotonic() - t0
+            done += 1
 
         cls._warming = True
         try:
@@ -919,15 +939,17 @@ class SETSIconMatcher:
                 _step('ocr', shared_reader)
                 holder: list = []
                 _step('icon index', lambda: holder.append(cls()))
-                if holder:
-                    _step('models', holder[0]._get_ml_session)
-                if training_data_dir is not None and Path(training_data_dir).exists():
+                _step('models',
+                      lambda: holder[0]._get_ml_session() if holder else None)
+                if own:
                     _step('own crops',
                           lambda: cls.seed_from_training_data(training_data_dir))
                 _step('community crops', cls.seed_from_community_crops)
                 _step('session stack', cls._session_stack)
         finally:
             cls._warming = False
+            done = total
+            _report('')
         log.info('WARP: recognition warmed up in '
                  f'{sum(parts.values()):.1f}s ('
                  + ', '.join(f'{k} {v:.1f}s' for k, v in parts.items()) + ')')

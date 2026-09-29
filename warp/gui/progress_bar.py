@@ -87,3 +87,45 @@ class StatusProgressBar(QWidget):
         self._bar.setRange(0, 100)
         self._bar.setValue(100)
         self.setVisible(False)
+
+
+class RecognitionPrepBar(QProgressBar):
+    """The recognition warm-up's progress, shown while Auto-Detect waits for it.
+
+    Its own bar rather than `StatusProgressBar`: screen-type classification
+    uses that one, and it can run while the warm-up does (opening a folder
+    starts it), so sharing a bar would let each overwrite the other. The text
+    sits inside the bar, and the bar is a permanent status-bar widget, so a
+    status message cannot hide it. Hidden whenever no warm-up runs.
+    """
+
+    # Warm-up part names (`SETSIconMatcher.warm_up`) as the user reads them.
+    _PARTS = {
+        'ocr':             'text reader',
+        'icon index':      'icon library',
+        'models':          'models',
+        'own crops':       'confirmed crops',
+        'community crops': 'community crops',
+        'session stack':   'crop index',
+    }
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.setMinimumWidth(420)
+        self.setTextVisible(True)
+        f = self.font()
+        f.setBold(True)
+        self.setFont(f)
+        self.setVisible(False)
+
+    def report(self, done: int, total: int, part: str) -> bool:
+        """Show one progress report; returns True while the warm-up runs."""
+        if total <= 0 or done >= total:
+            self.setVisible(False)
+            return False
+        self.setRange(0, total)
+        self.setValue(done)
+        name = self._PARTS.get(part, part)
+        self.setFormat(f'Preparing recognition — {name} ({done + 1}/{total})  %p%')
+        self.setVisible(True)
+        return True

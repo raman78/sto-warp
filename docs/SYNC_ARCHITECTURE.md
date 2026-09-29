@@ -191,7 +191,10 @@ Notes on the diagram:
   background `QThread` with status-bar text only.
 - `arm_periodic_only()` exists so that after a clean splash run we
   don't *immediately* re-walk the cycle we just finished. The 60 min
-  timer is still armed; the next walk happens on schedule.
+  timer is still armed; the next walk happens on schedule. The splash has
+  no `warm` phase, so `arm_periodic_only()` starts the recognition warm-up
+  on its own thread (it needs no network) — otherwise a first run's first
+  Auto-Detect would do all that loading itself.
 - The marker file `~/.config/warp/startup_sync_done` exists purely to
   gate the splash. It carries no version info — only its existence
   matters. Delete the file to force the splash on the next launch.
@@ -289,7 +292,8 @@ owns a single `_RefreshWorker` instance at a time (mutex on
 
 If the splash ran to completion immediately before this, the 500 ms
 tick calls `arm_periodic_only()` instead of `start()` so the initial
-cycle is skipped — the periodic 60 min timer is still armed.
+cycle is skipped — the periodic 60 min timer is still armed, and the
+recognition warm-up (the cycle's `warm` step) is started on its own thread.
 
 ### `_RefreshWorker.run` step-by-step
 
@@ -304,7 +308,8 @@ def run(self):
     self.step.emit('community'); CommunityCropsClient().fetch()
     self.step.emit('equiv');     sync_client._download_icon_equivalence_bg(force=…)
     self.step.emit('seed');      SETSIconMatcher.seed_from_community_crops()
-    self.step.emit('warm');      SETSIconMatcher.warm_up(userdata.training_data_dir())
+    self.step.emit('warm');      SETSIconMatcher.warm_up(userdata.training_data_dir(),
+                                                         progress=self.recognition_prep.emit)
     #                            then wait, bounded, on the upload worker
     self.step.emit('done')
 ```
@@ -317,21 +322,33 @@ next 60 min tick retries naturally.
 a fresh process used to pay for loading that every later one reuses — the
 OCR networks, the wiki icon index, the embedder, the user's and the
 community's confirmed crops and their stacked copy: about 13 s of a 19.6 s
-first run. `SETSIconMatcher.warm_up` does it here instead, in the background,
-and the status bar reads *Preparing recognition…*. Measured on the same
+first run. `SETSIconMatcher.warm_up` does it here instead, in the background.
+Measured on the same
 screenshot: the warm-up takes ~9.5 s and the first recognition after it
 7.4 s. On later cycles it costs well under a second, because everything is
 keyed on content and already built; if a cycle downloaded new icons, a new
 model or new crops, the changed part is rebuilt here, not at the next click.
 
-Auto-Detect is never disabled. A recognition started during the warm-up
-waits on the same lock the warm-up holds (`_PREP_LOCK` in
-`icon_matcher.py`), so the work is done once, and its progress reads
-*Preparing recognition…* while it waits. The launcher always holds WARP CORE,
+While it runs, **Auto-Detect Slots is greyed out** in both WARP and WARP
+CORE, and each tool's own status bar — the one next to the button, not the
+launcher's — shows a bar: *Preparing recognition — icon library (2/6) 16%*.
+The warm-up reports before each of its parts (text reader, icon library,
+models, confirmed crops when WARP CORE is present, community crops, crop
+index) and once more at the end; the bar advances by parts, not by time,
+because the parts' shares of the total differ from machine to machine. The
+end is reported also when the warm-up fails, so the button always comes back.
+It comes back to what the tool would otherwise show — a screenshot marked
+Done keeps it disabled. The tool's "Ready." line is withdrawn meanwhile.
+The grey-out came after a first version (d346676) that left the button live:
+a click then queued silently behind the warm-up for several seconds under a
+status bar saying "Ready.". That queueing remains as the safety net — a
+recognition that does start during a warm-up (the Results view's rerun,
+say) waits on the same lock the warm-up holds (`_PREP_LOCK` in
+`icon_matcher.py`), so the work is still done once. The launcher always holds WARP CORE,
 so the user's own crops are seeded; WARP drops them before it matches
 (the WARP-vs-CORE rule), and that drop takes the same lock, so a warm-up
 still seeding cannot put them back. A standalone WARP CORE starts the same
-warm-up on a thread half a second after its window opens; the standalone
+warm-up, with the same bar, on a thread half a second after its window opens; the standalone
 WARP window (`sto-warp gui`) has no sync cycle and does no warm-up.
 
 ### The daily request budget

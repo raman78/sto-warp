@@ -214,7 +214,7 @@ def test_the_sync_cycle_warms_up_after_the_seed_and_before_done(monkeypatch):
     monkeypatch.setattr(SETSIconMatcher, 'seed_from_community_crops',
                         classmethod(lambda cls, force=False: order.append('seed-call')))
     monkeypatch.setattr(SETSIconMatcher, 'warm_up',
-                        classmethod(lambda cls, td=None: order.append('warm-call')))
+                        classmethod(lambda cls, td=None, **k: order.append('warm-call')))
     w = SC._RefreshWorker(None, None, None, False)
     w.step.connect(order.append)
     w.run()

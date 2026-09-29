@@ -28,7 +28,7 @@ from PySide6.QtWidgets import (
 )
 
 from warp.gui.log_view import LogViewWidget
-from warp.gui.progress_bar import StatusProgressBar
+from warp.gui.progress_bar import RecognitionPrepBar, StatusProgressBar
 from warp.gui.results_view import ResultsView
 from warp.style import ACCENT, primary_btn_style, secondary_btn_style
 
@@ -176,6 +176,11 @@ class WarpWindow(QMainWindow):
         # Folder so the file list shows detected types without paying for
         # full slot recognition. Replaced by the Auto-Detect Slots run.
         self._stype_worker = None
+        # Auto-Detect Slots is greyed out while the recognition warm-up runs
+        # (`set_recognition_prep`); `_rerun_wanted` is what the rest of the
+        # window asked for meanwhile, applied once the warm-up ends.
+        self._recognition_preparing = False
+        self._rerun_wanted = False
 
         self._setup_ui()
 
@@ -200,9 +205,7 @@ class WarpWindow(QMainWindow):
         # Disabled until the user opens at least one screenshot/folder.
         self._rerun_btn = QPushButton('Auto-Detect Slots', self)
         self._rerun_btn.setStyleSheet(primary_btn_style())
-        self._rerun_btn.setToolTip(
-            'Re-run detection on the most recently opened screenshot(s).')
-        self._rerun_btn.setEnabled(False)
+        self._set_rerun_enabled(False)
         self._rerun_btn.clicked.connect(self._on_rerun_detection)
         tb.addWidget(self._rerun_btn)
 
@@ -300,7 +303,41 @@ class WarpWindow(QMainWindow):
         self._progress = StatusProgressBar(self)
         self._progress.cancel_requested.connect(self._on_cancel_requested)
         self.statusBar().addPermanentWidget(self._progress)
-        self.statusBar().showMessage('Ready.')
+        self._prep_bar = RecognitionPrepBar(self)
+        self.statusBar().addPermanentWidget(self._prep_bar)
+        self.statusBar().showMessage(self._READY_TEXT)
+
+    # ── Recognition warm-up ─────────────────────────────────────────
+
+    _READY_TEXT = 'Ready.'
+
+    def _set_rerun_enabled(self, enabled: bool) -> None:
+        """Every enable of Auto-Detect Slots goes through here, so none can
+        re-enable it while the warm-up still runs."""
+        self._rerun_wanted = bool(enabled)
+        self._rerun_btn.setEnabled(
+            self._rerun_wanted and not self._recognition_preparing)
+        self._rerun_btn.setToolTip(
+            'Available once recognition is prepared.'
+            if self._recognition_preparing else
+            'Re-run detection on the most recently opened screenshot(s).')
+
+    def set_recognition_prep(self, done: int, total: int, part: str) -> None:
+        """Show the warm-up's progress (`SETSIconMatcher.warm_up`).
+
+        A run started now would only wait for the warm-up, silently, so
+        Auto-Detect Slots stays greyed out until the report with
+        `done == total`. "Ready." is withdrawn meanwhile, and put back only if
+        nothing else has taken the status line since.
+        """
+        preparing = self._prep_bar.report(done, total, part)
+        sb = self.statusBar()
+        if preparing and sb.currentMessage() == self._READY_TEXT:
+            sb.clearMessage()
+        elif not preparing and self._recognition_preparing and not sb.currentMessage():
+            sb.showMessage(self._READY_TEXT)
+        self._recognition_preparing = preparing
+        self._set_rerun_enabled(self._rerun_wanted)
 
     # ── File picking ────────────────────────────────────────────────
 
@@ -379,7 +416,7 @@ class WarpWindow(QMainWindow):
         self.statusBar().showMessage(
             f'Loaded {folder} — classifying screen types…' if n else
             f'Loaded {folder}.')
-        self._rerun_btn.setEnabled(n > 0)
+        self._set_rerun_enabled(n > 0)
 
         if paths:
             self._start_screen_type_detection(paths)
@@ -632,7 +669,7 @@ class WarpWindow(QMainWindow):
         # Rerun only makes sense once a folder has been opened at least
         # once — keep it gated on `_last_folder` even when controls are
         # re-enabled after a run completes.
-        self._rerun_btn.setEnabled(
+        self._set_rerun_enabled(
             enabled and self._last_folder is not None
             and self._last_folder.is_dir())
         self._force_bt_check.setEnabled(enabled)
