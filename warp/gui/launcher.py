@@ -193,6 +193,45 @@ class LauncherWindow(QMainWindow):
         self.statusBar().addWidget(self._refresh_btn)
         self.statusBar().showMessage('Starting sync…')
 
+        # Two status lines, one job each: the tool's own line (inside its
+        # tab) holds only progress, the launcher's line below holds every
+        # message — sync steps and the tools' messages alike.
+        self._forwarded_msg: dict[int, str] = {}
+        for win in (self._warp_win, self._core_win):
+            self._route_tool_status(win)
+        # "N not yet shared" is a standing message, not progress.
+        try:
+            label = self._core_win._backlog_label
+            self._core_win.statusBar().removeWidget(label)
+            self.statusBar().addPermanentWidget(label)
+            self._core_win._refresh_upload_backlog()
+        except Exception as e:                        # noqa: BLE001
+            log.warning(f'Launcher: could not move the backlog count: {e}')
+
+    def _route_tool_status(self, win) -> None:
+        """Show a tool's status messages in the launcher's status bar.
+
+        The tool keeps calling `showMessage` on its own status bar; its
+        progress strip is kept on and covers that line's message area, so the
+        message is shown here instead. While a run's bar is up, the message
+        is that run's progress text, already inside the bar — not repeated.
+        A message the tool clears (a timed one expiring) is cleared here too,
+        but only if it is still the one showing."""
+        win._progress_strip.set_keep_visible(True)
+        run_bar = win._progress_strip.run_bar
+
+        def _forward(text: str, key=id(win)):
+            sb = self.statusBar()
+            if not text:
+                if sb.currentMessage() == self._forwarded_msg.get(key):
+                    sb.clearMessage()
+                return
+            if not run_bar.isHidden():
+                return
+            self._forwarded_msg[key] = text
+            sb.showMessage(text)
+        win.statusBar().messageChanged.connect(_forward)
+
     # ── Sync orchestration ───────────────────────────────────────────
 
     def _init_sync(self):

@@ -257,3 +257,87 @@ def test_the_launchers_first_cycle_warms_up_alongside_not_after(qapp, monkeypatc
     coord._timer.stop()
     assert ran.wait(5)
     assert 'cycle' in order
+
+
+# ── Two status lines: progress above, messages below ───────────────────────
+
+def test_the_strip_shows_only_while_a_bar_does_when_standalone(qapp):
+    """Standalone there is one line, so an idle window must show its message."""
+    from warp.gui.progress_bar import ProgressStrip, RecognitionPrepBar, StatusProgressBar
+    run, prep = StatusProgressBar(), RecognitionPrepBar()
+    strip = ProgressStrip(None, run, prep)
+    assert strip.isHidden()
+    run.start()
+    assert not strip.isHidden()
+    run.finish()
+    assert strip.isHidden()
+
+
+def test_the_strip_stays_when_kept_and_keeps_its_height(qapp):
+    """In the launcher the line holds only progress; empty, it must not
+    shrink, or the tab jumps at every run."""
+    from warp.gui.progress_bar import ProgressStrip, RecognitionPrepBar, StatusProgressBar
+    run, prep = StatusProgressBar(), RecognitionPrepBar()
+    strip = ProgressStrip(None, run, prep)
+    strip.set_keep_visible(True)
+    assert not strip.isHidden()
+    assert strip.minimumHeight() >= run.sizeHint().height()
+
+
+def test_a_runs_message_is_written_into_its_bar(qapp):
+    from PySide6.QtWidgets import QMainWindow
+    from warp.gui.progress_bar import StatusProgressBar
+    w = QMainWindow()
+    run = StatusProgressBar()
+    run.mirror_messages(w.statusBar())
+    w.statusBar().showMessage('[1/3] a.png · OCR…')
+    assert run._bar.format() == '[1/3] a.png · OCR…  %p%'
+
+
+@pytest.fixture
+def launcher(qapp, monkeypatch):
+    from warp.gui import launcher as L
+    # No sync (network), no menu entry, no session GC: only the window.
+    for name in ('_init_sync', '_install_desktop_entry', '_gc_fast_correction_sessions'):
+        monkeypatch.setattr(L.LauncherWindow, name, lambda self: None)
+    w = L.LauncherWindow()
+    yield w
+    w.close()
+
+
+def test_the_launcher_shows_a_tools_message_below(launcher):
+    launcher._core_win.statusBar().showMessage('Recognition done — 12 item(s).')
+    assert launcher.statusBar().currentMessage() == 'Recognition done — 12 item(s).'
+
+
+def test_the_launcher_does_not_repeat_a_runs_progress_text(launcher):
+    """That text is inside the bar above; repeating it below is noise."""
+    launcher.statusBar().showMessage('Sync complete.')
+    warp = launcher._warp_win
+    warp._progress.start()
+    warp.statusBar().showMessage('[1/3] a.png · OCR…')
+    assert launcher.statusBar().currentMessage() == 'Sync complete.'
+    warp._progress.finish()
+    warp.statusBar().showMessage('Done.')
+    assert launcher.statusBar().currentMessage() == 'Done.'
+
+
+def test_an_expiring_message_clears_only_itself(launcher):
+    core = launcher._core_win
+    core.statusBar().showMessage('Pick: no picture for this box.')
+    core.statusBar().clearMessage()
+    assert launcher.statusBar().currentMessage() == ''
+    core.statusBar().showMessage('Pick: no picture for this box.')
+    launcher.statusBar().showMessage('Seeding matcher with community crops…')
+    core.statusBar().clearMessage()
+    assert launcher.statusBar().currentMessage() == 'Seeding matcher with community crops…'
+
+
+def test_the_tools_line_holds_only_progress_in_the_launcher(launcher):
+    for win in (launcher._warp_win, launcher._core_win):
+        assert not win._progress_strip.isHidden()
+
+
+def test_the_not_yet_shared_count_moves_to_the_launchers_line(launcher):
+    label = launcher._core_win._backlog_label
+    assert label.parent() is launcher.statusBar()

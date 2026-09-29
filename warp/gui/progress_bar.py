@@ -22,9 +22,10 @@ from warp.style import secondary_btn_style
 
 
 class StatusProgressBar(QWidget):
-    """Compact progress bar + Cancel button, sized for a QStatusBar."""
+    """Progress bar + Cancel button, sized for a QStatusBar."""
 
     cancel_requested = Signal()
+    visibility_changed = Signal()
 
     def __init__(self, parent=None, bar_min_width: int = 320):
         super().__init__(parent)
@@ -81,6 +82,22 @@ class StatusProgressBar(QWidget):
     def set_cancel_enabled(self, enabled: bool) -> None:
         self._cancel.setEnabled(enabled)
 
+    def setVisible(self, visible: bool) -> None:           # noqa: N802 (Qt)
+        super().setVisible(visible)
+        self.visibility_changed.emit()
+
+    def mirror_messages(self, status_bar) -> None:
+        """Write the status bar's message into the bar.
+
+        The bar is laid out across the whole status line (`ProgressStrip`),
+        which covers the message area, so what a run says about itself
+        ("[1/3] image.png · OCR…") has to be inside the bar to be seen.
+        The callers keep using `showMessage` as before."""
+        status_bar.messageChanged.connect(self._on_message)
+
+    def _on_message(self, text: str) -> None:
+        self._bar.setFormat(f'{text}  %p%' if text else '%p%')
+
     def finish(self) -> None:
         """Hide the widget. Caller is responsible for any "Done." text on
         the status-bar message label."""
@@ -109,14 +126,19 @@ class RecognitionPrepBar(QProgressBar):
         'session stack':   'crop index',
     }
 
+    visibility_changed = Signal()
+
     def __init__(self, parent=None):
         super().__init__(parent)
-        self.setMinimumWidth(420)
         self.setTextVisible(True)
         f = self.font()
         f.setBold(True)
         self.setFont(f)
         self.setVisible(False)
+
+    def setVisible(self, visible: bool) -> None:           # noqa: N802 (Qt)
+        super().setVisible(visible)
+        self.visibility_changed.emit()
 
     def report(self, done: int, total: int, part: str) -> bool:
         """Show one progress report; returns True while the warm-up runs."""
@@ -129,3 +151,43 @@ class RecognitionPrepBar(QProgressBar):
         self.setFormat(f'Preparing recognition — {name} ({done + 1}/{total})  %p%')
         self.setVisible(True)
         return True
+
+
+class ProgressStrip(QWidget):
+    """The status line's progress area: its bars side by side, full width.
+
+    Added to the status bar as a permanent widget with stretch, so while it
+    is shown it takes the whole line and the status message area has no
+    room — measured offscreen: a message set under a stretched permanent
+    widget is not painted. That is the point: the line shows progress or
+    the message, never a bar squeezed into half of it beside some text.
+
+    Standalone, the strip shows only while one of its bars does, so an idle
+    window still shows its message. Inside the launcher the messages go to
+    the launcher's own status bar instead, and `set_keep_visible(True)`
+    keeps the strip (empty when idle) so the tool's line holds only progress
+    and does not change height between runs.
+    """
+
+    def __init__(self, parent=None, *bars):
+        super().__init__(parent)
+        lay = QHBoxLayout(self)
+        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setSpacing(6)
+        self._bars = bars
+        self.run_bar = bars[0]      # the one a detection run drives
+        self._keep = False
+        for b in bars:
+            lay.addWidget(b, stretch=1)
+            b.visibility_changed.connect(self._sync)
+        # Kept on while idle, the strip must be as tall as with a bar in it,
+        # or the whole tab shifts by a few pixels at every run's start/end.
+        self.setMinimumHeight(max(b.sizeHint().height() for b in bars))
+        self._sync()
+
+    def set_keep_visible(self, keep: bool) -> None:
+        self._keep = bool(keep)
+        self._sync()
+
+    def _sync(self) -> None:
+        self.setVisible(self._keep or any(not b.isHidden() for b in self._bars))

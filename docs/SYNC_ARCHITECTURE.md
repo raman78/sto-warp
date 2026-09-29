@@ -340,8 +340,8 @@ keyed on content and already built; if a cycle downloaded new icons, a new
 model or new crops, the changed part is rebuilt here, not at the next click.
 
 While it runs, **Auto-Detect Slots is greyed out** in both WARP and WARP
-CORE, and each tool's own status bar — the one next to the button, not the
-launcher's — shows a bar: *Preparing recognition — icon library (2/6) 16%*.
+CORE, and each tool's own status line — the progress line inside its tab,
+not the launcher's message line below (`ProgressStrip`) — shows a bar: *Preparing recognition — icon library (2/6) 16%*.
 The warm-up reports before each of its parts (text reader, icon library,
 models, confirmed crops when WARP CORE is present, community crops, crop
 index) and once more at the end; the bar advances by parts, not by time,

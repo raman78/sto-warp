@@ -28,7 +28,8 @@ from PySide6.QtWidgets import (
 )
 
 from warp.gui.log_view import LogViewWidget
-from warp.gui.progress_bar import RecognitionPrepBar, StatusProgressBar
+from warp.gui.progress_bar import (
+    ProgressStrip, RecognitionPrepBar, StatusProgressBar)
 from warp.gui.results_view import ResultsView
 from warp.style import ACCENT, primary_btn_style, secondary_btn_style
 
@@ -302,9 +303,10 @@ class WarpWindow(QMainWindow):
 
         self._progress = StatusProgressBar(self)
         self._progress.cancel_requested.connect(self._on_cancel_requested)
-        self.statusBar().addPermanentWidget(self._progress)
+        self._progress.mirror_messages(self.statusBar())
         self._prep_bar = RecognitionPrepBar(self)
-        self.statusBar().addPermanentWidget(self._prep_bar)
+        self._progress_strip = ProgressStrip(self, self._progress, self._prep_bar)
+        self.statusBar().addPermanentWidget(self._progress_strip, 1)
         self.statusBar().showMessage(self._READY_TEXT)
 
     # ── Recognition warm-up ─────────────────────────────────────────

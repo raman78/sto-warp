@@ -175,7 +175,17 @@ A `🔄 Refresh` button in the bottom-right status bar manually re-runs the
 community sync (re-download knowledge, check for newer central models, upload
 pending confirmed crops). It is disabled while a sync is already in flight.
 
-Right after start, WARP and WARP CORE each show a bar in their own status
+In the launcher each tab has two lines at the bottom, one job each. The upper
+line, inside the tab, holds only progress: a bar across the full width with
+its description inside ("[1/3] image.png · OCR…", or the preparation below),
+and **Cancel** at its right while a detection can be stopped; between runs it
+is empty. The lower line, the launcher's own, holds every message — the
+sync's steps and both tools' messages ("Loaded …", "Recognition done …"),
+the newest winning — and the "not yet shared" count. Opened on their own,
+WARP and WARP CORE have a single line: the bar covers the message while
+something runs, and the message is back when it ends.
+
+Right after start, WARP and WARP CORE each show a bar in their progress
 line: **Preparing recognition — … %**. WARP is loading what every
 recognition needs — the text reader, the icon library, the models, the
 confirmed crops — so that the first Auto-Detect does not have to.

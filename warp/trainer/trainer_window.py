@@ -225,10 +225,12 @@ class WarpCoreWindow(QMainWindow):
         from warp.gui.progress_bar import StatusProgressBar
         self._status_progress = StatusProgressBar(self)
         self._status_progress.cancel_requested.connect(self._cancel_active_run)
-        self.statusBar().addPermanentWidget(self._status_progress)
-        from warp.gui.progress_bar import RecognitionPrepBar
+        self._status_progress.mirror_messages(self.statusBar())
+        from warp.gui.progress_bar import ProgressStrip, RecognitionPrepBar
         self._prep_bar = RecognitionPrepBar(self)
-        self.statusBar().addPermanentWidget(self._prep_bar)
+        self._progress_strip = ProgressStrip(
+            self, self._status_progress, self._prep_bar)
+        self.statusBar().addPermanentWidget(self._progress_strip, 1)
         self._recognition_prep_report.connect(self.set_recognition_prep)
 
         # Confirmations this machine holds that the community dataset has not
