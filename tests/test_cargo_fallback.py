@@ -149,3 +149,51 @@ def test_poisoned_cache_is_discarded_and_refetched(tmp_path, monkeypatch):
                         lambda name, **kw: (b'[{"name": "fresh"}]', '"e"', 'src'))
     assert cargo._load_raw('traits.json') == [{'name': 'fresh'}]
     assert not cached.exists() or cached.read_text(encoding='utf-8') != '{ truncated'
+
+
+# --- the ground-weapon overlay ---------------------------------------------
+#
+# The publisher drops every row the real cargo tables start carrying, so an
+# empty overlay is its designed end state (reached 2026-09-19), not a broken
+# download. And a wiki regression can refill it later, which only reaches
+# installs that keep refreshing it.
+
+_OVERLAY = 'scraped_ground_weapons.json'
+
+
+def test_an_empty_overlay_is_accepted(monkeypatch):
+    monkeypatch.setattr(cargo.urllib.request, 'urlopen',
+                        lambda req, timeout=0: _Resp(b'[]', '"e"'))
+
+    payload, _etag, base = cargo._fetch(_OVERLAY)
+
+    assert payload == b'[]'
+    assert base == cargo.OVERLAY_BASE
+
+
+def test_an_empty_overlay_is_cached_rather_than_refetched(tmp_path, monkeypatch):
+    """Rejected, it was never cached: every start fetched it again and
+    logged a failure that had not happened."""
+    monkeypatch.setenv('WARP_CACHE_DIR', str(tmp_path))
+    monkeypatch.setattr(cargo.urllib.request, 'urlopen',
+                        lambda req, timeout=0: _Resp(b'[]', '"e"'))
+
+    cargo._resolve_raw(_OVERLAY)
+
+    assert (tmp_path / _OVERLAY).read_bytes() == b'[]'
+
+
+def test_refresh_replaces_a_stale_overlay(tmp_path, monkeypatch):
+    """The overlay was fetched once and then kept for good; an install from
+    2026-08-22 still held the 136-row version a month later."""
+    monkeypatch.setenv('WARP_CACHE_DIR', str(tmp_path))
+    monkeypatch.setattr(cargo, '_MEMO', {})
+    monkeypatch.setattr(cargo, 'validate', lambda **kw: None)
+    (tmp_path / _OVERLAY).write_bytes(b'[{"name": "stale row"}]')
+    monkeypatch.setattr(cargo, '_fetch',
+                        lambda name, **kw: (b'[]', '"new"', cargo.OVERLAY_BASE)
+                        if name == _OVERLAY else (None, None, 'src'))
+
+    cargo.refresh_all()
+
+    assert (tmp_path / _OVERLAY).read_bytes() == b'[]'

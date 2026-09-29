@@ -296,7 +296,10 @@ harvested from that page and published beside the mirror. Only our own mirror
 serves it, it is **optional** (a missing overlay logs a warning and continues),
 and `cargo._merge_overlay` never lets an overlay row shadow a real cargo row.
 Each row carries `source`; the publisher drops rows the cargo tables start
-carrying, so the overlay is designed to shrink to nothing.
+carrying, so the overlay is designed to shrink to nothing. It reached zero on
+2026-09-19. Empty is a valid overlay (`cargo._assert_usable` accepts `[]` for
+it, never for a cargo file), and it is refreshed with the cargo files because
+a later wiki regression can refill it.
 
 Cache path: `~/.config/warp/cache/` (per-file mtime + 24 h refresh window;
 ETag-aware via `If-None-Match` when available).

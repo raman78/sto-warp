@@ -405,7 +405,7 @@ noticeable UI freeze on close while an upload finishes.
 │   ├── starship_traits.json + .meta
 │   ├── boff_abilities.json + .meta
 │   ├── ship_list.json + .meta
-│   ├── scraped_ground_weapons.json   ← items no cargo table holds
+│   ├── scraped_ground_weapons.json + .meta  ← items no cargo table holds
 │   ├── github_tree_cache.json        ← asset-sync 1 h tree manifest
 │   ├── overlay_tree_cache.json       ← same, for the harvested-icon source
 │   └── sync_failed.json              ← asset-sync 7 d failed-URL TTL

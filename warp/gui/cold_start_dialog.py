@@ -118,7 +118,7 @@ class _ColdStartWorker(QThread):
 
     def _do_cargo(self) -> None:
         from warp.data import cargo
-        # Indeterminate — refresh_all is fast (~2 s for 5 files) and
+        # Indeterminate — refresh_all is fast (a few seconds) and
         # doesn't expose per-file callbacks. Worth showing the phase even
         # though there's no % to display.
         self.phase_progress.emit('cargo', 0, 0)

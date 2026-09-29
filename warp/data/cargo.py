@@ -69,6 +69,9 @@ RAW_FILES: tuple[str, ...] = (
 # else, so `_resolve_raw` treats its absence as empty rather than fatal.
 # Each row carries `source`, and the publisher removes any row the real cargo
 # table has started carrying, so the overlay shrinks to nothing on its own.
+# Empty is therefore a valid state, not a broken download (`_assert_usable`),
+# and the file is refreshed like the cargo files, because a wiki regression
+# can refill it.
 OVERLAY_BASE = 'https://raw.githubusercontent.com/raman78/warp-cargo-data/main/scraped'
 
 OVERLAY_FILES: tuple[str, ...] = (
@@ -211,11 +214,16 @@ def _assert_usable(name: str, payload: bytes) -> None:
     this the bytes would be cached, and the failure would only surface later
     as a parse error — with the cache already poisoned and the fallback source
     never consulted.
+
+    An overlay may be an empty list: that is where it is designed to end up
+    once the cargo tables carry all its rows.
     """
     try:
         parsed = json.loads(payload.decode('utf-8'))
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError(f'{name} is not valid JSON ({exc})') from exc
+    if name in OVERLAY_FILES and parsed == []:
+        return
     if not isinstance(parsed, (list, dict)) or not parsed:
         raise ValueError(f'{name} decoded to an empty or unexpected structure')
 
@@ -323,7 +331,7 @@ def refresh_async(names: Iterable[str] | None = None) -> None:
 
     Stale (older than `_REFRESH_TTL_SECONDS`) or unknown files only.
     """
-    targets = tuple(names) if names else RAW_FILES
+    targets = tuple(names) if names else RAW_FILES + OVERLAY_FILES
     threading.Thread(target=_refresh_loop, args=(targets, False), daemon=True).start()
 
 
@@ -333,7 +341,7 @@ def refresh_all(*, force: bool = False) -> None:
     `force=True` ignores ETag and freshness window — used by
     `sto-warp data refresh`.
     """
-    _refresh_loop(RAW_FILES, force)
+    _refresh_loop(RAW_FILES + OVERLAY_FILES, force)
 
 
 def _refresh_loop(names: Iterable[str], force: bool) -> None:

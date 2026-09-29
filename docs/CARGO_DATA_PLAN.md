@@ -236,6 +236,8 @@ mirror rather than inside it. On this side:
 |---|---|
 | Source | `cargo.OVERLAY_BASE` — our mirror only; SETS-Data has no such path |
 | Optional | a missing overlay logs a warning and yields `[]`; those names stay unknown, as before it existed |
+| Empty | a valid answer, cached like any other; `_assert_usable` accepts `[]` for an overlay and still rejects it for a cargo file |
+| Refresh | on the same 24 h / ETag cycle as the cargo files (`refresh_all`, `refresh_async`) |
 | Precedence | `cargo._merge_overlay` skips any name a real cargo row already holds |
 | Provenance | every row carries `source: listing-scrape` |
 | Offline | shipped in `warp/data/baseline/` so a first run without network has them |
@@ -269,9 +271,30 @@ the group instead of failing the run. That is what closes the Colony Security
 weapons above: their pictures differ from the base weapon's and are now
 available.
 
-The overlay is meant to disappear. Each publisher run drops rows whose name
-has turned up in `equipment.json`; one went that way on the first run. At
-zero rows the whole mechanism can be retired.
+The overlay is meant to empty itself. Each publisher run drops rows whose
+name has turned up in `equipment.json`: 136 rows on 2026-08-22, 4 on
+2026-08-29, none since 2026-09-19, when the wiki started storing the last
+Fleet Bat'leths and Lirpas in cargo.
+
+It is kept at zero rather than retired, because the wiki and its cargo
+tables can diverge again, and the publisher would then refill it on its
+own. That is only worth anything if installs pick the refill up. Until
+2026-09-26 two things stopped them:
+
+- The refresh walked `RAW_FILES`, which does not list the overlay, so an
+  install kept whichever version it fetched first. A cache from 2026-08-22
+  still held all 136 rows a month later. That cost nothing only because
+  `_merge_overlay` skips every name a cargo row already holds.
+- `_assert_usable` rejected the empty list as a broken download. A fresh
+  install logged two warnings on every start, never cached the file, fell
+  back to the bundled baseline copy, and `make_baseline --check` reported
+  FAIL.
+
+Both are fixed: an empty overlay is accepted and cached, and the refresh
+covers it. The bundled baseline copy still holds the 4 rows of 2026-09-03,
+all shadowed by cargo rows. Emptying it at the next baseline refresh needs
+`--allow-shrink`, since the file shrinks by far more than 5%. That is
+expected here and does not point to an upstream loss.
 
 ## The wiki page a row came from (added 2026-08-31)
 
