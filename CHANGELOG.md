@@ -8,35 +8,49 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
-## [Unreleased]
+## [1.0.40] — 2026-09-29
+
+### Added
+
+- **Equipment panels are found even without their row labels.** A
+  screenshot cropped past the label column, or one where the labels could
+  not be read, used to get no equipment boxes at all; the panel is now
+  found from the icons themselves.
+- **Rows are named by what they hold.** When a row's label cannot be read,
+  the items in it decide which slot it is. If that is still uncertain, the
+  row is shown as a guess or as Unknown, and WARP CORE asks for its type
+  to be confirmed from the right-click menu before its items can be
+  accepted. Such items are left out of the SETS export, which says how
+  many were left out.
+- **Rows that could not be named are listed under the review list,** with
+  their position in the panel, instead of being silently skipped. Boxes
+  drawn over them are kept and the notice disappears.
 
 ### Changed
 
-- **Ready for icon models that train in half the time.** The community icon
-  models are moving to smaller pictures, which lets each training run finish
-  properly instead of being cut short, with the same accuracy. This version
-  reads the picture size each model was trained on and downloads the new
-  models from their own folder. Older versions keep the current models, which
-  still work but stop receiving updates, so update to keep getting newer
-  ones.
+- **Recognition is noticeably faster,** most of all on mixed screenshots.
+- **Ready for icon models that train in half the time.** The community
+  icon models are moving to smaller pictures, which lets each training run
+  finish properly instead of being cut short, with the same accuracy. This
+  version reads the picture size each model was trained on and downloads
+  the new models from their own folder. Older versions keep the current
+  models, which still work but no longer receive updates.
 
 ### Fixed
 
-- **A model update can no longer leave the icon matcher half-updated.** If
-  one of the matcher's files failed to download while the others arrived,
-  the new files were installed next to old ones and icons were matched
-  against the wrong pictures without any warning. Now its files are
-  installed together or not at all, and the next check tries again.
-- **No more "skipping invalid annotation (empty name)" for every ship name
-  on each sync.** WARP CORE kept a picture of your ship's name, which it
-  never shares, and the sync then turned each one down. Those pictures are
-  no longer made, and the ones already there are removed when WARP CORE
-  starts.
+- **Equipment rows are counted and placed correctly on more screenshots.**
+  A panel cropped at its left edge could gain a weapon slot that is not
+  there, and rows could shift when some labels were not read.
+- **A model update can no longer leave the icon matcher half-updated.**
+  If one of its files failed to download while the others arrived, icons
+  were matched against the wrong pictures without any warning. Its files
+  are now installed together or not at all, and the next check tries
+  again.
 - **Fewer "one picture confirmed under different names" warnings for ship
-  tiers.** A tier whose box covers the whole ship class line is not saved as
-  a picture of a tier, but older versions had already saved some. They are
-  removed on start, and the log names each screenshot so you can draw a box
-  around the tier badge instead. The tier itself stays in the build.
+  tiers.** A tier box that covers the whole ship class line is no longer
+  saved as a picture of a tier; older ones are removed on start, and the
+  log names each affected screenshot so the tier badge can be boxed
+  instead. The tier itself stays in the build.
 
 ## [1.0.39] — 2026-09-26
 
