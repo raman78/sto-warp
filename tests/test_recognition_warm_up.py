@@ -220,3 +220,23 @@ def test_the_sync_cycle_warms_up_after_the_seed_and_before_done(monkeypatch):
     w.run()
     assert order.index('seed') < order.index('warm') < order.index('done')
     assert order.index('seed-call') < order.index('warm-call')
+
+
+def test_overlapping_warm_ups_keep_saying_so_until_the_last_ends(icons, monkeypatch):
+    """The launcher's start-up warm-up and its first cycle's `warm` step can
+    overlap; the first to finish must not clear the state for the other.
+    Nested on one thread (the lock is re-entrant), so no timing is involved:
+    the inner call ends while the outer one still runs."""
+    from warp.recognition import text_extractor as TE
+    from warp.recognition.icon_matcher import SETSIconMatcher
+    seen = []
+
+    def _ocr():
+        if not seen:
+            seen.append('inner')
+            SETSIconMatcher.warm_up()
+            seen.append(SETSIconMatcher.is_warming())
+    monkeypatch.setattr(TE, 'shared_reader', _ocr)
+    SETSIconMatcher.warm_up()
+    assert seen == ['inner', True]
+    assert SETSIconMatcher.is_warming() is False

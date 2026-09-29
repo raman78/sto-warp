@@ -233,3 +233,27 @@ def test_the_sync_cycle_passes_its_progress_on(monkeypatch):
     w.recognition_prep.connect(lambda *r: seen.append(r))
     w.run()
     assert seen == [(1, 1, '')]
+
+
+def test_the_launchers_first_cycle_warms_up_alongside_not_after(qapp, monkeypatch):
+    """The cycle's `warm` step came 4-11 s in, after the network steps, and
+    the button stayed live until then. The warm-up needs no network."""
+    from warp.gui import sync_coordinator as SC
+    from warp.recognition.icon_matcher import SETSIconMatcher
+    order = []
+    ran = threading.Event()
+
+    def _warm(cls, td=None, progress=None):
+        order.append('warm-up')
+        ran.set()
+    monkeypatch.setattr(SETSIconMatcher, 'warm_up', classmethod(_warm))
+    coord = SC.SyncCoordinator.__new__(SC.SyncCoordinator)
+    SC.QObject.__init__(coord)
+    from PySide6.QtCore import QTimer
+    coord._timer = QTimer(coord)
+    monkeypatch.setattr(coord, 'request_refresh',
+                        lambda force=True: order.append('cycle'))
+    coord.start()
+    coord._timer.stop()
+    assert ran.wait(5)
+    assert 'cycle' in order

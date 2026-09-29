@@ -283,9 +283,11 @@ owns a single `_RefreshWorker` instance at a time (mutex on
    t = 0          QApplication starts
    t ≈ 200 ms     LauncherWindow.show() returns
    t ≈ 700 ms     QTimer.singleShot(500ms) fires:
+                    ├─ recognition warm-up starts on its own thread
                     ├─ first refresh cycle starts on a QThread
                     └─ periodic QTimer (60 min) armed in parallel
-   t ≈ 2-5  s     cycle finishes if everything was cached fresh
+   t ≈ 10 s       warm-up done — Auto-Detect Slots available
+   t ≈ 5-17 s     cycle finishes if everything was cached fresh
    t ≈ 60 min     periodic timer fires → cycle runs again
    …              repeated until the launcher window closes
 ```
@@ -322,8 +324,16 @@ next 60 min tick retries naturally.
 a fresh process used to pay for loading that every later one reuses — the
 OCR networks, the wiki icon index, the embedder, the user's and the
 community's confirmed crops and their stacked copy: about 13 s of a 19.6 s
-first run. `SETSIconMatcher.warm_up` does it here instead, in the background.
-Measured on the same
+first run. `SETSIconMatcher.warm_up` does it at start instead, in the
+background — and not only here: `SyncCoordinator.start` also runs it on its
+own thread alongside the first cycle, because this step comes last, 4 to 11
+s into the cycle (measured in the maintainer's logs, 2026-09-29), and the
+button stayed live and silently queuing until then. The warm-up needs no
+network. The cycle's `seed` and `warm` take the same lock and wait for it;
+`seed` re-reads the community crops if `community` changed them (it keys on
+the annotations file's mtime), and `warm` then rebuilds only what changed.
+Two warm-ups can therefore overlap, which is why "warming" is a count, not a
+flag. Measured on the same
 screenshot: the warm-up takes ~9.5 s and the first recognition after it
 7.4 s. On later cycles it costs well under a second, because everything is
 keyed on content and already built; if a cycle downloaded new icons, a new

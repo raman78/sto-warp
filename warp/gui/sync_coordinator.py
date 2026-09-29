@@ -225,8 +225,29 @@ class SyncCoordinator(QObject):
 
     def start(self):
         """Kick off the initial sync cycle and arm the periodic timer."""
+        self._start_warm_up()
         self.request_refresh(force=False)
         self._timer.start()
+
+    def _start_warm_up(self):
+        """Warm recognition up now, alongside the first cycle.
+
+        The cycle's own `warm` step comes last, after the network steps and
+        the community seed — 4 to 11 s into it on the maintainer's machine
+        (2026-09-29) — and Auto-Detect is greyed out only once it starts, so
+        for those seconds a click still queued silently. The warm-up needs no
+        network, so it need not wait. The cycle's steps that touch the same
+        state (`seed`, `warm`) take the same lock and wait for it; `seed`
+        re-reads the community crops if the fetch changed them, and `warm`
+        then rebuilds only what changed."""
+        import threading
+        from warp import userdata
+        from warp.recognition.icon_matcher import SETSIconMatcher
+        threading.Thread(
+            target=SETSIconMatcher.warm_up,
+            args=(userdata.training_data_dir(),),
+            kwargs={'progress': self.recognition_prep.emit},
+            name='warp-recognition-warm-up', daemon=True).start()
 
     def arm_periodic_only(self):
         """Arm the periodic timer without running an immediate cycle.
@@ -237,18 +258,10 @@ class SyncCoordinator(QObject):
         mirrors and spam the status bar.
 
         The splash has no warm-up phase, though, so without one here the
-        first Auto-Detect of a first run would do all the loading itself.
-        It needs no network, so it runs on its own thread straight away."""
+        first Auto-Detect of a first run would do all the loading itself."""
         self._timer.start()
         self.status.emit('Sync complete.')
-        import threading
-        from warp import userdata
-        from warp.recognition.icon_matcher import SETSIconMatcher
-        threading.Thread(
-            target=SETSIconMatcher.warm_up,
-            args=(userdata.training_data_dir(),),
-            kwargs={'progress': self.recognition_prep.emit},
-            name='warp-recognition-warm-up', daemon=True).start()
+        self._start_warm_up()
 
     def stop(self):
         """Cooperative stop — never blocks the UI thread for more than 200 ms.

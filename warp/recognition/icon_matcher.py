@@ -874,12 +874,16 @@ class SETSIconMatcher:
     # rows by name). See `_build_index`.
     _index_cache: tuple | None = None
 
-    # True while `warm_up` runs, so a recognition can say what it waits for.
-    _warming: bool = False
+    # How many `warm_up` calls are in progress, so a recognition can say what
+    # it waits for. A count, not a flag: the launcher's start-up warm-up and
+    # its first cycle's `warm` step can overlap, and the first to finish must
+    # not clear it for the other.
+    _warming: int = 0
+    _warming_lock = threading.Lock()
 
     @classmethod
     def is_warming(cls) -> bool:
-        return cls._warming
+        return cls._warming > 0
 
     @classmethod
     def warm_up(cls, training_data_dir=None, progress=None) -> dict:
@@ -932,7 +936,8 @@ class SETSIconMatcher:
             parts[name] = time.monotonic() - t0
             done += 1
 
-        cls._warming = True
+        with cls._warming_lock:
+            cls._warming += 1
         try:
             with _PREP_LOCK:
                 from warp.recognition.text_extractor import shared_reader
@@ -947,7 +952,8 @@ class SETSIconMatcher:
                 _step('community crops', cls.seed_from_community_crops)
                 _step('session stack', cls._session_stack)
         finally:
-            cls._warming = False
+            with cls._warming_lock:
+                cls._warming -= 1
             done = total
             _report('')
         log.info('WARP: recognition warmed up in '
