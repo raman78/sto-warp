@@ -225,7 +225,15 @@ previous run is rotated to `.log.bak`:
 | `system` | `warp_system.log` |
 
 **"Logging" always means both:** writing to the log file **and** printing to
-stderr. Never log to only one destination. Always use `warp.debug.log` — do
+stderr.
+
+Every line is flushed to the OS as it is written, so a crash of the program
+loses nothing. Only warnings and errors are also `fsync`ed to the disk
+(`_DURABLE_LEVELS` in `warp/debug.py`): that guards only against the whole
+system going down, and doing it for every line cost ~0.8 s of an ~8 s
+recognition (measured 2026-09-29). Do not buffer lines in the program to
+"batch" writes — everything left after dropping `fsync` is ~1.5 ms per
+recognition, and a buffer is lost in a crash. Never log to only one destination. Always use `warp.debug.log` — do
 NOT introduce `logging.getLogger(__name__)`, as that bypasses the file
 mirror.
 

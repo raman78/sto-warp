@@ -144,6 +144,10 @@ def use_detection_channel(name: str):
             _thread_local.detection_channel = prev
 
 
+# Levels forced to the disk as they are written; see `_write`.
+_DURABLE_LEVELS = frozenset({'WARN ', 'ERROR'})
+
+
 def _write(channel: str, level: str, msg: str) -> None:
     ts  = datetime.now().strftime('%H:%M:%S.%f')[:-3]
     line = f'{ts}  [{level}]  {msg}'
@@ -154,8 +158,19 @@ def _write(channel: str, level: str, msg: str) -> None:
         with _locks[channel]:
             try:
                 fh.write(line + '\n')
+                # Every line is handed to the OS at once, so a crash or kill
+                # of this program loses nothing. Only warnings and errors are
+                # also forced to the disk: `fsync` guards only against the
+                # whole system going down, and at ~3 ms a line it cost 0.8 s
+                # of an 8.2 s recognition (276 lines). Measured 2026-09-29 on
+                # this function: 276 INFO lines take ~800 ms with `fsync`,
+                # 1.5 ms without. 1.5 ms for everything, formatting included,
+                # is the most that writing lines in blocks could save, so
+                # holding lines back in the program would only add a way to
+                # lose them in a crash.
                 fh.flush()
-                os.fsync(fh.fileno())
+                if level in _DURABLE_LEVELS:
+                    os.fsync(fh.fileno())
             except Exception:
                 pass
     if _subscribers:
