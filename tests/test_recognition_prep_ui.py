@@ -341,3 +341,11 @@ def test_the_tools_line_holds_only_progress_in_the_launcher(launcher):
 def test_the_not_yet_shared_count_moves_to_the_launchers_line(launcher):
     label = launcher._core_win._backlog_label
     assert label.parent() is launcher.statusBar()
+
+
+def test_the_refresh_button_survives_a_message(launcher, qapp):
+    """As a normal status-bar widget, Qt hid it behind every message."""
+    launcher.show()
+    launcher.statusBar().showMessage('Sync complete.')
+    qapp.processEvents()
+    assert launcher._refresh_btn.isVisible()

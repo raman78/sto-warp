@@ -184,13 +184,16 @@ class LauncherWindow(QMainWindow):
         self._tabs.addTab(self._syslog_view, 'System logs')
 
         # Refresh button lives in the status bar (bottom-right corner).
+        # Permanent, not a normal widget: Qt hides normal status-bar widgets
+        # while a message shows, and this bar nearly always shows one — so
+        # as a normal widget it vanished at the first "Starting sync…".
         self._refresh_btn = QPushButton('🔄 Refresh', self)
         self._refresh_btn.setToolTip(
             'Re-download community knowledge, check for a newer central '
             'model, and upload pending confirmed crops.'
         )
         self._refresh_btn.clicked.connect(self._on_refresh_clicked)
-        self.statusBar().addWidget(self._refresh_btn)
+        self.statusBar().addPermanentWidget(self._refresh_btn)
         self.statusBar().showMessage('Starting sync…')
 
         # Two status lines, one job each: the tool's own line (inside its
@@ -203,7 +206,7 @@ class LauncherWindow(QMainWindow):
         try:
             label = self._core_win._backlog_label
             self._core_win.statusBar().removeWidget(label)
-            self.statusBar().addPermanentWidget(label)
+            self.statusBar().insertPermanentWidget(0, label)   # left of Refresh
             self._core_win._refresh_upload_backlog()
         except Exception as e:                        # noqa: BLE001
             log.warning(f'Launcher: could not move the backlog count: {e}')
