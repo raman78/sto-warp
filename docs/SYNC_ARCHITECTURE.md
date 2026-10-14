@@ -458,7 +458,16 @@ In the launcher each tool tab has two status lines, one job each:
   (`warp/gui/progress_bar.py`) holds the tool's two bars: the detection
   run's `StatusProgressBar` and the warm-up's `RecognitionPrepBar`. It is a
   permanent status-bar widget with stretch, so while shown it takes the
-  whole line. Qt paints the status message only in the space permanent
+  whole line. It shows **one bar at a time**: when both want to show, the
+  detection run's bar wins and the warm-up's waits until the run ends. Side
+  by side they split the line in half, and that did happen: the sync
+  cycle's `warm` step (0.2 s when nothing needs rebuilding) fell in the
+  middle of an Auto-Detect run, and a second bar flashed beside the run's,
+  cut to half the width. A warm-up during a run has nothing to tell the user
+  that matters, since the run has already started. One that takes real time
+  comes at start-up, when Auto-Detect is greyed out with its tooltip and
+  its bar appears as soon as screen-type detection, the only other user of
+  the run bar then, finishes. Qt paints the status message only in the space permanent
   widgets leave, so the message is not visible there (checked offscreen).
   A run's own text is written inside its bar by
   `StatusProgressBar.mirror_messages`, so the windows keep calling

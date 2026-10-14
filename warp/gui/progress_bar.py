@@ -154,13 +154,21 @@ class RecognitionPrepBar(QProgressBar):
 
 
 class ProgressStrip(QWidget):
-    """The status line's progress area: its bars side by side, full width.
+    """The status line's progress area: one bar at a time, full width.
 
     Added to the status bar as a permanent widget with stretch, so while it
     is shown it takes the whole line and the status message area has no
     room — measured offscreen: a message set under a stretched permanent
     widget is not painted. That is the point: the line shows progress or
     the message, never a bar squeezed into half of it beside some text.
+
+    When several bars want to show, the first in `bars` wins and the rest
+    wait their turn. Side by side, a sync cycle's warm-up step (0.2 s when
+    nothing needs rebuilding) cut a running detection's bar to half the line
+    and flashed a second bar beside it. Each bar sits in its own holder and
+    the strip shows or hides holders, never the bars, so a bar's `isHidden`
+    still says whether it wants to show — the launcher reads it on the run
+    bar.
 
     Standalone, the strip shows only while one of its bars does, so an idle
     window still shows its message. Inside the launcher the messages go to
@@ -177,8 +185,14 @@ class ProgressStrip(QWidget):
         self._bars = bars
         self.run_bar = bars[0]      # the one a detection run drives
         self._keep = False
+        self._holders = []
         for b in bars:
-            lay.addWidget(b, stretch=1)
+            holder = QWidget(self)
+            hl = QHBoxLayout(holder)
+            hl.setContentsMargins(0, 0, 0, 0)
+            hl.addWidget(b)
+            lay.addWidget(holder, stretch=1)
+            self._holders.append(holder)
             b.visibility_changed.connect(self._sync)
         # Kept on while idle, the strip must be as tall as with a bar in it,
         # or the whole tab shifts by a few pixels at every run's start/end.
@@ -190,4 +204,7 @@ class ProgressStrip(QWidget):
         self._sync()
 
     def _sync(self) -> None:
-        self.setVisible(self._keep or any(not b.isHidden() for b in self._bars))
+        shown = next((b for b in self._bars if not b.isHidden()), None)
+        for b, holder in zip(self._bars, self._holders):
+            holder.setVisible(b is shown)
+        self.setVisible(self._keep or shown is not None)

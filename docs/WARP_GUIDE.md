@@ -235,7 +235,10 @@ This happens at every start and usually takes a few seconds. Your
 screenshots can be opened meanwhile, and their screen types are
 classified straight away, because that part does not need any of this.
 The hourly sync repeats the preparation only for what it changed, such as a
-newer model or new pictures, so the bar may appear briefly then too.
+newer model or new pictures, so the bar may appear briefly then too. The
+line shows one bar at a time: if that happens while a recognition runs,
+you keep seeing the recognition's bar, and the preparation's appears
+only after it, if it is still going.
 
 **Rerun Recognition**, which appears in WARP after you change a file's
 screen type, is greyed out during the preparation in the same way.

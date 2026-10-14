@@ -284,6 +284,40 @@ def test_the_strip_stays_when_kept_and_keeps_its_height(qapp):
     assert strip.minimumHeight() >= run.sizeHint().height()
 
 
+def _strip_in_a_status_bar(qapp):
+    from PySide6.QtWidgets import QMainWindow
+    from warp.gui.progress_bar import ProgressStrip, RecognitionPrepBar, StatusProgressBar
+    w = QMainWindow()
+    w.resize(1600, 900)
+    run, prep = StatusProgressBar(w), RecognitionPrepBar(w)
+    strip = ProgressStrip(w, run, prep)
+    w.statusBar().addPermanentWidget(strip, 1)
+    w.show()
+    return w, strip, run, prep
+
+
+def test_a_warm_up_during_a_run_does_not_split_the_line(qapp):
+    """A sync cycle's warm-up step landing mid-detection put a second bar
+    beside the run's, each half the line (seen 2026-10-14)."""
+    w, strip, run, prep = _strip_in_a_status_bar(qapp)
+    run.start()
+    prep.report(0, 6, 'ocr')
+    qapp.processEvents()
+    assert run.isVisible() and not prep.isVisible()
+    assert run.width() >= strip.width() - 2
+    w.close()
+
+
+def test_the_warm_up_bar_shows_once_the_run_ends(qapp):
+    w, strip, run, prep = _strip_in_a_status_bar(qapp)
+    run.start()
+    prep.report(0, 6, 'ocr')
+    run.finish()
+    qapp.processEvents()
+    assert prep.isVisible()
+    w.close()
+
+
 def test_a_runs_message_is_written_into_its_bar(qapp):
     from PySide6.QtWidgets import QMainWindow
     from warp.gui.progress_bar import StatusProgressBar
