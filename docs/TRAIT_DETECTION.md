@@ -117,9 +117,16 @@ resweep output into row-groups using the same Y-gap rule.
 
 `_merge_starship_overflow()` handles Starship Trait panels that wrap a
 short second row (≤2 icons in cols 0-1). The signature for the merge
-is "5-icon row + ≤2-icon row separated by 0.5-1.5×icon_h" — that gap
-is unique to the ship-name divider in the Starship section, so it does
-not collide with other section types.
+is "5-icon row + ≤2-icon row separated by 0.5-1.5×icon_h" — the gap
+of the ship-name divider in the Starship section.
+
+The gap is not unique to it. On `image-decdcfd6ab849bba.png` the Space
+Reputation row had the captain's rank insignia 39 px under its first
+column, which fits the signature exactly, while the real Starship
+Traits section read as a bare 5-row: its two cells under the ship name
+are `LOCK` cells, and those are not icons. The shape alone would have
+made reputation traits into starship traits. §7 therefore lets the
+model overrule it.
 
 ### 7. ML section classification
 
@@ -134,6 +141,16 @@ The group's section is the majority vote over its members. Groups
 that fail to vote (all `__empty__`) are dropped — a section assigned
 "none" would not help the user anyway.
 
+A group with the 5+N Starship shape (§6) skips the vote and is
+labelled `Starship Traits` outright — **unless its full row votes for
+another section**. Then the shape is not trusted: the overflow is split
+off and the row and the overflow are classified separately, like any
+other group. On the screen above the row votes `Space Reputation` and
+the insignia votes nothing, so it is dropped. The split is logged as
+`trait_grid: 5+N shape split — its full row reads as '<section>'`.
+Over the 118 SPACE_EQ / SPACE_MIXED corpus screens it fired on that
+screen only (`dev/tier_tb/measure_tier_e2e.py`).
+
 #### Cross-panel winner
 
 A trait section exists exactly **once** on a screen: the game never
@@ -144,7 +161,8 @@ the same section, only one may be emitted.
 Selection is by **recognition quality** — the summed confidence of the
 icons that actually classify into that section (`+inf` for the
 structural 5+2 Starship shortcut, so it always beats an ML-only
-match). The losing group is logged as `<slot> (dup-dropped)` in the
+match — the shortcut only survives to this point when its own full row
+did not vote against it). The losing group is logged as `<slot> (dup-dropped)` in the
 panel summary.
 
 The alternatives were measured against `annotations.json` ground truth

@@ -441,6 +441,15 @@ count that *was* a measurement sat in the same run — `trait_grid` had found
 alone. `LayoutDetector.last_trait_icon_counts` now carries it, filled by
 `merge_trait_boxes`, which is the one place the grid's own boxes are known.
 
+A measurement can still be of the wrong thing: the grid's count is only as
+good as its decision about which panel *is* the Starship Traits section. On
+`image-decdcfd6ab849bba.png`, a `T6` Juggernaut, the Space Reputation row
+plus the captain's rank insignia under it took that section's place, counted
+6 against a profile of 5, and with devices `3-3 = 0` and universal consoles
+`1-1 = 0` the ship was raised to `T6-X`, with two phantom slots following.
+The fix is in the grid, not here ([trait grid §7](TRAIT_DETECTION.md)):
+with the section chosen correctly the evidence reads `5-5 = 0`.
+
 The distinction is the same one **EQ-4** draws for equipment rows: a
 detector's count and a profile-sized row answer different questions, and
 only the first is evidence about the ship. Measured against tiers read from the screenshots
@@ -456,6 +465,15 @@ evidence read `+1` while the console and trait evidence read `+2`. Of the
 21 correct, 18 were unanimous and 3 were splits that max resolved. The set
 includes a `T1` and a `T6` hull, both correctly inferred as `+0` — the rule
 does not bias towards adding slots.
+
+That table came from a script that reimplemented the inference rather than
+calling `_infer_x_bonus`, and that still counted the drawn trait row, so it
+does not measure the shipped function. The shipped `WarpImporter`, run over
+the 118 SPACE_EQ / SPACE_MIXED corpus screens joined to `annotations.json`
+by image hash (99 with a confirmed tier, `dev/tier_tb/measure_tier_e2e.py`,
+2026-10-16), gets 98 of 99 tiers right. The one miss is a `T5` screen on
+which nothing was read at all. It raises one tier, a `T6-X2` whose devices
+(`6-4`) and universal consoles (`2-0`) both read `+2`.
 
 Evidence outside `0..2` is discarded rather than clamped: the game grants
 at most +2, so a larger reading means the measurement is wrong and must not

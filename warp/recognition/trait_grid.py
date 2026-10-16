@@ -522,25 +522,52 @@ def detect_traits(img, icon_matcher, app_cache, build_type: str | None = None):
 
         # Classify each row-group. Deduplication happens once, ACROSS all
         # panels, after the loop — see the winner selection below.
+        #
+        # The 5+N shape (a full row, then one or two icons under columns 0-1)
+        # is what a Starship Traits section looks like, and it wins outright
+        # — but it is only a shape, and other things have it. On
+        # `image-decdcfd6ab849bba.png` the Space Reputation row with the
+        # captain's rank insignia under its first column matched it and beat
+        # the real Starship Traits section, whose two LOCK cells are not icons
+        # and which therefore read as a bare 5-row. The build got reputation
+        # traits as starship traits, the real ones were never read, and the
+        # six "starship traits" made `_infer_x_bonus` raise the ship to T6-X.
+        # So the icons of the full row get a say: when the model names a
+        # different section for them, the shape is not trusted and
+        # the overflow is split off, each part judged on its own like any
+        # other group. Over the 118 SPACE_EQ / SPACE_MIXED corpus screens
+        # this fired on that screen only (dev/tier_tb/measure_tier_e2e.py).
         classified: list[tuple[str | None, float, list]] = []
+        groups: list[list] = []      # `merged`, with contradicted 5+N split
         for g in merged:
             is_starship_struct = (
                 len(g) == 2 and len(g[0]) in (4, 5)
                 and 1 <= len(g[1]) <= 2
                 and all(ci in (0, 1) for ci, _ in g[1])
             )
+            parts = [g]
             if is_starship_struct:
-                slot = 'Starship Traits'
-                score = float('inf')
-            else:
-                slot, votes = _classify_group_section(
-                    g, img, icon_matcher, name_to_section)
-                score = float(votes.get(slot, 0.0)) if slot else 0.0
-            if slot is not None and allowed_slots is not None \
-                    and slot not in allowed_slots:
-                slot = None
-                score = 0.0
-            classified.append((slot, score, g))
+                top_slot, _votes = _classify_group_section(
+                    [g[0]], img, icon_matcher, name_to_section)
+                if top_slot not in (None, 'Starship Traits'):
+                    _slog.debug(f'trait_grid: 5+{len(g[1])} shape split — '
+                                f'its full row reads as {top_slot!r}')
+                    parts = [[g[0]], [g[1]]]
+                    is_starship_struct = False
+            for part in parts:
+                if is_starship_struct:
+                    slot = 'Starship Traits'
+                    score = float('inf')
+                else:
+                    slot, votes = _classify_group_section(
+                        part, img, icon_matcher, name_to_section)
+                    score = float(votes.get(slot, 0.0)) if slot else 0.0
+                if slot is not None and allowed_slots is not None \
+                        and slot not in allowed_slots:
+                    slot = None
+                    score = 0.0
+                classified.append((slot, score, part))
+                groups.append(part)
 
         for slot, score, g in classified:
             if slot is None:
@@ -548,7 +575,7 @@ def detect_traits(img, icon_matcher, app_cache, build_type: str | None = None):
             if slot not in winner or score > winner[slot][0]:
                 winner[slot] = (score, g, p)
 
-        panel_classified.append((pi, p, merged, classified))
+        panel_classified.append((pi, p, groups, classified))
 
     # A trait section exists exactly ONCE on a screen: the game UI never
     # stacks two "Starship Traits" grids, and a user composing a collage
@@ -565,7 +592,8 @@ def detect_traits(img, icon_matcher, app_cache, build_type: str | None = None):
     # per-build count, so overflow survives it). Cross-panel selection
     # leaves 0 false positives and, decisively, costs no recall: the losing
     # groups contain no GT icon. The structural 5+2 shortcut scores +inf so
-    # it always wins against an ML-only match.
+    # it always wins against an ML-only match — unless its own full row
+    # classified as another section, in which case it was split above.
     for slot, (_score, g, wp) in winner.items():
         sections[slot] = _emit_bboxes(g, wp['cols'], wp['icon_w'],
                                       wp['icon_h'])
