@@ -8,6 +8,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 Entries describe the user-visible changes in each release. Implementation
 details live in the git history.
 
+## [1.0.43] — 2026-11-23
+
+### Fixed
+
+- **Starship traits are no longer mixed up with reputation traits.** On some
+  screenshots the Space Reputation row was read as the Starship Traits
+  section. The build then received reputation traits in place of starship
+  traits, the real starship traits were not read at all, and the extra
+  traits made a T6 ship appear as T6-X with slots it does not have.
+- **Only one progress bar shows at a time.** When recognition was being
+  prepared during an Auto-Detect run, a second bar briefly appeared beside
+  the first and both shrank to half width. The Auto-Detect bar now keeps the
+  full line, and the preparation bar shows once it finishes.
+
 ## [1.0.42] — 2026-09-29
 
 ### Changed
